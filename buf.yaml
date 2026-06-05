@@ -1,0 +1,14 @@
+version: v2
+modules:
+  - path: proto
+  - path: authz/authzpb/internal/testpb # test-only fixture for authzpb
+lint:
+  use:
+    - STANDARD
+  ignore:
+    - authz/authzpb/internal/testpb
+breaking:
+  use:
+    - WIRE_JSON
+  ignore:
+    - authz/authzpb/internal/testpb

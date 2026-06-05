@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+// Test-only fixture for authzpb: a service whose methods carry the
+// (infoblox.authz.v1.rule) annotation, so the extractor can be exercised against
+// real generated descriptors.
+package testpb;
+
+import "infoblox/authz/v1/authz.proto";
+
+option go_package = "github.com/infobloxopen/devedge-sdk/authz/authzpb/internal/testpb;testpb";
+
+message Empty {}
+
+service ZoneService {
+  rpc GetZone(Empty) returns (Empty) {
+    option (infoblox.authz.v1.rule) = {verb: "get", resource: "zone"};
+  }
+  rpc CreateZone(Empty) returns (Empty) {
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "zone"};
+  }
+  rpc Healthz(Empty) returns (Empty) {
+    option (infoblox.authz.v1.rule) = {public: true};
+  }
+  // No annotation — must be omitted by authzpb.Rules.
+  rpc Undeclared(Empty) returns (Empty) {}
+}

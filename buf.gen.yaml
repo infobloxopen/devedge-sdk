@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/infobloxopen/devedge-sdk
+  # The codegen variant of authzpb: emits <Service>AuthzRules tables from the
+  # (infoblox.authz.v1.rule) annotation. Built to ./bin by `make generate`.
+  - local: protoc-gen-devedge-authz
+    out: .
+    opt: module=github.com/infobloxopen/devedge-sdk
