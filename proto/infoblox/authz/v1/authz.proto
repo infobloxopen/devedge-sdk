@@ -1,10 +1,17 @@
+// MIRROR — codegen input only. The canonical schema lives at
+// github.com/infobloxopen/apis/proto/infoblox/authz/v1/authz.proto
+// (released via apx; the SDK depends on its generated Go module —
+// see go.mod). This copy exists solely so buf can resolve the import
+// when generating the test fixture; no Go code is generated from it
+// here (go_package points at the canonical module). Keep byte-identical
+// to the canonical file.
 syntax = "proto3";
 
 package infoblox.authz.v1;
 
 import "google/protobuf/descriptor.proto";
 
-option go_package = "github.com/infobloxopen/devedge-sdk/proto/infoblox/authz/v1;authzv1";
+option go_package = "github.com/infobloxopen/apis/proto/infoblox/authz/v1;authzv1";
 
 // Rule declares the authorization requirement for an RPC. Attach it to a method;
 // the framework builds the per-method rule table from these annotations, enforces

@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.2
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

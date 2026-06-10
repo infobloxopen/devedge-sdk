@@ -24,7 +24,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
 
-	authzv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/authz/v1"
+	authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
 )
 
 const authzImport = protogen.GoImportPath("github.com/infobloxopen/devedge-sdk/authz")

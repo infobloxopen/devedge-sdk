@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
-	authzv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/authz/v1"
+	authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
 )
 
 // Rules walks every service method in files and returns the [authz.MethodRule]

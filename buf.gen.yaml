@@ -1,4 +1,10 @@
 version: v2
+# Only the test fixture is generated here. The authz annotation's Go code
+# comes from the canonical module github.com/infobloxopen/apis/proto/infoblox/authz
+# (a real dependency in go.mod); proto/infoblox/authz/v1/authz.proto is kept
+# only as a buf import input and must not be generated into this module.
+inputs:
+  - directory: authz/authzpb/internal/testpb
 plugins:
   - local: protoc-gen-go
     out: .

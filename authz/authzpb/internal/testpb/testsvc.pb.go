@@ -11,7 +11,7 @@
 package testpb
 
 import (
-	_ "github.com/infobloxopen/devedge-sdk/proto/infoblox/authz/v1"
+	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
