@@ -1,8 +1,10 @@
 version: v2
 modules:
   - path: proto
-  - path: authz/authzpb/internal/testpb # test-only fixture for authzpb
-  - path: testdata/toy                  # W3-4 compilation fixture
+  - path: authz/authzpb/internal/testpb  # test-only fixture for authzpb
+  - path: internal/testpb/secretpb       # test-only fixture for secret field tests
+  - path: testdata/toy                   # W3-4 compilation fixture
+  - path: testdata/apikey               # W9-10/013 secret field fixture
 deps:
   - buf.build/googleapis/googleapis
 lint:
@@ -10,8 +12,10 @@ lint:
     - STANDARD
   ignore:
     - authz/authzpb/internal/testpb
+    - internal/testpb/secretpb
 breaking:
   use:
     - WIRE_JSON
   ignore:
     - authz/authzpb/internal/testpb
+    - internal/testpb/secretpb
