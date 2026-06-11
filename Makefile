@@ -5,7 +5,11 @@
 # devedge-authz plugin is built locally to ./bin and put on PATH for buf.
 generate:
 	go build -o bin/protoc-gen-devedge-authz ./cmd/protoc-gen-devedge-authz
+	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
+	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.toy.yaml
+	cd testdata/toy && go mod tidy
 	go mod tidy
 
 build:

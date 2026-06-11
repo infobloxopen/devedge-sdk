@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+// Test fixture for protoc-gen-svc + protoc-gen-storage (W3-4 checkpoint).
+// This proto exercises both plugins: a resource message (Widget) and a service
+// (WidgetService) with authz annotations on all five standard AIP methods.
+package toy.v1;
+
+option go_package = "github.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1";
+
+import "infoblox/authz/v1/authz.proto";
+
+// Widget is the resource managed by WidgetService.
+message Widget {
+  string id     = 1;
+  string name   = 2;
+  string color  = 3;
+  int32  weight = 4;
+}
+
+message CreateWidgetRequest { Widget widget = 1; }
+message GetWidgetRequest    { string id = 1; }
+message ListWidgetsRequest  {
+  int32  page_size  = 1;
+  string page_token = 2;
+}
+message ListWidgetsResponse {
+  repeated Widget widgets         = 1;
+  string          next_page_token = 2;
+}
+message UpdateWidgetRequest {
+  Widget          widget      = 1;
+  repeated string update_mask = 2;
+}
+message DeleteWidgetRequest  { string id = 1; }
+message DeleteWidgetResponse {}
+
+service WidgetService {
+  rpc CreateWidget(CreateWidgetRequest) returns (Widget) {
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "widgets"};
+  }
+  rpc GetWidget(GetWidgetRequest) returns (Widget) {
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "widgets"};
+  }
+  rpc ListWidgets(ListWidgetsRequest) returns (ListWidgetsResponse) {
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "widgets"};
+  }
+  rpc UpdateWidget(UpdateWidgetRequest) returns (Widget) {
+    option (infoblox.authz.v1.rule) = {verb: "update", resource: "widgets"};
+  }
+  rpc DeleteWidget(DeleteWidgetRequest) returns (DeleteWidgetResponse) {
+    option (infoblox.authz.v1.rule) = {verb: "delete", resource: "widgets"};
+  }
+}

@@ -1,0 +1,19 @@
+version: v2
+# W3-4 toy fixture: generates all four plugins for testdata/toy/widgets.proto.
+# Output goes into testdata/toy/ which has its own go.mod with gorm.io/gorm,
+# keeping gorm out of devedge-sdk's go.mod (SC-003).
+inputs:
+  - directory: testdata/toy
+plugins:
+  - local: protoc-gen-go
+    out: testdata/toy
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
+  - local: protoc-gen-devedge-authz
+    out: testdata/toy
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
+  - local: protoc-gen-svc
+    out: testdata/toy
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
+  - local: protoc-gen-storage
+    out: testdata/toy
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy

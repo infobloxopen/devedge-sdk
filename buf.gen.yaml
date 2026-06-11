@@ -1,16 +1,16 @@
 version: v2
-# Only the test fixture is generated here. The authz annotation's Go code
-# comes from the canonical module github.com/infobloxopen/apis/proto/infoblox/authz
-# (a real dependency in go.mod); proto/infoblox/authz/v1/authz.proto is kept
-# only as a buf import input and must not be generated into this module.
+# Root buf.gen.yaml: generates for authzpb test fixture only.
+# The W3-4 toy module (testdata/toy/) has its own buf.gen.yaml that also
+# runs protoc-gen-svc and protoc-gen-storage — keeping gorm.io/gorm out of
+# devedge-sdk's go.mod (the toy has its own standalone go.mod with GORM).
 inputs:
   - directory: authz/authzpb/internal/testpb
 plugins:
   - local: protoc-gen-go
     out: .
     opt: module=github.com/infobloxopen/devedge-sdk
-  # The codegen variant of authzpb: emits <Service>AuthzRules tables from the
-  # (infoblox.authz.v1.rule) annotation. Built to ./bin by `make generate`.
+  # Emits <Service>AuthzRules tables from (infoblox.authz.v1.rule) annotations.
+  # Built to ./bin by `make generate`.
   - local: protoc-gen-devedge-authz
     out: .
     opt: module=github.com/infobloxopen/devedge-sdk
