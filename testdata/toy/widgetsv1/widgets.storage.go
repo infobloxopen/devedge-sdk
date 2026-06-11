@@ -149,7 +149,15 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 	m.ID = key
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
 	if len(fieldMask) > 0 {
-		q = q.Select(fieldMask)
+		dbCols := make([]string, 0, len(fieldMask))
+		for _, f := range fieldMask {
+			col, ok := WidgetColumns[f]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
+			}
+			dbCols = append(dbCols, col)
+		}
+		q = q.Select(dbCols)
 	}
 	if err := q.Updates(m).Error; err != nil {
 		return nil, fmt.Errorf("update Widget: %w", err)

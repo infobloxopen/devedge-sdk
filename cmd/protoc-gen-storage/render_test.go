@@ -46,6 +46,9 @@ func TestRenderStorageFile_basic(t *testing.T) {
 	mustContain(t, out, "filter.Parse")
 	mustContain(t, out, "filter.ParseOrderBy")
 	mustNotContain(t, out, "q.Where(opts.Filter)")
+	// F018: field mask must be translated to DB columns, not passed raw.
+	mustNotContain(t, out, "q.Select(fieldMask)")
+	mustContain(t, out, "Columns[f]")
 }
 
 func TestRenderStorageFile_repeatedFieldSkipped(t *testing.T) {
