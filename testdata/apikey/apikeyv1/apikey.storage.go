@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/secret"
 )
 
@@ -71,7 +72,12 @@ func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor) *APIKeyRepository {
 
 func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error) {
 	var m APIKeyModel
-	if err := r.db.WithContext(ctx).Where("id = ?", key).First(&m).Error; err != nil {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if err := q.First(&m).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, persistence.ErrNotFound
 		}
@@ -83,6 +89,10 @@ func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error)
 func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*APIKey, string, error) {
 	var models []APIKeyModel
 	q := r.db.WithContext(ctx)
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
 	if opts.Filter != "" {
 		q = q.Where(opts.Filter)
 	}
@@ -145,7 +155,11 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		m.KeyValueHash = h
 		m.KeyValueCipher = c
 	}
+	tenantID := middleware.TenantIDFromContext(ctx)
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
 	if len(fieldMask) > 0 {
 		q = q.Select(fieldMask)
 	}
@@ -156,10 +170,36 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 }
 
 func (r *APIKeyRepository) Delete(ctx context.Context, key string) error {
-	if err := r.db.WithContext(ctx).Where("id = ?", key).Delete(&APIKeyModel{}).Error; err != nil {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if err := q.Delete(&APIKeyModel{}).Error; err != nil {
 		return fmt.Errorf("delete APIKey: %w", err)
 	}
 	return nil
+}
+
+// LookupByKeyValueHash finds the APIKey by the hash of its KeyValue field.
+// Returns ErrNotFound when no record matches or when hash is empty.
+func (r *APIKeyRepository) LookupByKeyValueHash(ctx context.Context, hash string) (*APIKey, error) {
+	if hash == "" {
+		return nil, persistence.ErrNotFound
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Where("key_value_hash = ?", hash)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	var m APIKeyModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("lookup aPIKey by key_value hash: %w", err)
+	}
+	return fromModel_APIKey(&m), nil
 }
 
 // compile-time check.

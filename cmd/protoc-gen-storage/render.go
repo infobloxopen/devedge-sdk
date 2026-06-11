@@ -17,6 +17,16 @@ func hasSecretFields(messages []messageInfo) bool {
 	return false
 }
 
+// msgHasTenantField returns true if the message has a field named "account_id".
+func msgHasTenantField(msg messageInfo) bool {
+	for _, f := range msg.Fields {
+		if f.Name == "account_id" || f.SnakeName == "account_id" {
+			return true
+		}
+	}
+	return false
+}
+
 // messageInfo describes a proto message for storage code generation.
 type messageInfo struct {
 	MessageName  string
@@ -51,6 +61,28 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	fmt.Fprintf(&b, "package %s\n\n", storagePkgName)
 	withSecrets := hasSecretFields(messages)
 
+	// Determine if any message needs the middleware import (tenant or secret lookup).
+	withMiddleware := false
+	for _, msg := range messages {
+		if msgHasTenantField(msg) {
+			withMiddleware = true
+			break
+		}
+	}
+	if !withMiddleware {
+		for _, msg := range messages {
+			for _, f := range msg.Fields {
+				if f.IsSecret {
+					withMiddleware = true
+					break
+				}
+			}
+			if withMiddleware {
+				break
+			}
+		}
+	}
+
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n")
 	b.WriteString("\t\"encoding/base64\"\n")
@@ -59,6 +91,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\t\"time\"\n\n")
 	b.WriteString("\t\"gorm.io/gorm\"\n\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
+	if withMiddleware {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
+	}
 	if withSecrets {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
@@ -80,6 +115,7 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 }
 
 func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
+	hasTenant := msgHasTenantField(msg)
 	// GORM model struct.
 	fmt.Fprintf(b, "// %sModel is the GORM model for %s.\n", msg.MessageName, msg.MessageName)
 	fmt.Fprintf(b, "type %sModel struct {\n", msg.MessageName)
@@ -175,7 +211,14 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	// Get.
 	fmt.Fprintf(b, "func (r *%sRepository) Get(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tvar m %sModel\n", msg.MessageName)
-	b.WriteString("\tif err := r.db.WithContext(ctx).Where(\"id = ?\", key).First(&m).Error; err != nil {\n")
+	if hasTenant {
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
+		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
+	} else {
+		b.WriteString("\tif err := r.db.WithContext(ctx).Where(\"id = ?\", key).First(&m).Error; err != nil {\n")
+	}
 	b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n")
 	fmt.Fprintf(b, "\t\t\treturn nil, persistence.ErrNotFound\n")
 	b.WriteString("\t\t}\n")
@@ -187,6 +230,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "func (r *%sRepository) List(ctx context.Context, opts persistence.ListOptions) ([]%s, string, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tvar models []%sModel\n", msg.MessageName)
 	b.WriteString("\tq := r.db.WithContext(ctx)\n")
+	if hasTenant {
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+	}
 	b.WriteString("\tif opts.Filter != \"\" {\n\t\tq = q.Where(opts.Filter)\n\t}\n")
 	b.WriteString("\tpageSize := opts.PageSize\n")
 	b.WriteString("\tif pageSize <= 0 {\n\t\tpageSize = 50\n\t}\n")
@@ -252,7 +299,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			b.WriteString("\t}\n")
 		}
 	}
-	b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
+	if hasTenant {
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
+		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+	} else {
+		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
+	}
 	b.WriteString("\tif len(fieldMask) > 0 {\n")
 	b.WriteString("\t\tq = q.Select(fieldMask)\n")
 	b.WriteString("\t}\n")
@@ -263,9 +316,45 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 
 	// Delete.
 	fmt.Fprintf(b, "func (r *%sRepository) Delete(ctx context.Context, key string) error {\n", msg.MessageName)
-	fmt.Fprintf(b, "\tif err := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{}).Error; err != nil {\n", msg.MessageName)
+	if hasTenant {
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
+		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		fmt.Fprintf(b, "\tif err := q.Delete(&%sModel{}).Error; err != nil {\n", msg.MessageName)
+	} else {
+		fmt.Fprintf(b, "\tif err := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{}).Error; err != nil {\n", msg.MessageName)
+	}
 	fmt.Fprintf(b, "\t\treturn fmt.Errorf(\"delete %s: %%w\", err)\n", msg.MessageName)
 	b.WriteString("\t}\n\treturn nil\n}\n\n")
+
+	// LookupByHash methods for secret fields (T002).
+	for _, f := range msg.Fields {
+		if !f.IsSecret {
+			continue
+		}
+		gfn := goFieldName(f)
+		resource := msg.MessageName
+		lowerResource := strings.ToLower(resource[:1]) + resource[1:]
+		fmt.Fprintf(b, "// LookupBy%sHash finds the %s by the hash of its %s field.\n", gfn, resource, gfn)
+		b.WriteString("// Returns ErrNotFound when no record matches or when hash is empty.\n")
+		fmt.Fprintf(b, "func (r *%sRepository) LookupBy%sHash(ctx context.Context, hash string) (%s, error) {\n", resource, gfn, pbType)
+		b.WriteString("\tif hash == \"\" {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
+		if hasTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		}
+		fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Where(\"%s_hash = ?\", hash)\n", f.SnakeName)
+		if hasTenant {
+			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		}
+		fmt.Fprintf(b, "\tvar m %sModel\n", resource)
+		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
+		b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n")
+		b.WriteString("\t\t\treturn nil, persistence.ErrNotFound\n")
+		b.WriteString("\t\t}\n")
+		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"lookup %s by %s hash: %%w\", err)\n", lowerResource, f.SnakeName)
+		b.WriteString("\t}\n")
+		fmt.Fprintf(b, "\treturn fromModel_%s(&m), nil\n}\n\n", resource)
+	}
 
 	// Compile-time interface check.
 	fmt.Fprintf(b, "// compile-time check.\n")

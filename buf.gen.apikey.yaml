@@ -23,3 +23,5 @@ plugins:
   - local: protoc-gen-grpc-gateway
     out: testdata/apikey
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
+  - local: protoc-gen-ent
+    out: testdata/apikey
