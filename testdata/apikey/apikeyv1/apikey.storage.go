@@ -189,7 +189,15 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if len(fieldMask) > 0 {
-		q = q.Select(fieldMask)
+		dbCols := make([]string, 0, len(fieldMask))
+		for _, f := range fieldMask {
+			col, ok := APIKeyColumns[f]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
+			}
+			dbCols = append(dbCols, col)
+		}
+		q = q.Select(dbCols)
 	}
 	if err := q.Updates(m).Error; err != nil {
 		return nil, fmt.Errorf("update APIKey: %w", err)
