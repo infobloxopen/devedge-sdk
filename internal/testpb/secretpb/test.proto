@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+// Test-only fixture for secret field tests: messages with
+// (infoblox.authz.v1.field).secret annotations, shared between
+// middleware/redact and seccheck test packages.
+package secretpb;
+
+import "infoblox/authz/v1/authz.proto";
+
+option go_package = "github.com/infobloxopen/devedge-sdk/internal/testpb/secretpb;secretpb";
+
+// SecretMsg has one secret field and one public field.
+message SecretMsg {
+  string id = 1;
+  string key_value = 2 [(infoblox.authz.v1.field).secret = true];
+  string public_value = 3;
+}
+
+// NestedMsg wraps SecretMsg so we can test recursive redaction.
+message NestedMsg {
+  string outer = 1;
+  SecretMsg inner = 2;
+}
+
+// PlainMsg has no secret fields at all.
+message PlainMsg {
+  string name = 1;
+  string value = 2;
+}

@@ -14,7 +14,9 @@ package main
 import (
 	"strings"
 
+	authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
 	"google.golang.org/protobuf/compiler/protogen"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/pluginpb"
 )
@@ -47,14 +49,23 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			PbImportPath: string(f.GoImportPath),
 		}
 		for _, field := range m.Fields {
+			isSecret := false
+			if opts := field.Desc.Options(); opts != nil {
+				if proto.HasExtension(opts, authzv1.E_Field) {
+					if rule, ok := proto.GetExtension(opts, authzv1.E_Field).(*authzv1.FieldRule); ok {
+						isSecret = rule.GetSecret()
+					}
+				}
+			}
 			msg.Fields = append(msg.Fields, fieldInfo{
-				Name:       string(field.Desc.Name()),
+				Name:        string(field.Desc.Name()),
 				GoFieldName: string(field.GoName), // Go field name (e.g. "PageSize" for "page_size")
-				SnakeName:  toSnake(string(field.Desc.Name())),
-				IsRepeated: field.Desc.IsList(),
-				IsMessage:  field.Desc.Kind() == protoreflect.MessageKind,
-				IsID:       string(field.Desc.Name()) == "id",
-				GoType:     protoKindToGoType(field.Desc.Kind()),
+				SnakeName:   toSnake(string(field.Desc.Name())),
+				IsRepeated:  field.Desc.IsList(),
+				IsMessage:   field.Desc.Kind() == protoreflect.MessageKind,
+				IsID:        string(field.Desc.Name()) == "id",
+				GoType:      protoKindToGoType(field.Desc.Kind()),
+				IsSecret:    isSecret,
 			})
 		}
 		messages = append(messages, msg)

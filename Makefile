@@ -9,7 +9,9 @@ generate:
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.toy.yaml
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.apikey.yaml
 	cd testdata/toy && go mod tidy
+	cd testdata/apikey && go mod tidy
 	go mod tidy
 
 build:

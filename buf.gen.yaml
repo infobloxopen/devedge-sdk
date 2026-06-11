@@ -5,6 +5,7 @@ version: v2
 # devedge-sdk's go.mod (the toy has its own standalone go.mod with GORM).
 inputs:
   - directory: authz/authzpb/internal/testpb
+  - directory: internal/testpb/secretpb
 plugins:
   - local: protoc-gen-go
     out: .

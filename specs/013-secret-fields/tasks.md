@@ -8,7 +8,7 @@
 
 ## Phase 1: Proto annotation update
 
-- [ ] T001 [S] Update `proto/infoblox/authz/v1/authz.proto` (the mirror copy in this repo):
+- [X] T001 [S] Update `proto/infoblox/authz/v1/authz.proto` (the mirror copy in this repo):
   Add after the existing `Rule` message and before the `extend` block:
   ```proto
   // FieldRule declares field-level security properties.
@@ -31,7 +31,7 @@
 
 ## Phase 2: Tests (red first)
 
-- [ ] T002 [S] Write `secret/dev_test.go` — unit tests for `DevEncryptor` (must be red until T004):
+- [X] T002 [S] Write `secret/dev_test.go` — unit tests for `DevEncryptor` (must be red until T004):
   - `TestDev_EncryptDecrypt_Roundtrip`: `Encrypt` then `Decrypt` returns original plaintext.
   - `TestDev_Hash_IsStable`: same plaintext + same key always returns the same hash.
   - `TestDev_Hash_DiffersAcrossKeys`: different key → different hash.
@@ -39,7 +39,7 @@
     ciphertexts (due to random nonce).
   - `TestNewDev_ShortKey_Panics`: `NewDev(make([]byte, 16))` → panics.
 
-- [ ] T003 [S] Write `middleware/redact/redact_test.go` — unit tests for `redact.Message`
+- [X] T003 [S] Write `middleware/redact/redact_test.go` — unit tests for `redact.Message`
   (must be red until T005). These tests need a proto message with a `secret: true` field.
   Use the `authzpb` test fixture approach: create a synthetic proto in
   `middleware/redact/internal/testpb/` with a message that has a `secret: true` field.
@@ -51,7 +51,7 @@
   - `TestMessage_RedactsNestedSecretField`: outer message with an inner message that has a
     `secret: true` field → inner field is redacted.
 
-- [ ] T004 [S] Write `seccheck/secret_test.go` — tests for `AssertNoSecretFieldsLeaked`
+- [X] T004 [S] Write `seccheck/secret_test.go` — tests for `AssertNoSecretFieldsLeaked`
   (must be red until T007). Use the same testpb fixture:
   - `TestAssertNoSecretFieldsLeaked_Clean`: response with `key_value = ""` → 0 findings.
   - `TestAssertNoSecretFieldsLeaked_Leaks`: response with `key_value = "sk_abc"` → Error
@@ -63,7 +63,7 @@
 
 ## Phase 3: Implementation
 
-- [ ] T005 [S] Implement `secret/encryptor.go` (interface) + `secret/dev.go` (DevEncryptor,
+- [X] T005 [S] Implement `secret/encryptor.go` (interface) + `secret/dev.go` (DevEncryptor,
   FR-002/003):
   - `Encryptor` interface with `Encrypt`, `Decrypt`, `Hash`.
   - `DevEncryptor` struct: holds `key []byte` (32+ bytes).
@@ -74,7 +74,7 @@
     Wait — correct HMAC: `mac := hmac.New(sha256.New, key); mac.Write([]byte(plaintext)); return base64(mac.Sum(nil))`.
   Run T002 tests — all must pass.
 
-- [ ] T006 [S] Implement `secret/vault.go` (VaultTransitEncryptor, FR-004/005):
+- [X] T006 [S] Implement `secret/vault.go` (VaultTransitEncryptor, FR-004/005):
   - `VaultTransitEncryptor` struct: `addr, token, keyName string`, `client *http.Client`,
     `hmacKey []byte` (= `sha256.Sum256([]byte(token))[:32]`).
   - `NewVaultTransit(addr, token, keyName string) Encryptor`.
@@ -89,7 +89,7 @@
   integration tests for roundtrip encrypt/decrypt/rewrap.
   Run `go test ./secret/... -count=1` — passes without Vault (vault tests skip).
 
-- [ ] T007 [S] Implement `middleware/redact/redact.go` (FR-007/008):
+- [X] T007 [S] Implement `middleware/redact/redact.go` (FR-007/008):
   - `Message(m proto.Message) proto.Message` — proto.Clone + `walkAndRedact`.
   - `walkAndRedact(msg protoreflect.Message)` — iterates fields; for `MessageKind`, recurse;
     for fields with `E_Field.secret == true`: set string fields to `"[REDACTED]"`, clear others.
@@ -101,7 +101,7 @@
   `github.com/infobloxopen/apis/proto/infoblox/authz/v1`.
   Run T003 tests — all must pass.
 
-- [ ] T008 [S] Add `AssertNoSecretFieldsLeaked(responses ...proto.Message) []Finding` to
+- [X] T008 [S] Add `AssertNoSecretFieldsLeaked(responses ...proto.Message) []Finding` to
   `seccheck/seccheck.go` (FR-009):
   Walk each response via `proto.ProtoReflect().Range`; for each field with `secret: true`,
   if string field is non-empty (and != `"[REDACTED]"`) → Error finding with field path.
@@ -111,7 +111,7 @@
 
 ## Phase 4: protoc-gen-storage secret field support
 
-- [ ] T009 [S] Update `cmd/protoc-gen-storage/render.go` to detect `secret: true` fields
+- [X] T009 [S] Update `cmd/protoc-gen-storage/render.go` to detect `secret: true` fields
   (FR-006). In the field-rendering loop, check
   `proto.HasExtension(field.Options(), authzv1.E_Field)` + `fieldRule.Secret`. If true:
   - Emit `<GoName>Hash string \`gorm:"column:<snake>_hash;index"\`` instead of the plain column.
@@ -127,7 +127,7 @@
 
 ## Phase 5: Test fixture + apx release
 
-- [ ] T010 [S] Create `testdata/apikey/` fixture:
+- [X] T010 [S] Create `testdata/apikey/` fixture:
   - `testdata/apikey/apikey.proto`: package `apikey.v1`; `APIKey` message with
     `string id = 1`, `string name = 2`, `string key_value = 3 [(infoblox.authz.v1.field).secret = true]`;
     `APIKeyService` with `CreateAPIKey`/`GetAPIKey`/`ListAPIKeys` with authz annotations.
@@ -139,7 +139,7 @@
     verify the generated code compiles without a real DB).
   Run `cd testdata/apikey && go build ./... && go test ./... -count=1`.
 
-- [ ] T011 [S] Update the canonical `authz.proto` in `infobloxopen/apis` and cut `alpha.3`:
+- [X] T011 [S] Update the canonical `authz.proto` in `infobloxopen/apis` and cut `alpha.3`:
   - Clone/update `~/go/src/github.com/infobloxopen/apis` with the same `FieldRule` addition.
   - Open PR, merge, let CI finalize cut the tag.
   - `go get github.com/infobloxopen/apis/proto/infoblox/authz@v1.0.0-alpha.3 && go mod tidy`.
@@ -150,12 +150,12 @@
 
 ## Phase 6: Verify + commit
 
-- [ ] T012 [S] `go build ./... && go vet ./... && make test` — clean (SC-006).
+- [X] T012 [S] `go build ./... && go vet ./... && make test` — clean (SC-006).
   `grep "gorm" go.mod` → absent (GORM stays in testdata/apikey/go.mod only).
 
-- [ ] T013 [S] `cd testdata/apikey && go build ./... && go test ./... -count=1` — passes (SC-004).
+- [X] T013 [S] `cd testdata/apikey && go build ./... && go test ./... -count=1` — passes (SC-004).
 
-- [ ] T014 [S] Commit all + merge.
+- [X] T014 [S] Commit all + merge.
   Message: `013: secret field annotation — encrypt at rest, log redaction, Vault Transit support`.
 
 ---
