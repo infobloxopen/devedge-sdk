@@ -1,4 +1,4 @@
-.PHONY: build test vet lint tidy generate
+.PHONY: build test security-check vet lint tidy generate
 
 # Regenerate protobuf Go bindings (the authz annotation + the authzpb test fixture)
 # and the <Service>AuthzRules tables. Requires buf + protoc-gen-go on PATH; the
@@ -17,6 +17,9 @@ build:
 
 test:
 	go test ./...
+
+security-check: ## Run security assertions (go test -run Security)
+	cd testdata/toy && go test ./... -run Security -v
 
 vet:
 	go vet ./...
