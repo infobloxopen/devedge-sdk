@@ -1,0 +1,25 @@
+version: v2
+# W9-10/013 secret field fixture: generates all plugins for testdata/apikey/apikey.proto.
+# Output goes into testdata/apikey/ which has its own go.mod with gorm.io/gorm,
+# keeping gorm out of devedge-sdk's go.mod (SC-003).
+inputs:
+  - directory: testdata/apikey
+plugins:
+  - local: protoc-gen-go
+    out: testdata/apikey
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
+  - local: protoc-gen-go-grpc
+    out: testdata/apikey
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
+  - local: protoc-gen-devedge-authz
+    out: testdata/apikey
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
+  - local: protoc-gen-svc
+    out: testdata/apikey
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
+  - local: protoc-gen-storage
+    out: testdata/apikey
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
+  - local: protoc-gen-grpc-gateway
+    out: testdata/apikey
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
