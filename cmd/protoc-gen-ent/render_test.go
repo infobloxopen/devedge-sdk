@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
 // T007: unit tests for renderEntSchema / renderGenerateFile — pure functions,
@@ -136,6 +138,42 @@ func TestRenderGenerateFile(t *testing.T) {
 	mustContain(t, out, "DO NOT EDIT")
 	mustContain(t, out, "package ent")
 	mustContain(t, out, "//go:generate go run entgo.io/ent/cmd/ent generate ./schema")
+}
+
+// T008: constraint and relationship field tests.
+
+func TestRenderEntSchema_uniqueField(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "User",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "email", SnakeName: "email", EntType: "String", Unique: true},
+		},
+	}
+	out := renderEntSchema(msg)
+	mustContain(t, out, `.Unique()`)
+	mustContain(t, out, `field.String("email")`)
+}
+
+func TestRenderEntSchema_hasOneEdge(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Order",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "address", SnakeName: "address", EntType: "String",
+				IsMessage: true, HasOne: &fieldv1.HasOne{ForeignKey: "order_id"}},
+		},
+	}
+	out := renderEntSchema(msg)
+	// Should emit Edges() method with edge.To.
+	mustContain(t, out, "func (Order) Edges() []ent.Edge {")
+	mustContain(t, out, `edge.To("address",`)
+	mustContain(t, out, ".Unique()")
+	mustContain(t, out, ".Required()")
+	// Must import edge package.
+	mustContain(t, out, `"entgo.io/ent/schema/edge"`)
+	// No TODO comment.
+	mustNotContain(t, out, "TODO: nested message address skipped")
 }
 
 func TestToSnake(t *testing.T) {

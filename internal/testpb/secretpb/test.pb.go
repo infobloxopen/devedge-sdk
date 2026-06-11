@@ -5,13 +5,13 @@
 // source: test.proto
 
 // Test-only fixture for secret field tests: messages with
-// (infoblox.authz.v1.field).secret annotations, shared between
+// (infoblox.field.v1.opts).secret annotations, shared between
 // middleware/redact and seccheck test packages.
 
 package secretpb
 
 import (
-	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -198,10 +198,10 @@ var File_test_proto protoreflect.FileDescriptor
 const file_test_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"test.proto\x12\bsecretpb\x1a\x1dinfoblox/authz/v1/authz.proto\"c\n" +
+	"test.proto\x12\bsecretpb\x1a\x1dinfoblox/field/v1/field.proto\"c\n" +
 	"\tSecretMsg\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
-	"\tkey_value\x18\x02 \x01(\tB\x06\x92\xb5\x18\x02\b\x01R\bkeyValue\x12!\n" +
+	"\tkey_value\x18\x02 \x01(\tB\x06\x9a\xb5\x18\x02\b\x01R\bkeyValue\x12!\n" +
 	"\fpublic_value\x18\x03 \x01(\tR\vpublicValue\"L\n" +
 	"\tNestedMsg\x12\x14\n" +
 	"\x05outer\x18\x01 \x01(\tR\x05outer\x12)\n" +

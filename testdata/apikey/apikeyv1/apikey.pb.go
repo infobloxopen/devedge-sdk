@@ -5,12 +5,13 @@
 // source: apikey.proto
 
 // Test fixture for protoc-gen-storage secret field support (W9-10/013).
-// Exercises the (infoblox.authz.v1.field).secret = true annotation.
+// Exercises the (infoblox.field.v1.opts).secret annotation.
 
 package apikeyv1
 
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -382,13 +383,13 @@ var File_apikey_proto protoreflect.FileDescriptor
 
 const file_apikey_proto_rawDesc = "" +
 	"\n" +
-	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\x8f\x01\n" +
+	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\x8f\x01\n" +
 	"\x06APIKey\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x03 \x01(\tR\taccountId\x12#\n" +
-	"\tkey_value\x18\x04 \x01(\tB\x06\x92\xb5\x18\x02\b\x01R\bkeyValue\x12\x1d\n" +
+	"\tkey_value\x18\x04 \x01(\tB\x06\x9a\xb5\x18\x02\b\x01R\bkeyValue\x12\x1d\n" +
 	"\n" +
 	"key_prefix\x18\x05 \x01(\tR\tkeyPrefix\"A\n" +
 	"\x13CreateAPIKeyRequest\x12*\n" +
