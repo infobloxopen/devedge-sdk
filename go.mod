@@ -3,6 +3,7 @@ module github.com/infobloxopen/devedge-sdk
 go 1.25.5
 
 require (
+	entgo.io/ent v0.14.6
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7
 	google.golang.org/grpc v1.81.1

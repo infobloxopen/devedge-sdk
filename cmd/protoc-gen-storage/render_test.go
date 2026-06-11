@@ -137,6 +137,98 @@ func TestRenderStorageFile_noSecretNoImport(t *testing.T) {
 	mustNotContain(t, out, "enc secret.Encryptor")
 }
 
+// T001: tenant isolation tests.
+
+func TestRenderStorageFile_tenantIsolation(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Record",
+		PbPkgName:    "recordv1",
+		PbImportPath: "example/record/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "value", GoType: "string", SnakeName: "value"},
+		},
+	}
+	out := renderStorageFile("recordv1storage", []messageInfo{msg})
+
+	// Middleware import must be present when account_id field exists.
+	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
+
+	// TenantIDFromContext must appear in List, Get, Update, Delete.
+	mustContain(t, out, "TenantIDFromContext")
+
+	// Tenant WHERE clause must be present.
+	mustContain(t, out, `"account_id = ?"`)
+}
+
+func TestRenderStorageFile_noTenantWhenNoAccountID(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Simple",
+		PbPkgName:    "simplev1",
+		PbImportPath: "example/simple/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("simplev1storage", []messageInfo{msg})
+
+	// No middleware import when no account_id field and no secret fields.
+	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
+	mustNotContain(t, out, "TenantIDFromContext")
+	mustNotContain(t, out, `"account_id = ?"`)
+}
+
+// T002: LookupByHash tests.
+
+func TestRenderStorageFile_lookupByHash(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "KeyValue",
+		PbPkgName:    "kvv1",
+		PbImportPath: "example/kv/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "key_value", GoFieldName: "KeyValue", GoType: "string", SnakeName: "key_value", IsSecret: true},
+		},
+	}
+	out := renderStorageFile("kvv1storage", []messageInfo{msg})
+
+	// LookupByKeyValueHash method must be present.
+	mustContain(t, out, "func (r *KeyValueRepository) LookupByKeyValueHash(")
+
+	// Must check for empty hash.
+	mustContain(t, out, "persistence.ErrNotFound")
+
+	// Must query on key_value_hash column.
+	mustContain(t, out, "key_value_hash = ?")
+
+	// Middleware import must be present (secret fields trigger it).
+	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
+}
+
+func TestRenderStorageFile_lookupByHashWithTenant(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Secret",
+		PbPkgName:    "secretv1",
+		PbImportPath: "example/secret/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "token", GoFieldName: "Token", GoType: "string", SnakeName: "token", IsSecret: true},
+		},
+	}
+	out := renderStorageFile("secretv1storage", []messageInfo{msg})
+
+	// LookupByTokenHash must be present.
+	mustContain(t, out, "func (r *SecretRepository) LookupByTokenHash(")
+
+	// Tenant filter must also appear inside LookupByTokenHash.
+	mustContain(t, out, "token_hash = ?")
+	mustContain(t, out, "TenantIDFromContext")
+	mustContain(t, out, `"account_id = ?"`)
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
