@@ -12,6 +12,7 @@ package widgetsv1
 
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -33,6 +34,7 @@ type Widget struct {
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Color         string                 `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
 	Weight        int32                  `protobuf:"varint,4,opt,name=weight,proto3" json:"weight,omitempty"`
+	Etag          string                 `protobuf:"bytes,5,opt,name=etag,proto3" json:"etag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -93,6 +95,13 @@ func (x *Widget) GetWeight() int32 {
 		return x.Weight
 	}
 	return 0
+}
+
+func (x *Widget) GetEtag() string {
+	if x != nil {
+		return x.Etag
+	}
+	return ""
 }
 
 type CreateWidgetRequest struct {
@@ -423,12 +432,13 @@ var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
 	"\n" +
-	"\rwidgets.proto\x12\x06toy.v1\x1a\x1dinfoblox/authz/v1/authz.proto\"Z\n" +
+	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"n\n" +
 	"\x06Widget\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05color\x18\x03 \x01(\tR\x05color\x12\x16\n" +
-	"\x06weight\x18\x04 \x01(\x05R\x06weight\"=\n" +
+	"\x06weight\x18\x04 \x01(\x05R\x06weight\x12\x12\n" +
+	"\x04etag\x18\x05 \x01(\tR\x04etag\"=\n" +
 	"\x13CreateWidgetRequest\x12&\n" +
 	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\"\"\n" +
 	"\x10GetWidgetRequest\x12\x0e\n" +
@@ -446,18 +456,18 @@ const file_widgets_proto_rawDesc = "" +
 	"updateMask\"%\n" +
 	"\x13DeleteWidgetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x16\n" +
-	"\x14DeleteWidgetResponse2\xc2\x03\n" +
-	"\rWidgetService\x12R\n" +
-	"\fCreateWidget\x12\x1b.toy.v1.CreateWidgetRequest\x1a\x0e.toy.v1.Widget\"\x15\x8a\xb5\x18\x11\n" +
-	"\x06create\x12\awidgets\x12J\n" +
-	"\tGetWidget\x12\x18.toy.v1.GetWidgetRequest\x1a\x0e.toy.v1.Widget\"\x13\x8a\xb5\x18\x0f\n" +
-	"\x04read\x12\awidgets\x12[\n" +
-	"\vListWidgets\x12\x1a.toy.v1.ListWidgetsRequest\x1a\x1b.toy.v1.ListWidgetsResponse\"\x13\x8a\xb5\x18\x0f\n" +
-	"\x04read\x12\awidgets\x12R\n" +
-	"\fUpdateWidget\x12\x1b.toy.v1.UpdateWidgetRequest\x1a\x0e.toy.v1.Widget\"\x15\x8a\xb5\x18\x11\n" +
-	"\x06update\x12\awidgets\x12`\n" +
-	"\fDeleteWidget\x12\x1b.toy.v1.DeleteWidgetRequest\x1a\x1c.toy.v1.DeleteWidgetResponse\"\x15\x8a\xb5\x18\x11\n" +
-	"\x06delete\x12\awidgetsBFZDgithub.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1b\x06proto3"
+	"\x14DeleteWidgetResponse2\xc7\x04\n" +
+	"\rWidgetService\x12m\n" +
+	"\fCreateWidget\x12\x1b.toy.v1.CreateWidgetRequest\x1a\x0e.toy.v1.Widget\"0\x8a\xb5\x18\x11\n" +
+	"\x06create\x12\awidgets\x82\xd3\xe4\x93\x02\x15:\x06widget\"\v/v1/widgets\x12b\n" +
+	"\tGetWidget\x12\x18.toy.v1.GetWidgetRequest\x1a\x0e.toy.v1.Widget\"+\x8a\xb5\x18\x0f\n" +
+	"\x04read\x12\awidgets\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/widgets/{id}\x12n\n" +
+	"\vListWidgets\x12\x1a.toy.v1.ListWidgetsRequest\x1a\x1b.toy.v1.ListWidgetsResponse\"&\x8a\xb5\x18\x0f\n" +
+	"\x04read\x12\awidgets\x82\xd3\xe4\x93\x02\r\x12\v/v1/widgets\x12y\n" +
+	"\fUpdateWidget\x12\x1b.toy.v1.UpdateWidgetRequest\x1a\x0e.toy.v1.Widget\"<\x8a\xb5\x18\x11\n" +
+	"\x06update\x12\awidgets\x82\xd3\xe4\x93\x02!:\x06widget2\x17/v1/widgets/{widget.id}\x12x\n" +
+	"\fDeleteWidget\x12\x1b.toy.v1.DeleteWidgetRequest\x1a\x1c.toy.v1.DeleteWidgetResponse\"-\x8a\xb5\x18\x11\n" +
+	"\x06delete\x12\awidgets\x82\xd3\xe4\x93\x02\x12*\x10/v1/widgets/{id}BFZDgithub.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1b\x06proto3"
 
 var (
 	file_widgets_proto_rawDescOnce sync.Once

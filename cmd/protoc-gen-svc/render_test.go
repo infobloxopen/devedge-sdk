@@ -20,14 +20,24 @@ func TestRenderSvcFile_basic(t *testing.T) {
 
 	mustContain(t, out, "DO NOT EDIT")
 	mustContain(t, out, "package widgetsv1")
-	mustContain(t, out, "type WidgetServiceServer interface")
-	mustContain(t, out, "CreateWidget(context.Context, *CreateWidgetRequest) (*Widget, error)")
-	mustContain(t, out, "GetWidget(context.Context, *GetWidgetRequest) (*Widget, error)")
-	mustContain(t, out, "DeleteWidget(context.Context, *DeleteWidgetRequest) (*DeleteWidgetResponse, error)")
-	mustContain(t, out, "type UnimplementedWidgetServiceServer struct")
-	mustContain(t, out, "RegisterWidgetService(s *grpc.Server, srv WidgetServiceServer)")
-	mustContain(t, out, "widgetServiceAdapter")
 	mustContain(t, out, "protoc-gen-svc")
+
+	// protoc-gen-svc no longer re-declares the server interface or unimplemented
+	// stub — those are provided by protoc-gen-go-grpc (_grpc.pb.go).
+	mustNotContain(t, out, "type WidgetServiceServer interface")
+	mustNotContain(t, out, "type UnimplementedWidgetServiceServer struct")
+
+	// Register<Svc> accepts *server.Server and wires gRPC + HTTP gateway.
+	mustContain(t, out, "RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error")
+	// Boot-gate: fails closed if any method lacks an authz declaration.
+	mustContain(t, out, "grpcauthz.AssertMethodsDeclared(")
+	mustContain(t, out, "WidgetService_CreateWidget_FullMethodName")
+	mustContain(t, out, "WidgetService_GetWidget_FullMethodName")
+	mustContain(t, out, "WidgetService_DeleteWidget_FullMethodName")
+	// Delegates to grpc-generated server registration.
+	mustContain(t, out, "RegisterWidgetServiceServer(s.GRPCServer(), srv)")
+	// Wires HTTP gateway via RegisterGateway.
+	mustContain(t, out, "RegisterWidgetServiceHandlerClient(ctx, mux, NewWidgetServiceClient(conn))")
 }
 
 func TestRenderSvcFile_noServices(t *testing.T) {
@@ -40,13 +50,21 @@ func TestRenderSvcFile_noServices(t *testing.T) {
 func TestRenderSvcFile_emptyMethodList(t *testing.T) {
 	svc := serviceInfo{ServiceName: "EmptyService", Methods: nil}
 	out := renderSvcFile("pkg", "example/pkg;pkg", []serviceInfo{svc})
-	// A service with no methods still emits an empty interface.
-	mustContain(t, out, "type EmptyServiceServer interface")
+	// A service with no methods still emits a Register helper.
+	mustContain(t, out, "RegisterEmptyService(s *server.Server, srv EmptyServiceServer) error")
+	mustContain(t, out, "RegisterEmptyServiceServer(s.GRPCServer(), srv)")
 }
 
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
 		t.Errorf("expected output to contain %q\n--- output ---\n%s", substr, s)
+	}
+}
+
+func mustNotContain(t *testing.T, s, substr string) {
+	t.Helper()
+	if strings.Contains(s, substr) {
+		t.Errorf("expected output NOT to contain %q\n--- output ---\n%s", substr, s)
 	}
 }

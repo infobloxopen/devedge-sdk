@@ -7,6 +7,7 @@ package toy.v1;
 
 option go_package = "github.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1";
 
+import "google/api/annotations.proto";
 import "infoblox/authz/v1/authz.proto";
 
 // Widget is the resource managed by WidgetService.
@@ -15,6 +16,7 @@ message Widget {
   string name   = 2;
   string color  = 3;
   int32  weight = 4;
+  string etag   = 5;
 }
 
 message CreateWidgetRequest { Widget widget = 1; }
@@ -36,18 +38,23 @@ message DeleteWidgetResponse {}
 
 service WidgetService {
   rpc CreateWidget(CreateWidgetRequest) returns (Widget) {
+    option (google.api.http) = {post: "/v1/widgets", body: "widget"};
     option (infoblox.authz.v1.rule) = {verb: "create", resource: "widgets"};
   }
   rpc GetWidget(GetWidgetRequest) returns (Widget) {
+    option (google.api.http) = {get: "/v1/widgets/{id}"};
     option (infoblox.authz.v1.rule) = {verb: "read", resource: "widgets"};
   }
   rpc ListWidgets(ListWidgetsRequest) returns (ListWidgetsResponse) {
+    option (google.api.http) = {get: "/v1/widgets"};
     option (infoblox.authz.v1.rule) = {verb: "read", resource: "widgets"};
   }
   rpc UpdateWidget(UpdateWidgetRequest) returns (Widget) {
+    option (google.api.http) = {patch: "/v1/widgets/{widget.id}", body: "widget"};
     option (infoblox.authz.v1.rule) = {verb: "update", resource: "widgets"};
   }
   rpc DeleteWidget(DeleteWidgetRequest) returns (DeleteWidgetResponse) {
+    option (google.api.http) = {delete: "/v1/widgets/{id}"};
     option (infoblox.authz.v1.rule) = {verb: "delete", resource: "widgets"};
   }
 }
