@@ -13,12 +13,18 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/persistence/filter"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
 	_ = base64.StdEncoding
 	_ = fmt.Sprintf
 	_ = strconv.Itoa
+	_ = filter.Parse
+	_ = codes.OK
+	_ = status.Error
 )
 
 // WidgetModel is the GORM model for Widget.
@@ -58,6 +64,15 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 	return p
 }
 
+// WidgetColumns maps proto field names to DB column names for safe filter/order_by parsing.
+var WidgetColumns = map[string]string{
+	"id":     "id",
+	"name":   "name",
+	"color":  "color",
+	"weight": "weight",
+	"etag":   "etag",
+}
+
 // WidgetRepository is a GORM-backed persistence.Repository for *Widget.
 type WidgetRepository struct{ db *gorm.DB }
 
@@ -81,7 +96,21 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 	var models []WidgetModel
 	q := r.db.WithContext(ctx)
 	if opts.Filter != "" {
-		q = q.Where(opts.Filter)
+		cond, err := filter.Parse(opts.Filter, WidgetColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
+		}
+		sql, args := cond.SQL()
+		q = q.Where(sql, args...)
+	}
+	if opts.OrderBy != "" {
+		clauses, err := filter.ParseOrderBy(opts.OrderBy, WidgetColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid order_by: %v", err)
+		}
+		for _, c := range clauses {
+			q = q.Order(c.GORMExpr())
+		}
 	}
 	pageSize := opts.PageSize
 	if pageSize <= 0 {

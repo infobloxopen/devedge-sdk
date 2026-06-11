@@ -104,12 +104,15 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\t\"time\"\n\n")
 	b.WriteString("\t\"gorm.io/gorm\"\n\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
+	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/filter\"\n")
 	if withMiddleware {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
 	}
 	if withSecrets {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
+	b.WriteString("\t\"google.golang.org/grpc/codes\"\n")
+	b.WriteString("\t\"google.golang.org/grpc/status\"\n")
 	b.WriteString(")\n\n")
 
 	// Suppress unused import warnings for packages that may not be referenced
@@ -118,6 +121,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\t_ = base64.StdEncoding\n")
 	b.WriteString("\t_ = fmt.Sprintf\n")
 	b.WriteString("\t_ = strconv.Itoa\n")
+	b.WriteString("\t_ = filter.Parse\n")
+	b.WriteString("\t_ = codes.OK\n")
+	b.WriteString("\t_ = status.Error\n")
 	b.WriteString(")\n\n")
 
 	for _, msg := range messages {
@@ -248,6 +254,22 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 	b.WriteString("\treturn p\n}\n\n")
 
+	// Column map for safe filter/order_by parsing (AIP-160/132).
+	fmt.Fprintf(b, "// %sColumns maps proto field names to DB column names for safe filter/order_by parsing.\n", msg.MessageName)
+	fmt.Fprintf(b, "var %sColumns = map[string]string{\n", msg.MessageName)
+	fmt.Fprintf(b, "\t\"id\": \"id\",\n")
+	for _, f := range msg.Fields {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret {
+			continue
+		}
+		col := f.SnakeName
+		if f.ColumnName != "" {
+			col = f.ColumnName
+		}
+		fmt.Fprintf(b, "\t%q: %q,\n", f.Name, col)
+	}
+	b.WriteString("}\n\n")
+
 	// Determine if this message has any secret fields.
 	msgHasSecrets := false
 	for _, f := range msg.Fields {
@@ -297,7 +319,23 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	}
-	b.WriteString("\tif opts.Filter != \"\" {\n\t\tq = q.Where(opts.Filter)\n\t}\n")
+	fmt.Fprintf(b, "\tif opts.Filter != \"\" {\n")
+	fmt.Fprintf(b, "\t\tcond, err := filter.Parse(opts.Filter, %sColumns)\n", msg.MessageName)
+	fmt.Fprintf(b, "\t\tif err != nil {\n")
+	fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.InvalidArgument, \"invalid filter: %%v\", err)\n")
+	fmt.Fprintf(b, "\t\t}\n")
+	fmt.Fprintf(b, "\t\tsql, args := cond.SQL()\n")
+	fmt.Fprintf(b, "\t\tq = q.Where(sql, args...)\n")
+	fmt.Fprintf(b, "\t}\n")
+	fmt.Fprintf(b, "\tif opts.OrderBy != \"\" {\n")
+	fmt.Fprintf(b, "\t\tclauses, err := filter.ParseOrderBy(opts.OrderBy, %sColumns)\n", msg.MessageName)
+	fmt.Fprintf(b, "\t\tif err != nil {\n")
+	fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.InvalidArgument, \"invalid order_by: %%v\", err)\n")
+	fmt.Fprintf(b, "\t\t}\n")
+	fmt.Fprintf(b, "\t\tfor _, c := range clauses {\n")
+	fmt.Fprintf(b, "\t\t\tq = q.Order(c.GORMExpr())\n")
+	fmt.Fprintf(b, "\t\t}\n")
+	fmt.Fprintf(b, "\t}\n")
 	b.WriteString("\tpageSize := opts.PageSize\n")
 	b.WriteString("\tif pageSize <= 0 {\n\t\tpageSize = 50\n\t}\n")
 	b.WriteString("\toffset := 0\n")
