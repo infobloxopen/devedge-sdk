@@ -1,13 +1,14 @@
 syntax = "proto3";
 
 // Test fixture for protoc-gen-storage secret field support (W9-10/013).
-// Exercises the (infoblox.authz.v1.field).secret = true annotation.
+// Exercises the (infoblox.field.v1.opts).secret annotation.
 package apikey.v1;
 
 option go_package = "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1;apikeyv1";
 
 import "google/api/annotations.proto";
 import "infoblox/authz/v1/authz.proto";
+import "infoblox/field/v1/field.proto";
 
 // APIKey is a customer API key. The raw key_value is never stored as plaintext;
 // the framework stores a hash (for lookup) and optional ciphertext (for recovery).
@@ -17,7 +18,7 @@ message APIKey {
   string account_id = 3;
   // key_value is the raw API key material. Annotated secret: the storage layer
   // will hash and encrypt this field; it is cleared in all responses after creation.
-  string key_value  = 4 [(infoblox.authz.v1.field).secret = true];
+  string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
   string key_prefix = 5; // first 8 chars of the key, for display (not secret)
 }
 

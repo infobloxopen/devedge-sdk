@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
 // hasSecretFields returns true if any field across all messages is marked secret.
@@ -45,6 +47,17 @@ type fieldInfo struct {
 	IsRepeated  bool // repeated field — skipped in GORM model with a TODO
 	IsMessage   bool // nested message field — skipped with a TODO
 	IsSecret    bool // secret field — stored as hash+cipher columns; plaintext never persisted
+	// Storage constraints (from field.v1.FieldOptions).
+	NotNull    bool
+	Unique     bool
+	Index      bool
+	ColumnName string // overrides SnakeName in the GORM column tag
+	ColumnType string // overrides the GORM type tag
+	// ORM relationship opts.
+	HasOne     *fieldv1.HasOne
+	HasMany    *fieldv1.HasMany
+	BelongsTo  *fieldv1.BelongsTo
+	ManyToMany *fieldv1.ManyToMany
 }
 
 // renderStorageFile generates the .storage.go content for the given storage
@@ -126,10 +139,41 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			continue // ID is already emitted above
 		}
 		if f.IsRepeated {
+			if f.HasMany != nil {
+				// Emit a has_many slice association.
+				assocType := strings.TrimPrefix(f.GoType, "*")
+				gfn := goFieldName(f)
+				fmt.Fprintf(b, "\t%s []%s `gorm:\"foreignKey:%s\"`\n", gfn, assocType, f.HasMany.GetForeignKey())
+				continue
+			}
+			if f.ManyToMany != nil {
+				assocType := strings.TrimPrefix(f.GoType, "*")
+				gfn := goFieldName(f)
+				fmt.Fprintf(b, "\t%s []%s `gorm:\"many2many:%s\"`\n", gfn, assocType, f.ManyToMany.GetJoinTable())
+				continue
+			}
 			fmt.Fprintf(b, "\t// TODO: repeated field %s skipped — JSONB serialization needed (W5-6)\n", f.Name)
 			continue
 		}
 		if f.IsMessage {
+			if f.HasOne != nil {
+				assocType := strings.TrimPrefix(f.GoType, "*")
+				gfn := goFieldName(f)
+				fmt.Fprintf(b, "\t%s %s `gorm:\"foreignKey:%s\"`\n", gfn, assocType, f.HasOne.GetForeignKey())
+				continue
+			}
+			if f.BelongsTo != nil {
+				assocType := strings.TrimPrefix(f.GoType, "*")
+				gfn := goFieldName(f)
+				fk := f.BelongsTo.GetForeignKey()
+				fmt.Fprintf(b, "\t%s %s `gorm:\"foreignKey:%s\"`\n", gfn, assocType, fk)
+				// Also emit the FK column field.
+				if fk != "" {
+					fkGoName := snakeToCamel(fk)
+					fmt.Fprintf(b, "\t%s string\n", fkGoName)
+				}
+				continue
+			}
 			fmt.Fprintf(b, "\t// TODO: nested message %s skipped — serialization strategy TBD (W5-6)\n", f.Name)
 			continue
 		}
@@ -139,7 +183,26 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			fmt.Fprintf(b, "\t%sHash   string `gorm:\"column:%s_hash;index\"`\n", gfn, f.SnakeName)
 			fmt.Fprintf(b, "\t%sCipher string `gorm:\"column:%s_cipher\"`\n", gfn, f.SnakeName)
 		} else {
-			fmt.Fprintf(b, "\t%s %s `gorm:\"column:%s\"`\n", gfn, f.GoType, f.SnakeName)
+			// Build the GORM tag.
+			col := f.SnakeName
+			if f.ColumnName != "" {
+				col = f.ColumnName
+			}
+			var tagParts []string
+			tagParts = append(tagParts, "column:"+col)
+			if f.ColumnType != "" {
+				tagParts = append(tagParts, "type:"+f.ColumnType)
+			}
+			if f.NotNull {
+				tagParts = append(tagParts, "not null")
+			}
+			if f.Unique {
+				tagParts = append(tagParts, "uniqueIndex")
+			} else if f.Index {
+				tagParts = append(tagParts, "index")
+			}
+			tag := strings.Join(tagParts, ";")
+			fmt.Fprintf(b, "\t%s %s `gorm:\"%s\"`\n", gfn, f.GoType, tag)
 		}
 	}
 
@@ -359,6 +422,15 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	// Compile-time interface check.
 	fmt.Fprintf(b, "// compile-time check.\n")
 	fmt.Fprintf(b, "var _ persistence.Repository[%s, string] = (*%sRepository)(nil)\n\n", pbType, msg.MessageName)
+}
+
+// snakeToCamel converts a snake_case string to CamelCase (e.g. "user_id" → "UserId").
+func snakeToCamel(s string) string {
+	parts := strings.Split(s, "_")
+	for i, p := range parts {
+		parts[i] = ucFirst(p)
+	}
+	return strings.Join(parts, "")
 }
 
 func ucFirst(s string) string {

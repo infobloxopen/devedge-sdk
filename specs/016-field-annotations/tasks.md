@@ -4,7 +4,7 @@
 
 ---
 
-- [ ] T001 [S] Create `proto/infoblox/field/v1/field.proto` (FR-002/003) —
+- [X] T001 [S] Create `proto/infoblox/field/v1/field.proto` (FR-002/003) —
   the mirror copy in devedge-sdk. Also create the canonical version in
   `/Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field/v1/field.proto`.
   Content:
@@ -37,21 +37,21 @@
   ```
   Generate Go bindings for both copies. Run `go build ./...`.
 
-- [ ] T002 [S] Remove `FieldRule`, `extend google.protobuf.FieldOptions { FieldRule field = 50002; }` from:
+- [X] T002 [S] Remove `FieldRule`, `extend google.protobuf.FieldOptions { FieldRule field = 50002; }` from:
   - `proto/infoblox/authz/v1/authz.proto` (mirror in devedge-sdk)
   - `/Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/authz/v1/authz.proto` (canonical)
   Regenerate `authzpb` Go bindings. Run `buf generate --template buf.gen.yaml` and
   regenerate the canonical repo's `authz.pb.go`. Run `go build ./...` (expect failures
   in redact/seccheck/codegen — those get fixed in T004-T007).
 
-- [ ] T003 [S] Add `infoblox.field.v1` to `go.mod`:
+- [X] T003 [S] Add `infoblox.field.v1` to `go.mod`:
   - Cut `field v1.0.0-alpha.1` via apx in the canonical repo
   - Cut `authz v1.0.0-alpha.4` (FieldRule removed) via apx
   - `go get github.com/infobloxopen/apis/proto/infoblox/field@v1.0.0-alpha.1`
   - `go get github.com/infobloxopen/apis/proto/infoblox/authz@v1.0.0-alpha.4`
   - `go mod tidy`
 
-- [ ] T004 [S] Update `middleware/redact/redact.go` (FR-004):
+- [X] T004 [S] Update `middleware/redact/redact.go` (FR-004):
   Replace import `authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"`
   with `fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"`.
   Replace `authzv1.E_Field` → `fieldv1.E_Opts`.
@@ -59,15 +59,15 @@
   check `opts.GetSecret()`.
   Run `go test ./middleware/redact/... -count=1`.
 
-- [ ] T005 [S] Update `seccheck/seccheck.go` `AssertNoSecretFieldsLeaked` (FR-005):
+- [X] T005 [S] Update `seccheck/seccheck.go` `AssertNoSecretFieldsLeaked` (FR-005):
   Same import swap as T004. Run `go test ./seccheck/... -count=1`.
 
-- [ ] T006 [S] Update `internal/testpb/secretpb/test.proto` to use
+- [X] T006 [S] Update `internal/testpb/secretpb/test.proto` to use
   `(infoblox.field.v1.opts) = {secret: true}` instead of
   `(infoblox.authz.v1.field).secret = true`. Regenerate the pb.go.
   Run `go build ./internal/...`.
 
-- [ ] T007 [S] Update `cmd/protoc-gen-storage/main.go` (FR-006):
+- [X] T007 [S] Update `cmd/protoc-gen-storage/main.go` (FR-006):
   Replace `authzv1.E_Field` → `fieldv1.E_Opts`.
   Add constraint support in `render.go`: when `opts.NotNull`, add `not null` to
   GORM tag; when `opts.Unique`, add `uniqueIndex`; when `opts.Index`, add `index`;
@@ -77,7 +77,7 @@
   with the appropriate `gorm:"foreignKey:..."` tag instead of a TODO comment.
   Update render_test.go with new test cases. Run `go test ./cmd/protoc-gen-storage/... -count=1`.
 
-- [ ] T008 [S] Update `cmd/protoc-gen-ent/main.go` (FR-007):
+- [X] T008 [S] Update `cmd/protoc-gen-ent/main.go` (FR-007):
   Replace `authzv1.E_Field` → `fieldv1.E_Opts`.
   Add constraint support: `field.String(...).NotEmpty()` for `not_null`;
   `.Unique()` for `unique`; index annotation for `index`.
@@ -85,7 +85,7 @@
   on a message field, emit an `Edges()` entry in the schema instead of a TODO.
   Update render_test.go. Run `go test ./cmd/protoc-gen-ent/... -count=1`.
 
-- [ ] T009 [S] Update `testdata/apikey/apikey.proto` (FR-009):
+- [X] T009 [S] Update `testdata/apikey/apikey.proto` (FR-009):
   Change `key_value = 4 [(infoblox.authz.v1.field).secret = true]`
   to `key_value = 4 [(infoblox.field.v1.opts) = {secret: true}]`.
   Add `import "infoblox/field/v1/field.proto"`. Remove authz field import if no
@@ -94,11 +94,11 @@
   `go generate ./ent/...` in testdata/apikey.
   Run `cd testdata/apikey && go build ./... && go test ./... -count=1`.
 
-- [ ] T010 [S] `go build ./... && make test` — clean (SC-004).
+- [X] T010 [S] `go build ./... && make test` — clean (SC-004).
   `grep -r "authzv1\.E_Field\|\.E_Field" --include="*.go" .` → no matches outside
   authzpb internal (SC-001).
 
-- [ ] T011 [S] Commit + merge.
+- [X] T011 [S] Commit + merge.
   Message: `016: infoblox.field.v1 — field annotation contract; remove FieldRule from authz`.
 
 ## Complexity Tags

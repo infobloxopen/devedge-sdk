@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
 // entMessageInfo describes a proto resource message for ent schema generation.
@@ -20,6 +22,15 @@ type entFieldInfo struct {
 	IsRepeated bool   // repeated field — skipped with a TODO comment
 	IsMessage  bool   // nested message field — skipped with a TODO comment
 	IsSecret   bool   // secret field — emitted as _hash + _cipher, never plaintext
+	// Storage constraints (from field.v1.FieldOptions).
+	NotNull bool
+	Unique  bool
+	Index   bool
+	// ORM relationship opts.
+	HasOne     *fieldv1.HasOne
+	HasMany    *fieldv1.HasMany
+	BelongsTo  *fieldv1.BelongsTo
+	ManyToMany *fieldv1.ManyToMany
 }
 
 // msgHasTenantField reports whether the message has an account_id field, which
@@ -44,6 +55,37 @@ func msgHasSecretField(msg entMessageInfo) bool {
 	return false
 }
 
+// msgHasIndexField reports whether any non-secret field requests a DB index.
+func msgHasIndexField(msg entMessageInfo) bool {
+	for _, f := range msg.Fields {
+		if f.Index && !f.IsSecret {
+			return true
+		}
+	}
+	return false
+}
+
+// msgHasEdges reports whether any field carries a relationship annotation.
+func msgHasEdges(msg entMessageInfo) bool {
+	for _, f := range msg.Fields {
+		if f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// edgeName derives a lowercase edge name from a proto field name.
+// e.g. "credit_card" → "credit_card", "CreditCard" → "credit_card".
+func edgeName(fieldName string) string {
+	return strings.ToLower(fieldName)
+}
+
+// entTypeName strips a leading "*" and returns the bare type name.
+func entTypeName(goType string) string {
+	return strings.TrimPrefix(goType, "*")
+}
+
 // renderEntSchema generates the ent/schema/<snake>.go content for a single
 // resource message. Returns an empty string when the message has no fields.
 func renderEntSchema(msg entMessageInfo) string {
@@ -53,6 +95,8 @@ func renderEntSchema(msg entMessageInfo) string {
 
 	hasTenant := msgHasTenantField(msg)
 	hasSecret := msgHasSecretField(msg)
+	hasIndex := msgHasIndexField(msg)
+	hasEdges := msgHasEdges(msg)
 
 	var b strings.Builder
 
@@ -60,12 +104,16 @@ func renderEntSchema(msg entMessageInfo) string {
 	b.WriteString("package schema\n\n")
 
 	// Imports. The index package is only needed when at least one index is
-	// emitted (currently: secret fields). The entrepo package is only needed
-	// when TenantMixin is referenced.
+	// emitted (secret fields or index-annotated fields). The edge package is
+	// only needed when relationship annotations are present. The entrepo
+	// package is only needed when TenantMixin is referenced.
 	b.WriteString("import (\n")
 	b.WriteString("\t\"entgo.io/ent\"\n")
+	if hasEdges {
+		b.WriteString("\t\"entgo.io/ent/schema/edge\"\n")
+	}
 	b.WriteString("\t\"entgo.io/ent/schema/field\"\n")
-	if hasSecret {
+	if hasSecret || hasIndex {
 		b.WriteString("\t\"entgo.io/ent/schema/index\"\n")
 	}
 	if hasTenant {
@@ -104,8 +152,16 @@ func renderEntSchema(msg entMessageInfo) string {
 			// Supplied by TenantMixin — never emitted directly.
 			continue
 		case f.IsRepeated:
+			if f.HasMany != nil || f.ManyToMany != nil {
+				// Relationships are in Edges() — not a field.
+				continue
+			}
 			fmt.Fprintf(&b, "\t\t// TODO: repeated field %s skipped\n", f.Name)
 		case f.IsMessage:
+			if f.HasOne != nil || f.BelongsTo != nil {
+				// Relationships are in Edges() — not a field.
+				continue
+			}
 			fmt.Fprintf(&b, "\t\t// TODO: nested message %s skipped\n", f.Name)
 		case f.IsSecret:
 			// Secret fields are never stored as plaintext: a lookup hash and a
@@ -114,23 +170,66 @@ func renderEntSchema(msg entMessageInfo) string {
 			fmt.Fprintf(&b, "\t\tfield.String(\"%s_hash\").Optional().Comment(\"HMAC-SHA256 of %s for lookup\"),\n", f.SnakeName, f.SnakeName)
 			fmt.Fprintf(&b, "\t\tfield.String(\"%s_cipher\").Optional().Comment(\"encrypted %s for recovery\"),\n", f.SnakeName, f.SnakeName)
 		default:
-			fmt.Fprintf(&b, "\t\tfield.%s(\"%s\").Optional(),\n", f.EntType, f.SnakeName)
+			// Build the field chain with optional constraints.
+			chain := fmt.Sprintf("field.%s(\"%s\")", f.EntType, f.SnakeName)
+			if f.NotNull {
+				if f.EntType == "String" {
+					chain += ".NotEmpty()"
+				}
+				// For non-string types, not emitting .Optional() achieves NOT NULL.
+			} else {
+				chain += ".Optional()"
+			}
+			if f.Unique {
+				chain += ".Unique()"
+			}
+			fmt.Fprintf(&b, "\t\t%s,\n", chain)
 		}
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
 
+	// Edges(): emitted when any relationship annotation is present.
+	if hasEdges {
+		fmt.Fprintf(&b, "// Edges defines the edges (relationships) of %s.\n", msg.MessageName)
+		fmt.Fprintf(&b, "func (%s) Edges() []ent.Edge {\n", msg.MessageName)
+		b.WriteString("\treturn []ent.Edge{\n")
+		for _, f := range msg.Fields {
+			ename := edgeName(f.Name)
+			switch {
+			case f.HasOne != nil:
+				typeName := entTypeName(f.SnakeName)
+				// Use the capitalized snake form as ent type ref placeholder.
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Unique().Required(),\n", ename, strings.Title(typeName))
+			case f.HasMany != nil:
+				typeName := entTypeName(f.SnakeName)
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type),\n", ename, strings.Title(typeName))
+			case f.BelongsTo != nil:
+				typeName := entTypeName(f.SnakeName)
+				fmt.Fprintf(&b, "\t\tedge.From(\"%s\", %s.Type).Ref(\"%s\").Unique(),\n", ename, strings.Title(typeName), ename+"s")
+			case f.ManyToMany != nil:
+				typeName := entTypeName(f.SnakeName)
+				joinType := strings.Title(f.ManyToMany.GetJoinTable())
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Through(\"%s\", %s.Type),\n", ename, strings.Title(typeName), f.ManyToMany.GetJoinTable(), joinType)
+			}
+		}
+		b.WriteString("\t}\n")
+		b.WriteString("}\n\n")
+	}
+
 	// Indexes(): emitted only when there is at least one index. Each secret
 	// field gets a key index on its _hash column to support LookupByHash.
-	if hasSecret {
+	// Non-secret fields with Index=true also get an index entry.
+	if hasSecret || hasIndex {
 		fmt.Fprintf(&b, "// Indexes defines the indexes of %s.\n", msg.MessageName)
 		fmt.Fprintf(&b, "func (%s) Indexes() []ent.Index {\n", msg.MessageName)
 		b.WriteString("\treturn []ent.Index{\n")
 		for _, f := range msg.Fields {
-			if !f.IsSecret {
-				continue
+			if f.IsSecret {
+				fmt.Fprintf(&b, "\t\tindex.Fields(\"%s_hash\"),\n", f.SnakeName)
+			} else if f.Index {
+				fmt.Fprintf(&b, "\t\tindex.Fields(\"%s\"),\n", f.SnakeName)
 			}
-			fmt.Fprintf(&b, "\t\tindex.Fields(\"%s_hash\"),\n", f.SnakeName)
 		}
 		b.WriteString("\t}\n")
 		b.WriteString("}\n")

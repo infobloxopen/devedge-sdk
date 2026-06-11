@@ -6,6 +6,7 @@ require (
 	entgo.io/ent v0.14.6
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
@@ -13,7 +14,7 @@ require (
 require google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171 // indirect
 
 require (
-	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.3
+	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
