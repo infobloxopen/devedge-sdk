@@ -6,71 +6,30 @@ package widgetsv1
 import (
 	"context"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+
+	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	"github.com/infobloxopen/devedge-sdk/server"
 )
 
-// WidgetServiceServer is the application-layer handler interface for WidgetService.
-// Implement this type; RegisterWidgetService wires it into a *grpc.Server.
-type WidgetServiceServer interface {
-	CreateWidget(context.Context, *CreateWidgetRequest) (*Widget, error)
-	GetWidget(context.Context, *GetWidgetRequest) (*Widget, error)
-	ListWidgets(context.Context, *ListWidgetsRequest) (*ListWidgetsResponse, error)
-	UpdateWidget(context.Context, *UpdateWidgetRequest) (*Widget, error)
-	DeleteWidget(context.Context, *DeleteWidgetRequest) (*DeleteWidgetResponse, error)
-}
-
-// UnimplementedWidgetServiceServer returns codes.Unimplemented for every method.
-// Embed it in your implementation for forward-compatible stubs.
-type UnimplementedWidgetServiceServer struct{}
-
-func (UnimplementedWidgetServiceServer) CreateWidget(context.Context, *CreateWidgetRequest) (*Widget, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateWidget not implemented")
-}
-
-func (UnimplementedWidgetServiceServer) GetWidget(context.Context, *GetWidgetRequest) (*Widget, error) {
-	return nil, status.Error(codes.Unimplemented, "GetWidget not implemented")
-}
-
-func (UnimplementedWidgetServiceServer) ListWidgets(context.Context, *ListWidgetsRequest) (*ListWidgetsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListWidgets not implemented")
-}
-
-func (UnimplementedWidgetServiceServer) UpdateWidget(context.Context, *UpdateWidgetRequest) (*Widget, error) {
-	return nil, status.Error(codes.Unimplemented, "UpdateWidget not implemented")
-}
-
-func (UnimplementedWidgetServiceServer) DeleteWidget(context.Context, *DeleteWidgetRequest) (*DeleteWidgetResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "DeleteWidget not implemented")
-}
-
-// RegisterWidgetService wires srv into s using an internal delegation adapter.
-// W5-6 will inject authz/tracing/request-id middleware into the adapter.
-func RegisterWidgetService(s *grpc.Server, srv WidgetServiceServer) {
-	// TODO(W5-6): register via pb.RegisterWidgetServiceServer once grpc-gateway dep is added.
-	_ = &widgetServiceAdapter{srv: srv} // compile-time check
-	_ = s
-}
-
-type widgetServiceAdapter struct{ srv WidgetServiceServer }
-
-func (a *widgetServiceAdapter) CreateWidget(ctx context.Context, req *CreateWidgetRequest) (*Widget, error) {
-	return a.srv.CreateWidget(ctx, req)
-}
-
-func (a *widgetServiceAdapter) GetWidget(ctx context.Context, req *GetWidgetRequest) (*Widget, error) {
-	return a.srv.GetWidget(ctx, req)
-}
-
-func (a *widgetServiceAdapter) ListWidgets(ctx context.Context, req *ListWidgetsRequest) (*ListWidgetsResponse, error) {
-	return a.srv.ListWidgets(ctx, req)
-}
-
-func (a *widgetServiceAdapter) UpdateWidget(ctx context.Context, req *UpdateWidgetRequest) (*Widget, error) {
-	return a.srv.UpdateWidget(ctx, req)
-}
-
-func (a *widgetServiceAdapter) DeleteWidget(ctx context.Context, req *DeleteWidgetRequest) (*DeleteWidgetResponse, error) {
-	return a.srv.DeleteWidget(ctx, req)
+// RegisterWidgetService wires srv into the server's gRPC handler and HTTP gateway.
+// It asserts at startup that all methods are declared in the authz rules;
+// if any method lacks a declaration, an error is returned (fail-closed boot gate).
+func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
+	methods := []string{
+		WidgetService_CreateWidget_FullMethodName,
+		WidgetService_GetWidget_FullMethodName,
+		WidgetService_ListWidgets_FullMethodName,
+		WidgetService_UpdateWidget_FullMethodName,
+		WidgetService_DeleteWidget_FullMethodName,
+	}
+	if err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {
+		return err
+	}
+	RegisterWidgetServiceServer(s.GRPCServer(), srv)
+	s.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {
+		return RegisterWidgetServiceHandlerClient(ctx, mux, NewWidgetServiceClient(conn))
+	})
+	return nil
 }

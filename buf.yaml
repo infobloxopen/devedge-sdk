@@ -3,6 +3,8 @@ modules:
   - path: proto
   - path: authz/authzpb/internal/testpb # test-only fixture for authzpb
   - path: testdata/toy                  # W3-4 compilation fixture
+deps:
+  - buf.build/googleapis/googleapis
 lint:
   use:
     - STANDARD

@@ -25,8 +25,9 @@ import (
 
 // Common errors.
 var (
-	ErrNotFound = errors.New("persistence: not found")
-	ErrConflict = errors.New("persistence: conflict")
+	ErrNotFound          = errors.New("persistence: not found")
+	ErrConflict          = errors.New("persistence: conflict")
+	ErrPreconditionFailed = errors.New("persistence: precondition failed")
 )
 
 // ListOptions carries resource-oriented list parameters (filter/order/paging),

@@ -8,6 +8,9 @@ plugins:
   - local: protoc-gen-go
     out: testdata/toy
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
+  - local: protoc-gen-go-grpc
+    out: testdata/toy
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
   - local: protoc-gen-devedge-authz
     out: testdata/toy
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
@@ -15,5 +18,8 @@ plugins:
     out: testdata/toy
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
   - local: protoc-gen-storage
+    out: testdata/toy
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
+  - local: protoc-gen-grpc-gateway
     out: testdata/toy
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy

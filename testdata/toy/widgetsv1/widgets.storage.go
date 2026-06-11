@@ -27,6 +27,7 @@ type WidgetModel struct {
 	Name      string `gorm:"column:name"`
 	Color     string `gorm:"column:color"`
 	Weight    int32  `gorm:"column:weight"`
+	Etag      string `gorm:"column:etag"`
 	ETag      string `gorm:"column:etag"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -41,6 +42,7 @@ func toModel_Widget(p *Widget) *WidgetModel {
 	m.Name = p.Name
 	m.Color = p.Color
 	m.Weight = p.Weight
+	m.Etag = p.Etag
 	return m
 }
 
@@ -52,6 +54,7 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 	p.Name = m.Name
 	p.Color = m.Color
 	p.Weight = m.Weight
+	p.Etag = m.Etag
 	return p
 }
 

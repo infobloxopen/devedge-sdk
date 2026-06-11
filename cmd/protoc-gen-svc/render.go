@@ -18,8 +18,19 @@ type methodInfo struct {
 	OutputGoIdent string // Go type name for the response
 }
 
-// renderSvcFile generates the .svc.go content for the given package and
-// services. Returns an empty string when services is empty.
+// renderSvcFile generates the .svc.go content for the given package and services.
+// Returns an empty string when services is empty.
+//
+// This generator assumes protoc-gen-go-grpc and protoc-gen-grpc-gateway have
+// already run for the same proto file (same package). Those plugins provide:
+//   - <Service>Server interface + Unimplemented<Service>Server (from _grpc.pb.go)
+//   - Register<Service>Server(grpc.ServiceRegistrar, <Service>Server) (from _grpc.pb.go)
+//   - <Service>_<Method>_FullMethodName constants (from _grpc.pb.go)
+//   - Register<Service>HandlerClient + New<Service>Client (from .pb.gw.go)
+//
+// protoc-gen-svc emits only the server-package wiring:
+//   - Register<Service>(*server.Server, <Service>Server) error — boot-gate (authz
+//     completeness check), gRPC service registration, and HTTP gateway wiring.
 func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	if len(services) == 0 {
 		return ""
@@ -33,49 +44,44 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	fmt.Fprintf(&b, "package %s\n\n", pkgName)
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n\n")
-	b.WriteString("\t\"google.golang.org/grpc\"\n")
-	b.WriteString("\t\"google.golang.org/grpc/codes\"\n")
-	b.WriteString("\t\"google.golang.org/grpc/status\"\n")
+	b.WriteString("\t\"github.com/grpc-ecosystem/grpc-gateway/v2/runtime\"\n")
+	b.WriteString("\t\"google.golang.org/grpc\"\n\n")
+	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/authz/grpcauthz\"\n")
+	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/server\"\n")
 	b.WriteString(")\n\n")
 
 	for _, svc := range services {
-		lower := lcFirst(svc.ServiceName)
+		// Register<Service> — boot-gate + gRPC + HTTP gateway wiring.
+		// The <Service>Server interface, Unimplemented<Service>Server, and
+		// Register<Service>Server come from _grpc.pb.go in the same package.
+		// Register<Service>HandlerClient and New<Service>Client come from
+		// .pb.gw.go in the same package.
+		fmt.Fprintf(&b, "// Register%s wires srv into the server's gRPC handler and HTTP gateway.\n", svc.ServiceName)
+		fmt.Fprintf(&b, "// It asserts at startup that all methods are declared in the authz rules;\n")
+		fmt.Fprintf(&b, "// if any method lacks a declaration, an error is returned (fail-closed boot gate).\n")
+		fmt.Fprintf(&b, "func Register%s(s *server.Server, srv %sServer) error {\n", svc.ServiceName, svc.ServiceName)
 
-		// Handler interface.
-		fmt.Fprintf(&b, "// %sServer is the application-layer handler interface for %s.\n", svc.ServiceName, svc.ServiceName)
-		fmt.Fprintf(&b, "// Implement this type; Register%s wires it into a *grpc.Server.\n", svc.ServiceName)
-		fmt.Fprintf(&b, "type %sServer interface {\n", svc.ServiceName)
+		// Method list from _grpc.pb.go constants — avoids hardcoding strings.
+		b.WriteString("\tmethods := []string{\n")
 		for _, m := range svc.Methods {
-			fmt.Fprintf(&b, "\t%s(context.Context, *%s) (*%s, error)\n", m.Name, m.InputGoIdent, m.OutputGoIdent)
+			fmt.Fprintf(&b, "\t\t%s_%s_FullMethodName,\n", svc.ServiceName, m.Name)
 		}
+		b.WriteString("\t}\n")
+
+		// Boot gate: fail closed if any method lacks an authz declaration.
+		b.WriteString("\tif err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {\n")
+		b.WriteString("\t\treturn err\n")
+		b.WriteString("\t}\n")
+
+		// gRPC registration — delegates to the grpc-generated Register<Service>Server.
+		fmt.Fprintf(&b, "\tRegister%sServer(s.GRPCServer(), srv)\n", svc.ServiceName)
+
+		// HTTP gateway — wired at Serve time via the recorded closure.
+		b.WriteString("\ts.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {\n")
+		fmt.Fprintf(&b, "\t\treturn Register%sHandlerClient(ctx, mux, New%sClient(conn))\n", svc.ServiceName, svc.ServiceName)
+		b.WriteString("\t})\n")
+		b.WriteString("\treturn nil\n")
 		b.WriteString("}\n\n")
-
-		// Unimplemented stub.
-		fmt.Fprintf(&b, "// Unimplemented%sServer returns codes.Unimplemented for every method.\n", svc.ServiceName)
-		fmt.Fprintf(&b, "// Embed it in your implementation for forward-compatible stubs.\n")
-		fmt.Fprintf(&b, "type Unimplemented%sServer struct{}\n\n", svc.ServiceName)
-		for _, m := range svc.Methods {
-			fmt.Fprintf(&b, "func (Unimplemented%sServer) %s(context.Context, *%s) (*%s, error) {\n", svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
-			fmt.Fprintf(&b, "\treturn nil, status.Error(codes.Unimplemented, %q)\n", m.Name+" not implemented")
-			b.WriteString("}\n\n")
-		}
-
-		// Registration function.
-		fmt.Fprintf(&b, "// Register%s wires srv into s using an internal delegation adapter.\n", svc.ServiceName)
-		fmt.Fprintf(&b, "// W5-6 will inject authz/tracing/request-id middleware into the adapter.\n")
-		fmt.Fprintf(&b, "func Register%s(s *grpc.Server, srv %sServer) {\n", svc.ServiceName, svc.ServiceName)
-		fmt.Fprintf(&b, "\t// TODO(W5-6): register via pb.Register%sServer once grpc-gateway dep is added.\n", svc.ServiceName)
-		fmt.Fprintf(&b, "\t_ = &%sAdapter{srv: srv} // compile-time check\n", lower)
-		b.WriteString("\t_ = s\n")
-		b.WriteString("}\n\n")
-
-		// Adapter struct (unexported).
-		fmt.Fprintf(&b, "type %sAdapter struct{ srv %sServer }\n\n", lower, svc.ServiceName)
-		for _, m := range svc.Methods {
-			fmt.Fprintf(&b, "func (a *%sAdapter) %s(ctx context.Context, req *%s) (*%s, error) {\n", lower, m.Name, m.InputGoIdent, m.OutputGoIdent)
-			fmt.Fprintf(&b, "\treturn a.srv.%s(ctx, req)\n", m.Name)
-			b.WriteString("}\n\n")
-		}
 	}
 
 	return b.String()
