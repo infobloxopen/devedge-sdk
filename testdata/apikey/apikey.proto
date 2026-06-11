@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+// Test fixture for protoc-gen-storage secret field support (W9-10/013).
+// Exercises the (infoblox.authz.v1.field).secret = true annotation.
+package apikey.v1;
+
+option go_package = "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1;apikeyv1";
+
+import "google/api/annotations.proto";
+import "infoblox/authz/v1/authz.proto";
+
+// APIKey is a customer API key. The raw key_value is never stored as plaintext;
+// the framework stores a hash (for lookup) and optional ciphertext (for recovery).
+message APIKey {
+  string id         = 1;
+  string name       = 2;
+  string account_id = 3;
+  // key_value is the raw API key material. Annotated secret: the storage layer
+  // will hash and encrypt this field; it is cleared in all responses after creation.
+  string key_value  = 4 [(infoblox.authz.v1.field).secret = true];
+  string key_prefix = 5; // first 8 chars of the key, for display (not secret)
+}
+
+service APIKeyService {
+  rpc CreateAPIKey(CreateAPIKeyRequest) returns (APIKey) {
+    option (google.api.http) = {post: "/v1/apikeys", body: "api_key"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "api_keys"};
+  }
+  rpc GetAPIKey(GetAPIKeyRequest) returns (APIKey) {
+    option (google.api.http) = {get: "/v1/apikeys/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "api_keys"};
+  }
+  rpc ListAPIKeys(ListAPIKeysRequest) returns (ListAPIKeysResponse) {
+    option (google.api.http) = {get: "/v1/apikeys"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "api_keys"};
+  }
+  rpc DeleteAPIKey(DeleteAPIKeyRequest) returns (DeleteAPIKeyResponse) {
+    option (google.api.http) = {delete: "/v1/apikeys/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "delete", resource: "api_keys"};
+  }
+}
+
+message CreateAPIKeyRequest  { APIKey api_key = 1; }
+message GetAPIKeyRequest     { string id = 1; }
+message ListAPIKeysRequest   { int32 page_size = 1; string page_token = 2; }
+message ListAPIKeysResponse  { repeated APIKey api_keys = 1; string next_page_token = 2; }
+message DeleteAPIKeyRequest  { string id = 1; }
+message DeleteAPIKeyResponse {}

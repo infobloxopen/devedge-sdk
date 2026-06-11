@@ -37,6 +37,22 @@ message Rule {
   bool public = 3;
 }
 
+// FieldRule declares field-level security properties. Attach it to a message field;
+// the framework uses it to enforce encryption at rest, log redaction, and
+// response-leak detection.
+message FieldRule {
+  // If true, this field contains sensitive data (API keys, tokens, secrets).
+  // The framework will: encrypt/hash at rest (never store plaintext),
+  // redact in logs ("[REDACTED]"), and the security-check tool will catch
+  // any code path that returns the raw value after initial creation.
+  bool secret = 1;
+}
+
+extend google.protobuf.FieldOptions {
+  // Extension number 50002 (alongside method-level rule = 50001).
+  FieldRule field = 50002;
+}
+
 extend google.protobuf.MethodOptions {
   // Extension number is in the 50000-99999 "internal use" range; obtain a
   // globally-unique number from the protobuf registry before any cross-org

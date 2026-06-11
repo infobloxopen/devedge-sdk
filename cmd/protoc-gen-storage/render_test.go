@@ -76,9 +76,77 @@ func TestRenderStorageFile_noMessages(t *testing.T) {
 	}
 }
 
+func TestRenderStorageFile_secretField(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Credential",
+		PbPkgName:    "credv1",
+		PbImportPath: "example/cred/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "label", GoType: "string", SnakeName: "label"},
+			{Name: "api_key", GoFieldName: "ApiKey", GoType: "string", SnakeName: "api_key", IsSecret: true},
+		},
+	}
+	out := renderStorageFile("credv1storage", []messageInfo{msg})
+
+	// Secret import must be present.
+	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/secret"`)
+
+	// Hash and cipher columns must be present; raw column must NOT be present.
+	mustContain(t, out, `ApiKeyHash`)
+	mustContain(t, out, `ApiKeyCipher`)
+	mustContain(t, out, `column:api_key_hash;index`)
+	mustContain(t, out, `column:api_key_cipher`)
+	mustNotContain(t, out, "`gorm:\"column:api_key\"`")
+
+	// Constructor must take enc secret.Encryptor.
+	mustContain(t, out, "func NewCredentialRepository(db *gorm.DB, enc secret.Encryptor)")
+
+	// Repo struct must have enc field.
+	mustContain(t, out, "enc secret.Encryptor")
+
+	// Create/Update must contain hash and encrypt calls.
+	mustContain(t, out, "r.enc.Hash(ctx, entity.ApiKey)")
+	mustContain(t, out, "r.enc.Encrypt(ctx, entity.ApiKey)")
+
+	// toModel and fromModel must NOT reference the raw ApiKey field.
+	mustNotContain(t, out, "m.ApiKey = p.ApiKey")
+	mustNotContain(t, out, "p.ApiKey = m.ApiKey")
+
+	// Non-secret field must still be present normally.
+	mustContain(t, out, `gorm:"column:label"`)
+}
+
+func TestRenderStorageFile_noSecretNoImport(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Plain",
+		PbPkgName:    "plainv1",
+		PbImportPath: "example/plain/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "value", GoType: "string", SnakeName: "value"},
+		},
+	}
+	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+
+	// No secret import when no secret fields.
+	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/secret"`)
+
+	// Constructor must NOT take enc.
+	mustContain(t, out, "func NewPlainRepository(db *gorm.DB)")
+	mustNotContain(t, out, "enc secret.Encryptor")
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
 		t.Errorf("expected output to contain %q\n--- output ---\n%s", substr, s)
+	}
+}
+
+func mustNotContain(t *testing.T, s, substr string) {
+	t.Helper()
+	if strings.Contains(s, substr) {
+		t.Errorf("expected output NOT to contain %q\n--- output ---\n%s", substr, s)
 	}
 }
