@@ -120,7 +120,7 @@
 
 ## Phase 7: Commit
 
-- [ ] T013 [S] Commit spec + plan + tasks + implementation.
+- [X] T013 [S] Commit spec + plan + tasks + implementation.
   Message: `010: add protoc-gen-svc + protoc-gen-storage framework codegen plugins (W3-4)`.
 
 ---
