@@ -1,5 +1,5 @@
 // Package redact provides proto-reflection-based helpers that replace
-// (infoblox.authz.v1.field).secret = true field values with "[REDACTED]"
+// (infoblox.field.v1.opts).secret = true field values with "[REDACTED]"
 // before logging. It ships as both a standalone function and a gRPC unary
 // interceptor wrapper.
 package redact
@@ -12,11 +12,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
 // Message returns a clone of m with all fields annotated
-// (infoblox.authz.v1.field).secret = true replaced with "[REDACTED]"
+// (infoblox.field.v1.opts).secret = true replaced with "[REDACTED]"
 // (string fields) or zero value (other kinds). Safe to call on nil.
 func Message(m proto.Message) proto.Message {
 	if m == nil {
@@ -37,11 +37,11 @@ func walkAndRedact(msg protoreflect.Message) {
 		if opts == nil {
 			return true
 		}
-		if !proto.HasExtension(opts, authzv1.E_Field) {
+		if !proto.HasExtension(opts, fieldv1.E_Opts) {
 			return true
 		}
-		rule, ok := proto.GetExtension(opts, authzv1.E_Field).(*authzv1.FieldRule)
-		if !ok || rule == nil || !rule.GetSecret() {
+		fopts, ok := proto.GetExtension(opts, fieldv1.E_Opts).(*fieldv1.FieldOptions)
+		if !ok || fopts == nil || !fopts.GetSecret() {
 			return true
 		}
 		switch fd.Kind() {

@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
 // T002: unit tests for renderStorageFile — pure function, no protogen/buf needed.
@@ -227,6 +229,68 @@ func TestRenderStorageFile_lookupByHashWithTenant(t *testing.T) {
 	mustContain(t, out, "token_hash = ?")
 	mustContain(t, out, "TenantIDFromContext")
 	mustContain(t, out, `"account_id = ?"`)
+}
+
+// T007: constraint and relationship field tests.
+
+func TestRenderStorageFile_notNullField(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Thing",
+		PbPkgName:   "thingv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name", NotNull: true},
+		},
+	}
+	out := renderStorageFile("thingv1storage", []messageInfo{msg})
+	mustContain(t, out, `gorm:"column:name;not null"`)
+}
+
+func TestRenderStorageFile_uniqueField(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Uniq",
+		PbPkgName:   "uniqv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "email", GoType: "string", SnakeName: "email", Unique: true},
+		},
+	}
+	out := renderStorageFile("uniqv1storage", []messageInfo{msg})
+	mustContain(t, out, "uniqueIndex")
+}
+
+func TestRenderStorageFile_hasOneMessageField(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Order",
+		PbPkgName:   "orderv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "address", GoFieldName: "Address", GoType: "*Address", SnakeName: "address",
+				IsMessage: true, HasOne: &fieldv1.HasOne{ForeignKey: "order_id"}},
+		},
+	}
+	out := renderStorageFile("orderv1storage", []messageInfo{msg})
+	// Should emit a real struct field, not a TODO.
+	mustNotContain(t, out, "TODO: nested message address skipped")
+	mustContain(t, out, `Address Address`)
+	mustContain(t, out, `foreignKey:order_id`)
+}
+
+func TestRenderStorageFile_hasManyRepeatedField(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Post",
+		PbPkgName:   "postv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "comments", GoFieldName: "Comments", GoType: "*Comment", SnakeName: "comments",
+				IsRepeated: true, HasMany: &fieldv1.HasMany{ForeignKey: "post_id"}},
+		},
+	}
+	out := renderStorageFile("postv1storage", []messageInfo{msg})
+	// Should emit a slice struct field, not a TODO.
+	mustNotContain(t, out, "TODO: repeated field comments skipped")
+	mustContain(t, out, `Comments []Comment`)
+	mustContain(t, out, `foreignKey:post_id`)
 }
 
 func mustContain(t *testing.T, s, substr string) {

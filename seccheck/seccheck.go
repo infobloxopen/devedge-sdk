@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -54,7 +54,7 @@ func RunT(t testing.TB, findings []Finding) {
 }
 
 // AssertNoSecretFieldsLeaked walks each response proto message and returns an
-// Error finding for any field annotated (infoblox.authz.v1.field).secret = true
+// Error finding for any field annotated (infoblox.field.v1.opts).secret = true
 // that contains a non-empty (string) or non-zero (other) value.
 func AssertNoSecretFieldsLeaked(responses ...proto.Message) []Finding {
 	var findings []Finding
@@ -78,11 +78,11 @@ func walkForLeaks(msg protoreflect.Message, prefix string, findings *[]Finding) 
 			return true
 		}
 		opts := fd.Options()
-		if opts == nil || !proto.HasExtension(opts, authzv1.E_Field) {
+		if opts == nil || !proto.HasExtension(opts, fieldv1.E_Opts) {
 			return true
 		}
-		rule, ok := proto.GetExtension(opts, authzv1.E_Field).(*authzv1.FieldRule)
-		if !ok || rule == nil || !rule.GetSecret() {
+		fopts, ok := proto.GetExtension(opts, fieldv1.E_Opts).(*fieldv1.FieldOptions)
+		if !ok || fopts == nil || !fopts.GetSecret() {
 			return true
 		}
 		switch fd.Kind() {

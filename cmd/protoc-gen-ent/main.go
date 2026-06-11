@@ -17,7 +17,7 @@ package main
 import (
 	"strings"
 
-	authzv1 "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -48,11 +48,27 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		}
 		msg := entMessageInfo{MessageName: name}
 		for _, field := range m.Fields {
-			isSecret := false
+			var (
+				isSecret   bool
+				notNull    bool
+				unique     bool
+				index      bool
+				hasOne     *fieldv1.HasOne
+				hasMany    *fieldv1.HasMany
+				belongsTo  *fieldv1.BelongsTo
+				manyToMany *fieldv1.ManyToMany
+			)
 			if opts := field.Desc.Options(); opts != nil {
-				if proto.HasExtension(opts, authzv1.E_Field) {
-					if rule, ok := proto.GetExtension(opts, authzv1.E_Field).(*authzv1.FieldRule); ok {
-						isSecret = rule.GetSecret()
+				if proto.HasExtension(opts, fieldv1.E_Opts) {
+					if fopts, ok := proto.GetExtension(opts, fieldv1.E_Opts).(*fieldv1.FieldOptions); ok {
+						isSecret = fopts.GetSecret()
+						notNull = fopts.GetNotNull()
+						unique = fopts.GetUnique()
+						index = fopts.GetIndex()
+						hasOne = fopts.GetHasOne()
+						hasMany = fopts.GetHasMany()
+						belongsTo = fopts.GetBelongsTo()
+						manyToMany = fopts.GetManyToMany()
 					}
 				}
 			}
@@ -64,6 +80,13 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				IsRepeated: field.Desc.IsList(),
 				IsMessage:  field.Desc.Kind() == protoreflect.MessageKind,
 				IsSecret:   isSecret,
+				NotNull:    notNull,
+				Unique:     unique,
+				Index:      index,
+				HasOne:     hasOne,
+				HasMany:    hasMany,
+				BelongsTo:  belongsTo,
+				ManyToMany: manyToMany,
 			})
 		}
 		messages = append(messages, msg)

@@ -5,7 +5,7 @@
 // source: apikey.proto
 
 // Test fixture for protoc-gen-storage secret field support (W9-10/013).
-// Exercises the (infoblox.authz.v1.field).secret = true annotation.
+// Exercises the (infoblox.field.v1.opts).secret annotation.
 
 package apikeyv1
 
