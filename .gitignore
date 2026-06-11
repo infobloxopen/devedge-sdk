@@ -13,3 +13,5 @@ go.work.sum
 *.swp
 .idea/
 .vscode/
+docs/public/
+docs/.hugo_build.lock
