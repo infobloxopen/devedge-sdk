@@ -41,6 +41,11 @@ func TestRenderStorageFile_basic(t *testing.T) {
 	mustContain(t, out, "func (r *WidgetRepository) Delete(")
 	mustContain(t, out, "var _ persistence.Repository")
 	mustContain(t, out, "protoc-gen-storage")
+	// F017: safe filter/order_by — column map and safe parse calls must be present.
+	mustContain(t, out, "WidgetColumns")
+	mustContain(t, out, "filter.Parse")
+	mustContain(t, out, "filter.ParseOrderBy")
+	mustNotContain(t, out, "q.Where(opts.Filter)")
 }
 
 func TestRenderStorageFile_repeatedFieldSkipped(t *testing.T) {

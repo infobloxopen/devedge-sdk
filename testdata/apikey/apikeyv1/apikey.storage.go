@@ -13,14 +13,20 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/secret"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
 	_ = base64.StdEncoding
 	_ = fmt.Sprintf
 	_ = strconv.Itoa
+	_ = filter.Parse
+	_ = codes.OK
+	_ = status.Error
 )
 
 // APIKeyModel is the GORM model for APIKey.
@@ -59,6 +65,14 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 	return p
 }
 
+// APIKeyColumns maps proto field names to DB column names for safe filter/order_by parsing.
+var APIKeyColumns = map[string]string{
+	"id":         "id",
+	"name":       "name",
+	"account_id": "account_id",
+	"key_prefix": "key_prefix",
+}
+
 // APIKeyRepository is a GORM-backed persistence.Repository for *APIKey.
 type APIKeyRepository struct {
 	db  *gorm.DB
@@ -94,7 +108,21 @@ func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOption
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
-		q = q.Where(opts.Filter)
+		cond, err := filter.Parse(opts.Filter, APIKeyColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
+		}
+		sql, args := cond.SQL()
+		q = q.Where(sql, args...)
+	}
+	if opts.OrderBy != "" {
+		clauses, err := filter.ParseOrderBy(opts.OrderBy, APIKeyColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid order_by: %v", err)
+		}
+		for _, c := range clauses {
+			q = q.Order(c.GORMExpr())
+		}
 	}
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
