@@ -8,11 +8,11 @@
 
 ## Phase 1: Dependencies + persistence additions
 
-- [ ] T001 [S] Add `github.com/grpc-ecosystem/grpc-gateway/v2` and `github.com/google/uuid` to
+- [X] T001 [S] Add `github.com/grpc-ecosystem/grpc-gateway/v2` and `github.com/google/uuid` to
   `go.mod`: run `go get github.com/grpc-ecosystem/grpc-gateway/v2 github.com/google/uuid` then
   `go mod tidy`. Verify `go build ./...` still passes and `grep gorm go.mod` returns nothing.
 
-- [ ] T002 [S] Add `ErrPreconditionFailed` to `persistence/repository.go` (alongside the two
+- [X] T002 [S] Add `ErrPreconditionFailed` to `persistence/repository.go` (alongside the two
   existing error vars). Update `MemoryRepository.List` in `persistence/memory.go` to implement
   cursor-based pagination: encode offset as `base64(strconv.Itoa(offset))`; default page size 50
   when `ListOptions.PageSize <= 0`; empty `next_page_token` on last page. Keep insertion order
@@ -24,16 +24,16 @@
 
 ## Phase 2: Tests (write before implementation — must be red first)
 
-- [ ] T003 [S] [US3] Write `persistence/memory_pagination_test.go`: insert 5 widgets; call
+- [X] T003 [S] [US3] Write `persistence/memory_pagination_test.go`: insert 5 widgets; call
   `List(ctx, {PageSize: 2, PageToken: ""})` → assert 2 items, non-empty token; call again with
   that token → assert 2 different items; call again → assert 1 item, empty token. Also test
   `PageSize: 0` → default 50. These must be green after T002 (pagination is in Phase 1).
 
-- [ ] T004 [S] [US2] Write `persistence/memory_etag_test.go`: create entity → get ETag from
+- [X] T004 [S] [US2] Write `persistence/memory_etag_test.go`: create entity → get ETag from
   repo's ETag store; update with correct ETag → succeeds, returns new ETag; update with old
   (stale) ETag → returns `ErrPreconditionFailed`. Must be red until T002 adds ETag to Update.
 
-- [ ] T005 [S] [US4] Write `middleware/requestid_test.go`, `middleware/tenantid_test.go`,
+- [X] T005 [S] [US4] Write `middleware/requestid_test.go`, `middleware/tenantid_test.go`,
   `middleware/fieldmask_test.go`, and `middleware/etag/etag_test.go` (all in new packages):
   - requestid: interceptor injects UUID when `x-request-id` absent; propagates when present.
   - tenantid: interceptor stores `account-id` metadata in context; empty when absent.
@@ -43,7 +43,7 @@
     in context → interceptor appends `etag` to response trailer.
   All four packages don't exist yet; tests must fail to compile until T006–T008 are done.
 
-- [ ] T006 [S] [US1] Write `middleware/errormapper_test.go`:
+- [X] T006 [S] [US1] Write `middleware/errormapper_test.go`:
   - handler returning `persistence.ErrNotFound` → interceptor maps to `codes.NotFound`.
   - handler returning `persistence.ErrConflict` → `codes.AlreadyExists`.
   - handler returning `persistence.ErrPreconditionFailed` → `codes.FailedPrecondition`.
@@ -51,7 +51,7 @@
   - handler returning an unmapped error → passes through unchanged.
   Must be red until T009 is done.
 
-- [ ] T007 [S] [US1] Write `server/server_test.go`:
+- [X] T007 [S] [US1] Write `server/server_test.go`:
   - `New` with nil `Authorizer` doesn't panic (uses DevAuthorizer default).
   - `RegisterWidgetService` with a service where one method has no rule → returns non-nil error
     (SC-004).
@@ -63,7 +63,7 @@
 
 ## Phase 3: Middleware implementation
 
-- [ ] T008 [S] [US4] Implement `middleware/requestid.go` + `middleware/tenantid.go` +
+- [X] T008 [S] [US4] Implement `middleware/requestid.go` + `middleware/tenantid.go` +
   `middleware/fieldmask.go` + `middleware/etag/etag.go` (FR-005/007/008/009).
 
   **requestid.go**: typed key `requestIDKey`; `RequestIDFromContext(ctx) string`;
@@ -87,7 +87,7 @@
 
   Run T005 tests — all must be green.
 
-- [ ] T009 [S] [US1] Implement `middleware/errormapper.go` (FR-006):
+- [X] T009 [S] [US1] Implement `middleware/errormapper.go` (FR-006):
   `ErrorMapperUnary()` — wraps handler; inspects returned error:
   - `errors.Is(err, persistence.ErrNotFound)` → `status.Error(codes.NotFound, "not found")`
   - `errors.Is(err, persistence.ErrConflict)` → `status.Error(codes.AlreadyExists, "already exists")`
@@ -99,7 +99,7 @@
 
 ## Phase 4: Persistence ETag completion
 
-- [ ] T010 [S] [US2] Update `MemoryRepository.Update` in `persistence/memory.go` to check
+- [X] T010 [S] [US2] Update `MemoryRepository.Update` in `persistence/memory.go` to check
   `etag.IfMatchFromContext(ctx)`: if non-empty and differs from stored ETag → return
   `ErrPreconditionFailed`. On success: generate `uuid.New().String()` as the new ETag, update the
   etag store, call `etag.SetNewETag(ctx, newETag)`. Also update `MemoryRepository.Get` to call
@@ -110,7 +110,7 @@
 
 ## Phase 5: Server package
 
-- [ ] T011 [C] Implement `server/server.go` (FR-001/002/003/014):
+- [X] T011 [C] Implement `server/server.go` (FR-001/002/003/014):
   - `New(cfg Config) (*Server, error)`: validate `GRPCAddr` non-empty; default `Authorizer` to
     `authz.NewDevAuthorizer(nil)` if nil; build interceptor chain:
     `grpc.ChainUnaryInterceptor(middleware.RequestIDUnary(), middleware.ErrorMapperUnary(),
@@ -130,7 +130,7 @@
 
 ## Phase 6: Proto + codegen
 
-- [ ] T012 [S] Update `widgets.proto`:
+- [X] T012 [S] Update `widgets.proto`:
   - Add `import "google/api/annotations.proto"`.
   - Add `option (google.api.http)` annotations on all 5 methods:
     - `CreateWidget`: `post: "/v1/widgets"` body: `"widget"`
@@ -142,7 +142,7 @@
   Update `buf.gen.toy.yaml` to add the `protoc-gen-grpc-gateway` plugin targeting `testdata/toy`.
   Run `buf generate --template buf.gen.toy.yaml` → must produce `widgetsv1/widgets.pb.gw.go`.
 
-- [ ] T013 [S] Update `cmd/protoc-gen-svc/render.go` to generate the new `RegisterWidgetService`
+- [X] T013 [S] Update `cmd/protoc-gen-svc/render.go` to generate the new `RegisterWidgetService`
   body (plan §2). The template change:
   - Function signature: `(s *server.Server, srv <Service>Server) error`
   - Body: `AssertMethodsDeclared`, `pb.Register<Service>Server`, `s.RegisterGateway(...)`,
@@ -156,7 +156,7 @@
 
 ## Phase 7: Integration test
 
-- [ ] T014 [S] [US1–5] Write `testdata/toy/server_test.go` (separate go.mod — add
+- [X] T014 [S] [US1–5] Write `testdata/toy/server_test.go` (separate go.mod — add
   `google.golang.org/grpc`, `grpc-gateway/v2` to toy go.mod if not present). The test:
   1. Creates `server.New(Config{GRPCAddr: ":0", HTTPAddr: ":0", Rules: WidgetServiceAuthzRules,
      Authorizer: authz.NewDevAuthorizer(authz.Grant{Principal:"alice", Verb:"*", Resource:"*"})})`
@@ -177,14 +177,14 @@
 
 ## Phase 8: Verify + commit
 
-- [ ] T015 [S] `go build ./... && go vet ./...` from the repo root — clean (SC-001).
+- [X] T015 [S] `go build ./... && go vet ./...` from the repo root — clean (SC-001).
   `grep gorm go.mod` → no match (SC-003).
   `make test` → all root-module tests green.
 
-- [ ] T016 [S] `cd testdata/toy && go build ./... && go test -v -count=1 ./... -timeout 30s`
+- [X] T016 [S] `cd testdata/toy && go build ./... && go test -v -count=1 ./... -timeout 30s`
   → all integration tests green (SC-002).
 
-- [ ] T017 [S] Commit all: spec + plan + tasks + implementation.
+- [X] T017 [S] Commit all: spec + plan + tasks + implementation.
   Message: `011: service runtime — server lifecycle, middleware chain, ETag/412, pagination`.
 
 ---
