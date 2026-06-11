@@ -8,7 +8,7 @@
 
 ## Track A: GORM improvements
 
-- [ ] T001 [S] Update `cmd/protoc-gen-storage/render.go` to inject tenant scoping
+- [X] T001 [S] Update `cmd/protoc-gen-storage/render.go` to inject tenant scoping
   (FR-001). Detect `account_id` field presence via `msg.hasTenantField()` helper.
   When present, add to `List`, `Get`, `Update`, `Delete`:
   ```go
@@ -22,7 +22,7 @@
   Import `github.com/infobloxopen/devedge-sdk/middleware` in generated files.
   Run `go test ./cmd/protoc-gen-storage/... -count=1`.
 
-- [ ] T002 [S] Add `LookupBy<GoFieldName>Hash` method generation (FR-002).
+- [X] T002 [S] Add `LookupBy<GoFieldName>Hash` method generation (FR-002).
   For each `IsSecret:true` field in the message, emit a method:
   ```go
   func (r *APIKeyRepository) LookupByKeyValueHash(ctx context.Context, hash string) (*APIKey, error) {
@@ -41,7 +41,7 @@
   Add render test asserting the method appears for secret fields.
   Run `go test ./cmd/protoc-gen-storage/... -count=1`.
 
-- [ ] T003 [S] Regenerate `testdata/apikey` with updated `protoc-gen-storage`:
+- [X] T003 [S] Regenerate `testdata/apikey` with updated `protoc-gen-storage`:
   `make build && PATH=$PATH:$(go env GOPATH)/bin buf generate --template buf.gen.apikey.yaml`
   Verify `apikey.storage.go` contains tenant scoping and `LookupByKeyValueHash`.
   Run `cd testdata/apikey && go build ./... && go test ./... -count=1`.
@@ -50,11 +50,11 @@
 
 ## Track B: ent shape
 
-- [ ] T004 [S] Add `entgo.io/ent` to `go.mod`:
+- [X] T004 [S] Add `entgo.io/ent` to `go.mod`:
   `go get entgo.io/ent && go mod tidy`
   Verify `go build ./...` passes (no existing code broken).
 
-- [ ] T005 [S] Create framework-provided ent mixin and TenantFilterer interface
+- [X] T005 [S] Create framework-provided ent mixin and TenantFilterer interface
   in `persistence/entrepo/mixin.go`:
   - `TenantMixin` struct (implements `mixin.Schema`): `Fields()` returns
     `field.String("account_id").NotEmpty().Immutable()`;
@@ -68,7 +68,7 @@
   Write `persistence/entrepo/mixin_test.go`: unit test that TenantMixin fields
   include `account_id`.
 
-- [ ] T006 [S] Implement `persistence/entrepo/repository.go`:
+- [X] T006 [S] Implement `persistence/entrepo/repository.go`:
   `EntRepository[T any, K comparable]` with function fields (creator, getter,
   lister, updater, deleter) + `enc secret.Encryptor`. Implement
   `persistence.Repository[T,K]` by calling the respective function field.
@@ -77,7 +77,7 @@
   Write unit tests in `persistence/entrepo/repository_test.go` with mock
   function fields.
 
-- [ ] T007 [C] Implement `cmd/protoc-gen-ent/main.go` — ent schema generator
+- [X] T007 [C] Implement `cmd/protoc-gen-ent/main.go` — ent schema generator
   (FR-003). For each resource message in the proto:
   - Emit `ent/schema/<snake_resource>.go` with `Fields()`, `Indexes()`, and
     `Mixin()` (include `TenantMixin` when `account_id` field present).
@@ -91,7 +91,7 @@
   correct fields, mixin, and indexes.
   Run `go test ./cmd/protoc-gen-ent/... -count=1`.
 
-- [ ] T008 [S] Generate ent schema for testdata/apikey and run entc:
+- [X] T008 [S] Generate ent schema for testdata/apikey and run entc:
   - Add `protoc-gen-ent` to `buf.gen.apikey.yaml`
   - `make build && buf generate --template buf.gen.apikey.yaml`
     → produces `testdata/apikey/ent/schema/apikey.go` + `generate.go`
@@ -99,7 +99,7 @@
   - `cd testdata/apikey && go generate ./ent/... && go build ./... 2>&1`
     → ent client generated; builds clean.
 
-- [ ] T009 [S] Write `persistence/entrepo/` ent wiring for apikey and an
+- [X] T009 [S] Write `persistence/entrepo/` ent wiring for apikey and an
   integration test (`testdata/apikey/apikeyv1/ent_repository_test.go`):
   - `NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor)`
     — generates an `EntRepository` wired to the ent-generated client methods.
@@ -112,7 +112,7 @@
 
 ## Track C: Security isolation test passes for both shapes
 
-- [ ] T010 [S] Update `testdata/apikey/apikeyv1/apikey_test.go` to add
+- [X] T010 [S] Update `testdata/apikey/apikeyv1/apikey_test.go` to add
   `TestSecurity_CrossAccountIsolation_GORM` and
   `TestSecurity_CrossAccountIsolation_Ent` — both use `seccheck.AssertCrossAccountIsolation`
   and both must return zero findings (SC-005).
@@ -122,11 +122,11 @@
 
 ## Phase 4: Verify + commit
 
-- [ ] T011 [S] `go build ./... && go vet ./... && make test` from repo root — clean.
+- [X] T011 [S] `go build ./... && go vet ./... && make test` from repo root — clean.
 
-- [ ] T012 [S] `cd testdata/apikey && go test ./... -count=1 -timeout 60s` — all pass.
+- [X] T012 [S] `cd testdata/apikey && go test ./... -count=1 -timeout 60s` — all pass.
 
-- [ ] T013 [S] Commit all + merge.
+- [X] T013 [S] Commit all + merge.
   Message: `014: dual storage shapes — GORM tenant isolation + ent privacy layer`.
 
 ---

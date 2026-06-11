@@ -21,6 +21,12 @@ func TenantIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// WithTenantID injects tenantID directly into ctx. Intended for tests and
+// non-gRPC call paths that cannot go through TenantIDUnary.
+func WithTenantID(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, tenantIDKey{}, tenantID)
+}
+
 // TenantIDUnary returns a gRPC unary interceptor that extracts the tenant-ID
 // from the "account-id" key in incoming metadata and stores it in context. It
 // also sets a "cell-id: default" outgoing header.
