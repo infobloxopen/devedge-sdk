@@ -29,12 +29,14 @@ const (
 
 // Widget is the resource managed by WidgetService.
 type Widget struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Color         string                 `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
-	Weight        int32                  `protobuf:"varint,4,opt,name=weight,proto3" json:"weight,omitempty"`
-	Etag          string                 `protobuf:"bytes,5,opt,name=etag,proto3" json:"etag,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the AIP-122 resource name, e.g. "widgets/abc123".
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id            string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	DisplayName   string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Color         string `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
+	Weight        int32  `protobuf:"varint,5,opt,name=weight,proto3" json:"weight,omitempty"`
+	Etag          string `protobuf:"bytes,6,opt,name=etag,proto3" json:"etag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -69,6 +71,13 @@ func (*Widget) Descriptor() ([]byte, []int) {
 	return file_widgets_proto_rawDescGZIP(), []int{0}
 }
 
+func (x *Widget) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 func (x *Widget) GetId() string {
 	if x != nil {
 		return x.Id
@@ -76,9 +85,9 @@ func (x *Widget) GetId() string {
 	return ""
 }
 
-func (x *Widget) GetName() string {
+func (x *Widget) GetDisplayName() string {
 	if x != nil {
-		return x.Name
+		return x.DisplayName
 	}
 	return ""
 }
@@ -432,13 +441,15 @@ var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
 	"\n" +
-	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"n\n" +
-	"\x06Widget\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05color\x18\x03 \x01(\tR\x05color\x12\x16\n" +
-	"\x06weight\x18\x04 \x01(\x05R\x06weight\x12\x12\n" +
-	"\x04etag\x18\x05 \x01(\tR\x04etag\"=\n" +
+	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\xc5\x01\n" +
+	"\x06Widget\x12\x17\n" +
+	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x14\n" +
+	"\x05color\x18\x04 \x01(\tR\x05color\x12\x16\n" +
+	"\x06weight\x18\x05 \x01(\x05R\x06weight\x12\x12\n" +
+	"\x04etag\x18\x06 \x01(\tR\x04etag:-\xeaA*\n" +
+	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\"=\n" +
 	"\x13CreateWidgetRequest\x12&\n" +
 	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\"\"\n" +
 	"\x10GetWidgetRequest\x12\x0e\n" +

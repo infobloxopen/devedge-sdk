@@ -8,15 +8,24 @@ package toy.v1;
 option go_package = "github.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1";
 
 import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
 import "infoblox/authz/v1/authz.proto";
 
 // Widget is the resource managed by WidgetService.
 message Widget {
-  string id     = 1;
-  string name   = 2;
-  string color  = 3;
-  int32  weight = 4;
-  string etag   = 5;
+  option (google.api.resource) = {
+    type: "toy.example.com/Widget"
+    pattern: "widgets/{widget}"
+  };
+
+  // name is the AIP-122 resource name, e.g. "widgets/abc123".
+  string name         = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string id           = 2;
+  string display_name = 3;
+  string color        = 4;
+  int32  weight       = 5;
+  string etag         = 6;
 }
 
 message CreateWidgetRequest { Widget widget = 1; }

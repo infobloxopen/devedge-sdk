@@ -14,6 +14,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
+	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/secret"
 	"google.golang.org/grpc/codes"
@@ -27,16 +28,17 @@ var (
 	_ = filter.Parse
 	_ = codes.OK
 	_ = status.Error
+	_ = resourcename.IDVarName
 )
 
 // APIKeyModel is the GORM model for APIKey.
 type APIKeyModel struct {
 	ID             string `gorm:"primaryKey;type:varchar(36)"`
-	Name           string `gorm:"column:name"`
 	AccountId      string `gorm:"column:account_id"`
 	KeyValueHash   string `gorm:"column:key_value_hash;index"`
 	KeyValueCipher string `gorm:"column:key_value_cipher"`
 	KeyPrefix      string `gorm:"column:key_prefix"`
+	Label          string `gorm:"column:label"`
 	ETag           string `gorm:"column:etag"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -48,9 +50,9 @@ func toModel_APIKey(p *APIKey) *APIKeyModel {
 		return nil
 	}
 	m := &APIKeyModel{ID: p.Id}
-	m.Name = p.Name
 	m.AccountId = p.AccountId
 	m.KeyPrefix = p.KeyPrefix
+	m.Label = p.Label
 	return m
 }
 
@@ -59,18 +61,33 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 		return nil
 	}
 	p := &APIKey{Id: m.ID}
-	p.Name = m.Name
+	p.Name = FormatAPIKeyName(m.ID)
 	p.AccountId = m.AccountId
 	p.KeyPrefix = m.KeyPrefix
+	p.Label = m.Label
 	return p
 }
 
 // APIKeyColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var APIKeyColumns = map[string]string{
 	"id":         "id",
-	"name":       "name",
 	"account_id": "account_id",
 	"key_prefix": "key_prefix",
+	"label":      "label",
+}
+
+// APIKeyNamePattern is the AIP-122 resource name pattern for APIKey.
+const APIKeyNamePattern = "apikeys/{api_key}"
+
+// FormatAPIKeyName builds the resource name for the given ID.
+func FormatAPIKeyName(id string) string {
+	name, _ := resourcename.Format(APIKeyNamePattern, map[string]string{"api_key": id})
+	return name
+}
+
+// ParseAPIKeyName extracts the resource ID from the given name.
+func ParseAPIKeyName(name string) (string, error) {
+	return resourcename.IDFromName(APIKeyNamePattern, name)
 }
 
 // APIKeyRepository is a GORM-backed persistence.Repository for *APIKey.

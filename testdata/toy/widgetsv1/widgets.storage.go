@@ -14,6 +14,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
+	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -25,19 +26,20 @@ var (
 	_ = filter.Parse
 	_ = codes.OK
 	_ = status.Error
+	_ = resourcename.IDVarName
 )
 
 // WidgetModel is the GORM model for Widget.
 type WidgetModel struct {
-	ID        string `gorm:"primaryKey;type:varchar(36)"`
-	Name      string `gorm:"column:name"`
-	Color     string `gorm:"column:color"`
-	Weight    int32  `gorm:"column:weight"`
-	Etag      string `gorm:"column:etag"`
-	ETag      string `gorm:"column:etag"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	DeletedAt gorm.DeletedAt `gorm:"index"`
+	ID          string `gorm:"primaryKey;type:varchar(36)"`
+	DisplayName string `gorm:"column:display_name"`
+	Color       string `gorm:"column:color"`
+	Weight      int32  `gorm:"column:weight"`
+	Etag        string `gorm:"column:etag"`
+	ETag        string `gorm:"column:etag"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	DeletedAt   gorm.DeletedAt `gorm:"index"`
 }
 
 func toModel_Widget(p *Widget) *WidgetModel {
@@ -45,7 +47,7 @@ func toModel_Widget(p *Widget) *WidgetModel {
 		return nil
 	}
 	m := &WidgetModel{ID: p.Id}
-	m.Name = p.Name
+	m.DisplayName = p.DisplayName
 	m.Color = p.Color
 	m.Weight = p.Weight
 	m.Etag = p.Etag
@@ -57,7 +59,8 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 		return nil
 	}
 	p := &Widget{Id: m.ID}
-	p.Name = m.Name
+	p.Name = FormatWidgetName(m.ID)
+	p.DisplayName = m.DisplayName
 	p.Color = m.Color
 	p.Weight = m.Weight
 	p.Etag = m.Etag
@@ -66,11 +69,25 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 
 // WidgetColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var WidgetColumns = map[string]string{
-	"id":     "id",
-	"name":   "name",
-	"color":  "color",
-	"weight": "weight",
-	"etag":   "etag",
+	"id":           "id",
+	"display_name": "display_name",
+	"color":        "color",
+	"weight":       "weight",
+	"etag":         "etag",
+}
+
+// WidgetNamePattern is the AIP-122 resource name pattern for Widget.
+const WidgetNamePattern = "widgets/{widget}"
+
+// FormatWidgetName builds the resource name for the given ID.
+func FormatWidgetName(id string) string {
+	name, _ := resourcename.Format(WidgetNamePattern, map[string]string{"widget": id})
+	return name
+}
+
+// ParseWidgetName extracts the resource ID from the given name.
+func ParseWidgetName(name string) (string, error) {
+	return resourcename.IDFromName(WidgetNamePattern, name)
 }
 
 // WidgetRepository is a GORM-backed persistence.Repository for *Widget.

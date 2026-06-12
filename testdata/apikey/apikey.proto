@@ -7,19 +7,28 @@ package apikey.v1;
 option go_package = "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1;apikeyv1";
 
 import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
 import "infoblox/authz/v1/authz.proto";
 import "infoblox/field/v1/field.proto";
 
 // APIKey is a customer API key. The raw key_value is never stored as plaintext;
 // the framework stores a hash (for lookup) and optional ciphertext (for recovery).
 message APIKey {
-  string id         = 1;
-  string name       = 2;
+  option (google.api.resource) = {
+    type: "apikey.example.com/APIKey"
+    pattern: "apikeys/{api_key}"
+  };
+
+  // name is the AIP-122 resource name, e.g. "apikeys/abc123".
+  string name       = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string id         = 2;
   string account_id = 3;
   // key_value is the raw API key material. Annotated secret: the storage layer
   // will hash and encrypt this field; it is cleared in all responses after creation.
   string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
-  string key_prefix = 5; // first 8 chars of the key, for display (not secret)
+  string key_prefix = 5;
+  string label      = 6;
 }
 
 service APIKeyService {
