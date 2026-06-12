@@ -31,10 +31,11 @@ func msgHasTenantField(msg messageInfo) bool {
 
 // messageInfo describes a proto message for storage code generation.
 type messageInfo struct {
-	MessageName  string
-	PbPkgName    string // Go package name of the generated proto package (e.g. "widgetsv1")
-	PbImportPath string // Go import path of the generated proto package
-	Fields       []fieldInfo
+	MessageName     string
+	PbPkgName       string // Go package name of the generated proto package (e.g. "widgetsv1")
+	PbImportPath    string // Go import path of the generated proto package
+	Fields          []fieldInfo
+	ResourcePattern string // AIP-122 resource name pattern, e.g. "widgets/{widget}"
 }
 
 // fieldInfo describes a single proto message field.
@@ -47,6 +48,7 @@ type fieldInfo struct {
 	IsRepeated  bool // repeated field — skipped in GORM model with a TODO
 	IsMessage   bool // nested message field — skipped with a TODO
 	IsSecret    bool // secret field — stored as hash+cipher columns; plaintext never persisted
+	IsOutputOnly bool // OUTPUT_ONLY field (google.api.field_behavior) — computed, not persisted
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull    bool
 	Unique     bool
@@ -105,6 +107,17 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\t\"gorm.io/gorm\"\n\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/filter\"\n")
+	// Emit resourcename import only when at least one message has a resource pattern.
+	hasResourcePattern := false
+	for _, m := range messages {
+		if m.ResourcePattern != "" {
+			hasResourcePattern = true
+			break
+		}
+	}
+	if hasResourcePattern {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/resourcename\"\n")
+	}
 	if withMiddleware {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
 	}
@@ -124,6 +137,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\t_ = filter.Parse\n")
 	b.WriteString("\t_ = codes.OK\n")
 	b.WriteString("\t_ = status.Error\n")
+	if hasResourcePattern {
+		b.WriteString("\t_ = resourcename.IDVarName\n")
+	}
 	b.WriteString(")\n\n")
 
 	for _, msg := range messages {
@@ -143,6 +159,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	for _, f := range msg.Fields {
 		if f.IsID {
 			continue // ID is already emitted above
+		}
+		if f.IsOutputOnly {
+			continue // computed field, not stored in DB
 		}
 		if f.IsRepeated {
 			if f.HasMany != nil {
@@ -229,8 +248,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\tif p == nil {\n\t\treturn nil\n\t}\n")
 	fmt.Fprintf(b, "\tm := &%sModel{ID: p.Id}\n", msg.MessageName)
 	for _, f := range msg.Fields {
-		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret {
-			continue // secret fields are handled by Create/Update, not toModel
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+			continue // output-only and secret fields are not persisted via toModel
 		}
 		gfn := goFieldName(f)
 		fmt.Fprintf(b, "\tm.%s = p.%s\n", gfn, gfn)
@@ -245,9 +264,18 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	} else {
 		fmt.Fprintf(b, "\tp := &%s{Id: m.ID}\n", msg.MessageName)
 	}
+	// Populate AIP-122 resource name field if present.
+	if msg.ResourcePattern != "" {
+		for _, f := range msg.Fields {
+			if f.IsOutputOnly && f.Name == "name" {
+				fmt.Fprintf(b, "\tp.Name = Format%sName(m.ID)\n", msg.MessageName)
+				break
+			}
+		}
+	}
 	for _, f := range msg.Fields {
-		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret {
-			continue // secret fields are never returned from DB
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+			continue // output-only and secret fields are never copied from model
 		}
 		gfn := goFieldName(f)
 		fmt.Fprintf(b, "\tp.%s = m.%s\n", gfn, gfn)
@@ -259,7 +287,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "var %sColumns = map[string]string{\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\"id\": \"id\",\n")
 	for _, f := range msg.Fields {
-		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
 			continue
 		}
 		col := f.SnakeName
@@ -269,6 +297,20 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\t%q: %q,\n", f.Name, col)
 	}
 	b.WriteString("}\n\n")
+
+	// AIP-122 resource name helpers.
+	if msg.ResourcePattern != "" {
+		idVar := resourcenameIDVarName(msg.ResourcePattern)
+		fmt.Fprintf(b, "// %sNamePattern is the AIP-122 resource name pattern for %s.\n", msg.MessageName, msg.MessageName)
+		fmt.Fprintf(b, "const %sNamePattern = %q\n\n", msg.MessageName, msg.ResourcePattern)
+		fmt.Fprintf(b, "// Format%sName builds the resource name for the given ID.\n", msg.MessageName)
+		fmt.Fprintf(b, "func Format%sName(id string) string {\n", msg.MessageName)
+		fmt.Fprintf(b, "\tname, _ := resourcename.Format(%sNamePattern, map[string]string{%q: id})\n", msg.MessageName, idVar)
+		fmt.Fprintf(b, "\treturn name\n}\n\n")
+		fmt.Fprintf(b, "// Parse%sName extracts the resource ID from the given name.\n", msg.MessageName)
+		fmt.Fprintf(b, "func Parse%sName(name string) (string, error) {\n", msg.MessageName)
+		fmt.Fprintf(b, "\treturn resourcename.IDFromName(%sNamePattern, name)\n}\n\n", msg.MessageName)
+	}
 
 	// Determine if this message has any secret fields.
 	msgHasSecrets := false
@@ -494,4 +536,17 @@ func goFieldName(f fieldInfo) string {
 		return f.GoFieldName
 	}
 	return ucFirst(f.Name)
+}
+
+// resourcenameIDVarName extracts the last {var} name from a resource name pattern.
+// "widgets/{widget}" → "widget"; "projects/{project}/widgets/{widget}" → "widget".
+func resourcenameIDVarName(pattern string) string {
+	segs := strings.Split(pattern, "/")
+	for i := len(segs) - 1; i >= 0; i-- {
+		s := segs[i]
+		if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
+			return s[1 : len(s)-1]
+		}
+	}
+	return "id"
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -48,18 +49,29 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			PbPkgName:    string(f.GoPackageName),
 			PbImportPath: string(f.GoImportPath),
 		}
+		// Extract (google.api.resource) pattern from message options.
+		if mopts := m.Desc.Options(); mopts != nil {
+			if proto.HasExtension(mopts, apiannotations.E_Resource) {
+				if rd, ok := proto.GetExtension(mopts, apiannotations.E_Resource).(*apiannotations.ResourceDescriptor); ok {
+					if patterns := rd.GetPattern(); len(patterns) > 0 {
+						msg.ResourcePattern = patterns[0]
+					}
+				}
+			}
+		}
 		for _, field := range m.Fields {
 			var (
-				isSecret   bool
-				notNull    bool
-				unique     bool
-				index      bool
-				columnName string
-				columnType string
-				hasOne     *fieldv1.HasOne
-				hasMany    *fieldv1.HasMany
-				belongsTo  *fieldv1.BelongsTo
-				manyToMany *fieldv1.ManyToMany
+				isSecret    bool
+				isOutputOnly bool
+				notNull     bool
+				unique      bool
+				index       bool
+				columnName  string
+				columnType  string
+				hasOne      *fieldv1.HasOne
+				hasMany     *fieldv1.HasMany
+				belongsTo   *fieldv1.BelongsTo
+				manyToMany  *fieldv1.ManyToMany
 			)
 			if opts := field.Desc.Options(); opts != nil {
 				if proto.HasExtension(opts, fieldv1.E_Opts) {
@@ -76,25 +88,34 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						manyToMany = fopts.GetManyToMany()
 					}
 				}
+				if proto.HasExtension(opts, apiannotations.E_FieldBehavior) {
+					behaviors, _ := proto.GetExtension(opts, apiannotations.E_FieldBehavior).([]apiannotations.FieldBehavior)
+					for _, b := range behaviors {
+						if b == apiannotations.FieldBehavior_OUTPUT_ONLY {
+							isOutputOnly = true
+						}
+					}
+				}
 			}
 			msg.Fields = append(msg.Fields, fieldInfo{
-				Name:        string(field.Desc.Name()),
-				GoFieldName: string(field.GoName), // Go field name (e.g. "PageSize" for "page_size")
-				SnakeName:   toSnake(string(field.Desc.Name())),
-				IsRepeated:  field.Desc.IsList(),
-				IsMessage:   field.Desc.Kind() == protoreflect.MessageKind,
-				IsID:        string(field.Desc.Name()) == "id",
-				GoType:      protoKindToGoType(field.Desc.Kind()),
-				IsSecret:    isSecret,
-				NotNull:     notNull,
-				Unique:      unique,
-				Index:       index,
-				ColumnName:  columnName,
-				ColumnType:  columnType,
-				HasOne:      hasOne,
-				HasMany:     hasMany,
-				BelongsTo:   belongsTo,
-				ManyToMany:  manyToMany,
+				Name:         string(field.Desc.Name()),
+				GoFieldName:  string(field.GoName),
+				SnakeName:    toSnake(string(field.Desc.Name())),
+				IsRepeated:   field.Desc.IsList(),
+				IsMessage:    field.Desc.Kind() == protoreflect.MessageKind,
+				IsID:         string(field.Desc.Name()) == "id",
+				GoType:       protoKindToGoType(field.Desc.Kind()),
+				IsSecret:     isSecret,
+				IsOutputOnly: isOutputOnly,
+				NotNull:      notNull,
+				Unique:       unique,
+				Index:        index,
+				ColumnName:   columnName,
+				ColumnType:   columnType,
+				HasOne:       hasOne,
+				HasMany:      hasMany,
+				BelongsTo:    belongsTo,
+				ManyToMany:   manyToMany,
 			})
 		}
 		messages = append(messages, msg)
