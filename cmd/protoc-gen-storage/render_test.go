@@ -51,6 +51,29 @@ func TestRenderStorageFile_basic(t *testing.T) {
 	mustContain(t, out, "Columns[f]")
 }
 
+func TestRenderStorageFile_resourceName(t *testing.T) {
+	msg := messageInfo{
+		MessageName:     "Widget",
+		ResourcePattern: "widgets/{widget}",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name", IsOutputOnly: true},
+			{Name: "display_name", GoType: "string", SnakeName: "display_name"},
+		},
+	}
+	out := renderStorageFile("widgetsv1", []messageInfo{msg})
+
+	mustContain(t, out, "WidgetNamePattern")
+	mustContain(t, out, `"widgets/{widget}"`)
+	mustContain(t, out, "FormatWidgetName")
+	mustContain(t, out, "ParseWidgetName")
+	mustContain(t, out, "resourcename.Format")
+	mustContain(t, out, "resourcename.IDFromName")
+	mustContain(t, out, "p.Name = FormatWidgetName(m.ID)")
+	// output-only field must not appear in the GORM model struct or toModel.
+	mustNotContain(t, out, "m.Name = p.Name")
+}
+
 func TestRenderStorageFile_repeatedFieldSkipped(t *testing.T) {
 	msg := messageInfo{
 		MessageName:  "Foo",

@@ -30,14 +30,16 @@ const (
 // APIKey is a customer API key. The raw key_value is never stored as plaintext;
 // the framework stores a hash (for lookup) and optional ciphertext (for recovery).
 type APIKey struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	AccountId string                 `protobuf:"bytes,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the AIP-122 resource name, e.g. "apikeys/abc123".
+	Name      string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id        string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	AccountId string `protobuf:"bytes,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	// key_value is the raw API key material. Annotated secret: the storage layer
 	// will hash and encrypt this field; it is cleared in all responses after creation.
 	KeyValue      string `protobuf:"bytes,4,opt,name=key_value,json=keyValue,proto3" json:"key_value,omitempty"`
-	KeyPrefix     string `protobuf:"bytes,5,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"` // first 8 chars of the key, for display (not secret)
+	KeyPrefix     string `protobuf:"bytes,5,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"`
+	Label         string `protobuf:"bytes,6,opt,name=label,proto3" json:"label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -72,16 +74,16 @@ func (*APIKey) Descriptor() ([]byte, []int) {
 	return file_apikey_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *APIKey) GetId() string {
+func (x *APIKey) GetName() string {
 	if x != nil {
-		return x.Id
+		return x.Name
 	}
 	return ""
 }
 
-func (x *APIKey) GetName() string {
+func (x *APIKey) GetId() string {
 	if x != nil {
-		return x.Name
+		return x.Id
 	}
 	return ""
 }
@@ -103,6 +105,13 @@ func (x *APIKey) GetKeyValue() string {
 func (x *APIKey) GetKeyPrefix() string {
 	if x != nil {
 		return x.KeyPrefix
+	}
+	return ""
+}
+
+func (x *APIKey) GetLabel() string {
+	if x != nil {
+		return x.Label
 	}
 	return ""
 }
@@ -383,15 +392,17 @@ var File_apikey_proto protoreflect.FileDescriptor
 
 const file_apikey_proto_rawDesc = "" +
 	"\n" +
-	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\x8f\x01\n" +
-	"\x06APIKey\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
+	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xdd\x01\n" +
+	"\x06APIKey\x12\x17\n" +
+	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x03 \x01(\tR\taccountId\x12#\n" +
 	"\tkey_value\x18\x04 \x01(\tB\x06\x9a\xb5\x18\x02\b\x01R\bkeyValue\x12\x1d\n" +
 	"\n" +
-	"key_prefix\x18\x05 \x01(\tR\tkeyPrefix\"A\n" +
+	"key_prefix\x18\x05 \x01(\tR\tkeyPrefix\x12\x14\n" +
+	"\x05label\x18\x06 \x01(\tR\x05label:1\xeaA.\n" +
+	"\x19apikey.example.com/APIKey\x12\x11apikeys/{api_key}\"A\n" +
 	"\x13CreateAPIKeyRequest\x12*\n" +
 	"\aapi_key\x18\x01 \x01(\v2\x11.apikey.v1.APIKeyR\x06apiKey\"\"\n" +
 	"\x10GetAPIKeyRequest\x12\x0e\n" +

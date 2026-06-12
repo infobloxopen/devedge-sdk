@@ -11,7 +11,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-require google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171 // indirect
+require google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171
 
 require (
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4

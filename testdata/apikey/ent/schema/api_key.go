@@ -25,12 +25,13 @@ func (APIKey) Mixin() []ent.Mixin {
 // Fields defines the fields of APIKey.
 func (APIKey) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("id").StorageKey("id").Immutable(),
 		field.String("name").Optional(),
+		field.String("id").StorageKey("id").Immutable(),
 		// key_value is a secret field — stored as hash+cipher, never plaintext
 		field.String("key_value_hash").Optional().Comment("HMAC-SHA256 of key_value for lookup"),
 		field.String("key_value_cipher").Optional().Comment("encrypted key_value for recovery"),
 		field.String("key_prefix").Optional(),
+		field.String("label").Optional(),
 	}
 }
 
