@@ -873,6 +873,51 @@ func (x *GetOperationStatusRequest) GetName() string {
 	return ""
 }
 
+// AIP-152: cancel a running long-running operation.
+type CancelWidgetOperationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelWidgetOperationRequest) Reset() {
+	*x = CancelWidgetOperationRequest{}
+	mi := &file_widgets_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelWidgetOperationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelWidgetOperationRequest) ProtoMessage() {}
+
+func (x *CancelWidgetOperationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_widgets_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelWidgetOperationRequest.ProtoReflect.Descriptor instead.
+func (*CancelWidgetOperationRequest) Descriptor() ([]byte, []int) {
+	return file_widgets_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CancelWidgetOperationRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
@@ -930,7 +975,9 @@ const file_widgets_proto_rawDesc = "" +
 	"\x04done\x18\x02 \x01(\bR\x04done\x12\x16\n" +
 	"\x06result\x18\x03 \x01(\tR\x06result\"/\n" +
 	"\x19GetOperationStatusRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name2\xeb\t\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"2\n" +
+	"\x1cCancelWidgetOperationRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name2\x84\v\n" +
 	"\rWidgetService\x12m\n" +
 	"\fCreateWidget\x12\x1b.toy.v1.CreateWidgetRequest\x1a\x0e.toy.v1.Widget\"0\x8a\xb5\x18\x11\n" +
 	"\x06create\x12\awidgets\x82\xd3\xe4\x93\x02\x15:\x06widget\"\v/v1/widgets\x12b\n" +
@@ -951,7 +998,9 @@ const file_widgets_proto_rawDesc = "" +
 	"\rProcessWidget\x12\x1c.toy.v1.ProcessWidgetRequest\x1a\x17.toy.v1.OperationStatus\"7\x8a\xb5\x18\x10\n" +
 	"\x05write\x12\awidgets\x82\xd3\xe4\x93\x02\x1d:\x01*\"\x18/v1/widgets/{id}:process\x12\x85\x01\n" +
 	"\x12GetOperationStatus\x12!.toy.v1.GetOperationStatusRequest\x1a\x17.toy.v1.OperationStatus\"3\x8a\xb5\x18\x0f\n" +
-	"\x04read\x12\awidgets\x82\xd3\xe4\x93\x02\x1a\x12\x18/v1/operations/{name=**}BFZDgithub.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1b\x06proto3"
+	"\x04read\x12\awidgets\x82\xd3\xe4\x93\x02\x1a\x12\x18/v1/operations/{name=**}\x12\x96\x01\n" +
+	"\x15CancelWidgetOperation\x12$.toy.v1.CancelWidgetOperationRequest\x1a\x17.toy.v1.OperationStatus\">\x8a\xb5\x18\x10\n" +
+	"\x05write\x12\awidgets\x82\xd3\xe4\x93\x02$:\x01*\"\x1f/v1/operations/{name=**}:cancelBFZDgithub.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1b\x06proto3"
 
 var (
 	file_widgets_proto_rawDescOnce sync.Once
@@ -965,34 +1014,35 @@ func file_widgets_proto_rawDescGZIP() []byte {
 	return file_widgets_proto_rawDescData
 }
 
-var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_widgets_proto_goTypes = []any{
-	(*Widget)(nil),                    // 0: toy.v1.Widget
-	(*CreateWidgetRequest)(nil),       // 1: toy.v1.CreateWidgetRequest
-	(*GetWidgetRequest)(nil),          // 2: toy.v1.GetWidgetRequest
-	(*ListWidgetsRequest)(nil),        // 3: toy.v1.ListWidgetsRequest
-	(*ListWidgetsResponse)(nil),       // 4: toy.v1.ListWidgetsResponse
-	(*UpdateWidgetRequest)(nil),       // 5: toy.v1.UpdateWidgetRequest
-	(*DeleteWidgetRequest)(nil),       // 6: toy.v1.DeleteWidgetRequest
-	(*DeleteWidgetResponse)(nil),      // 7: toy.v1.DeleteWidgetResponse
-	(*ArchiveWidgetRequest)(nil),      // 8: toy.v1.ArchiveWidgetRequest
-	(*ArchiveWidgetResponse)(nil),     // 9: toy.v1.ArchiveWidgetResponse
-	(*BatchGetWidgetsRequest)(nil),    // 10: toy.v1.BatchGetWidgetsRequest
-	(*BatchGetWidgetsResponse)(nil),   // 11: toy.v1.BatchGetWidgetsResponse
-	(*BatchDeleteWidgetsRequest)(nil), // 12: toy.v1.BatchDeleteWidgetsRequest
-	(*ProcessWidgetRequest)(nil),      // 13: toy.v1.ProcessWidgetRequest
-	(*OperationStatus)(nil),           // 14: toy.v1.OperationStatus
-	(*GetOperationStatusRequest)(nil), // 15: toy.v1.GetOperationStatusRequest
-	(*timestamppb.Timestamp)(nil),     // 16: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),     // 17: google.protobuf.FieldMask
-	(*emptypb.Empty)(nil),             // 18: google.protobuf.Empty
+	(*Widget)(nil),                       // 0: toy.v1.Widget
+	(*CreateWidgetRequest)(nil),          // 1: toy.v1.CreateWidgetRequest
+	(*GetWidgetRequest)(nil),             // 2: toy.v1.GetWidgetRequest
+	(*ListWidgetsRequest)(nil),           // 3: toy.v1.ListWidgetsRequest
+	(*ListWidgetsResponse)(nil),          // 4: toy.v1.ListWidgetsResponse
+	(*UpdateWidgetRequest)(nil),          // 5: toy.v1.UpdateWidgetRequest
+	(*DeleteWidgetRequest)(nil),          // 6: toy.v1.DeleteWidgetRequest
+	(*DeleteWidgetResponse)(nil),         // 7: toy.v1.DeleteWidgetResponse
+	(*ArchiveWidgetRequest)(nil),         // 8: toy.v1.ArchiveWidgetRequest
+	(*ArchiveWidgetResponse)(nil),        // 9: toy.v1.ArchiveWidgetResponse
+	(*BatchGetWidgetsRequest)(nil),       // 10: toy.v1.BatchGetWidgetsRequest
+	(*BatchGetWidgetsResponse)(nil),      // 11: toy.v1.BatchGetWidgetsResponse
+	(*BatchDeleteWidgetsRequest)(nil),    // 12: toy.v1.BatchDeleteWidgetsRequest
+	(*ProcessWidgetRequest)(nil),         // 13: toy.v1.ProcessWidgetRequest
+	(*OperationStatus)(nil),              // 14: toy.v1.OperationStatus
+	(*GetOperationStatusRequest)(nil),    // 15: toy.v1.GetOperationStatusRequest
+	(*CancelWidgetOperationRequest)(nil), // 16: toy.v1.CancelWidgetOperationRequest
+	(*timestamppb.Timestamp)(nil),        // 17: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),        // 18: google.protobuf.FieldMask
+	(*emptypb.Empty)(nil),                // 19: google.protobuf.Empty
 }
 var file_widgets_proto_depIdxs = []int32{
-	16, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
-	16, // 1: toy.v1.Widget.archived_time:type_name -> google.protobuf.Timestamp
+	17, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
+	17, // 1: toy.v1.Widget.archived_time:type_name -> google.protobuf.Timestamp
 	0,  // 2: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
-	17, // 3: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
-	17, // 4: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
+	18, // 3: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
+	18, // 4: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
 	0,  // 5: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
 	0,  // 6: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
 	0,  // 7: toy.v1.ArchiveWidgetResponse.widget:type_name -> toy.v1.Widget
@@ -1007,18 +1057,20 @@ var file_widgets_proto_depIdxs = []int32{
 	12, // 16: toy.v1.WidgetService.BatchDeleteWidgets:input_type -> toy.v1.BatchDeleteWidgetsRequest
 	13, // 17: toy.v1.WidgetService.ProcessWidget:input_type -> toy.v1.ProcessWidgetRequest
 	15, // 18: toy.v1.WidgetService.GetOperationStatus:input_type -> toy.v1.GetOperationStatusRequest
-	0,  // 19: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
-	0,  // 20: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
-	4,  // 21: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
-	0,  // 22: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
-	7,  // 23: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
-	9,  // 24: toy.v1.WidgetService.ArchiveWidget:output_type -> toy.v1.ArchiveWidgetResponse
-	11, // 25: toy.v1.WidgetService.BatchGetWidgets:output_type -> toy.v1.BatchGetWidgetsResponse
-	18, // 26: toy.v1.WidgetService.BatchDeleteWidgets:output_type -> google.protobuf.Empty
-	14, // 27: toy.v1.WidgetService.ProcessWidget:output_type -> toy.v1.OperationStatus
-	14, // 28: toy.v1.WidgetService.GetOperationStatus:output_type -> toy.v1.OperationStatus
-	19, // [19:29] is the sub-list for method output_type
-	9,  // [9:19] is the sub-list for method input_type
+	16, // 19: toy.v1.WidgetService.CancelWidgetOperation:input_type -> toy.v1.CancelWidgetOperationRequest
+	0,  // 20: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
+	0,  // 21: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
+	4,  // 22: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
+	0,  // 23: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
+	7,  // 24: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
+	9,  // 25: toy.v1.WidgetService.ArchiveWidget:output_type -> toy.v1.ArchiveWidgetResponse
+	11, // 26: toy.v1.WidgetService.BatchGetWidgets:output_type -> toy.v1.BatchGetWidgetsResponse
+	19, // 27: toy.v1.WidgetService.BatchDeleteWidgets:output_type -> google.protobuf.Empty
+	14, // 28: toy.v1.WidgetService.ProcessWidget:output_type -> toy.v1.OperationStatus
+	14, // 29: toy.v1.WidgetService.GetOperationStatus:output_type -> toy.v1.OperationStatus
+	14, // 30: toy.v1.WidgetService.CancelWidgetOperation:output_type -> toy.v1.OperationStatus
+	20, // [20:31] is the sub-list for method output_type
+	9,  // [9:20] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -1035,7 +1087,7 @@ func file_widgets_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_widgets_proto_rawDesc), len(file_widgets_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
