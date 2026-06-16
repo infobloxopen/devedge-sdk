@@ -6,13 +6,13 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 1 — BatchRepository interface + MemoryRepository batch ops
 
-- [ ] [S] T001: In `persistence/repository.go`, add `BatchRepository[T any, K comparable]`
+- [X] [S] T001: In `persistence/repository.go`, add `BatchRepository[T any, K comparable]`
   interface below the existing `Repository` interface. It embeds `Repository[T, K]` and adds:
   - `BatchGet(ctx context.Context, keys []K) ([]T, error)` — returns items in key order; `ErrNotFound` if any key missing/deleted.
   - `BatchDelete(ctx context.Context, keys []K) error` — atomic soft-delete; `ErrNotFound` if any key missing/already-deleted.
   Add a doc comment explaining atomic semantics. (FR-001)
 
-- [ ] [S] T002: In `persistence/memory.go`, implement `BatchGet` on `MemoryRepository`:
+- [X] [S] T002: In `persistence/memory.go`, implement `BatchGet` on `MemoryRepository`:
   - Empty `keys` → return `([]T{}, nil)` (FM-001).
   - Acquire `r.mu.RLock()`.
   - For each key: if `!r.items[key]` present OR `r.deleted[key]` → release lock, return `ErrNotFound` (FM-002).
@@ -20,7 +20,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   - Release lock, return items.
   (FR-002, AC-001, AC-002, AC-003)
 
-- [ ] [S] T003: In `persistence/memory.go`, implement `BatchDelete` on `MemoryRepository`:
+- [X] [S] T003: In `persistence/memory.go`, implement `BatchDelete` on `MemoryRepository`:
   - Empty `keys` → return `nil` (FM-003).
   - Acquire `r.mu.Lock()`.
   - Pre-check pass: for each key, if not in `r.items` OR `r.deleted[key]` → release lock, return `ErrNotFound` (FM-004, FM-005).
@@ -28,7 +28,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   - Release lock, return `nil`.
   (FR-003, AC-004, AC-005, AC-006, AC-007)
 
-- [ ] [S] T004: Add unit tests to `persistence/memory_test.go`:
+- [X] [S] T004: Add unit tests to `persistence/memory_test.go`:
   - `TestMemoryRepository_BatchGet_Success`: create two widgets A and B; `BatchGet([A,B])` returns both in order.
   - `TestMemoryRepository_BatchGet_EmptyKeys`: `BatchGet([])` returns empty slice, no error.
   - `TestMemoryRepository_BatchGet_MissingKey`: create A; `BatchGet([A, "missing"])` returns `ErrNotFound`.
@@ -41,7 +41,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 2 — Toy fixture proto additions
 
-- [ ] [C] T005: Update `testdata/toy/widgets.proto`:
+- [X] [C] T005: Update `testdata/toy/widgets.proto`:
   - Add `import "google/protobuf/empty.proto";`.
   - Add `google.protobuf.Timestamp archived_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];` to `Widget`.
   - Add messages: `ArchiveWidgetRequest { string id = 1; }`, `ArchiveWidgetResponse { Widget widget = 1; }`.
@@ -58,7 +58,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
     - `(infoblox.authz.v1.rule) = {verb: "delete", resource: "widgets"}`.
   (FR-010–FR-017)
 
-- [ ] [C] T006: Re-run `buf generate` from the toy fixture:
+- [X] [C] T006: Re-run `buf generate` from the toy fixture:
   - Run from `testdata/toy` (or root if the buf config covers it): `buf generate`.
   - Inspect `git diff` on regenerated files:
     - `widgetsv1/widgets.pb.go`: Widget gains `ArchivedTime`; new request/response types present.
@@ -70,7 +70,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 3 — Handler implementation + integration tests
 
-- [ ] [S] T007: In `testdata/toy/widgetsv1/server_test.go`, add the three handler method
+- [X] [S] T007: In `testdata/toy/widgetsv1/server_test.go`, add the three handler method
   implementations to `toyHandler`:
 
   ```go
@@ -99,7 +99,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   `emptypb "google.golang.org/protobuf/types/known/emptypb"` as needed.
   (FR-020, FR-021, FR-022)
 
-- [ ] [S] T008: Add integration tests to `testdata/toy/widgetsv1/server_test.go`:
+- [X] [S] T008: Add integration tests to `testdata/toy/widgetsv1/server_test.go`:
 
   `TestArchiveWidget`:
   - Create widget W.
@@ -144,7 +144,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 4 — Verification gate
 
-- [ ] [C] T009: Run the full verification gate:
+- [X] [C] T009: Run the full verification gate:
   - `go build ./...` from root — must compile clean.
   - `go vet ./...` from root — zero findings.
   - `go test ./persistence/...` — all new batch tests pass.
