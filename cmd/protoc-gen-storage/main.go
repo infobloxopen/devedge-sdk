@@ -44,6 +44,18 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		if strings.HasSuffix(name, "Request") || strings.HasSuffix(name, "Response") {
 			continue
 		}
+		// Skip messages that have no "id" field — they are not storable resources
+		// (e.g., AIP-151 operation-status and other value-object types).
+		hasID := false
+		for _, f := range m.Fields {
+			if string(f.Desc.Name()) == "id" {
+				hasID = true
+				break
+			}
+		}
+		if !hasID {
+			continue
+		}
 		msg := messageInfo{
 			MessageName:  name,
 			PbPkgName:    string(f.GoPackageName),

@@ -49,4 +49,14 @@ var WidgetServiceAuthzRules = []authz.MethodRule{
 		Verb:     authz.Verb("delete"),
 		Resource: "widgets",
 	},
+	{
+		Method:   "/toy.v1.WidgetService/ProcessWidget",
+		Verb:     authz.Verb("write"),
+		Resource: "widgets",
+	},
+	{
+		Method:   "/toy.v1.WidgetService/GetOperationStatus",
+		Verb:     authz.Verb("read"),
+		Resource: "widgets",
+	},
 }

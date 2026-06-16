@@ -75,6 +75,15 @@ message BatchGetWidgetsResponse { repeated Widget widgets = 1; }
 // AIP-137: batch delete.
 message BatchDeleteWidgetsRequest { repeated string ids = 1; }
 
+// AIP-151: long-running operation status for widget processing.
+message ProcessWidgetRequest     { string id = 1; }
+message OperationStatus          {
+  string name   = 1;
+  bool   done   = 2;
+  string result = 3;
+}
+message GetOperationStatusRequest { string name = 1; }
+
 service WidgetService {
   rpc CreateWidget(CreateWidgetRequest) returns (Widget) {
     option (google.api.http) = {post: "/v1/widgets", body: "widget"};
@@ -110,5 +119,15 @@ service WidgetService {
   rpc BatchDeleteWidgets(BatchDeleteWidgetsRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {post: "/v1/widgets:batchDelete", body: "*"};
     option (infoblox.authz.v1.rule) = {verb: "delete", resource: "widgets"};
+  }
+  // AIP-151: start async processing; returns a pending OperationStatus immediately.
+  rpc ProcessWidget(ProcessWidgetRequest) returns (OperationStatus) {
+    option (google.api.http) = {post: "/v1/widgets/{id}:process", body: "*"};
+    option (infoblox.authz.v1.rule) = {verb: "write", resource: "widgets"};
+  }
+  // AIP-151: poll the status of a previously submitted ProcessWidget operation.
+  rpc GetOperationStatus(GetOperationStatusRequest) returns (OperationStatus) {
+    option (google.api.http) = {get: "/v1/operations/{name=**}"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "widgets"};
   }
 }
