@@ -15,6 +15,7 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -168,8 +169,10 @@ func (x *CreateWidgetRequest) GetWidget() *Widget {
 }
 
 type GetWidgetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// AIP-157: fields to return; empty means all fields.
+	ReadMask      *fieldmaskpb.FieldMask `protobuf:"bytes,8,opt,name=read_mask,json=readMask,proto3" json:"read_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -211,12 +214,21 @@ func (x *GetWidgetRequest) GetId() string {
 	return ""
 }
 
+func (x *GetWidgetRequest) GetReadMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.ReadMask
+	}
+	return nil
+}
+
 type ListWidgetsRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	PageSize  int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	PageToken string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	// AIP-148: include soft-deleted widgets when true.
-	ShowDeleted   bool `protobuf:"varint,3,opt,name=show_deleted,json=showDeleted,proto3" json:"show_deleted,omitempty"`
+	ShowDeleted bool `protobuf:"varint,3,opt,name=show_deleted,json=showDeleted,proto3" json:"show_deleted,omitempty"`
+	// AIP-157: fields to return; empty means all fields.
+	ReadMask      *fieldmaskpb.FieldMask `protobuf:"bytes,4,opt,name=read_mask,json=readMask,proto3" json:"read_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -270,6 +282,13 @@ func (x *ListWidgetsRequest) GetShowDeleted() bool {
 		return x.ShowDeleted
 	}
 	return false
+}
+
+func (x *ListWidgetsRequest) GetReadMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.ReadMask
+	}
+	return nil
 }
 
 type ListWidgetsResponse struct {
@@ -460,7 +479,7 @@ var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
 	"\n" +
-	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\x87\x02\n" +
+	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\x87\x02\n" +
 	"\x06Widget\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12!\n" +
@@ -472,14 +491,16 @@ const file_widgets_proto_rawDesc = "" +
 	"deleteTime:-\xeaA*\n" +
 	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\"=\n" +
 	"\x13CreateWidgetRequest\x12&\n" +
-	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\"\"\n" +
+	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\"[\n" +
 	"\x10GetWidgetRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"s\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x127\n" +
+	"\tread_mask\x18\b \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"\xac\x01\n" +
 	"\x12ListWidgetsRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\x12!\n" +
-	"\fshow_deleted\x18\x03 \x01(\bR\vshowDeleted\"g\n" +
+	"\fshow_deleted\x18\x03 \x01(\bR\vshowDeleted\x127\n" +
+	"\tread_mask\x18\x04 \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"g\n" +
 	"\x13ListWidgetsResponse\x12(\n" +
 	"\awidgets\x18\x01 \x03(\v2\x0e.toy.v1.WidgetR\awidgets\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"^\n" +
@@ -525,27 +546,30 @@ var file_widgets_proto_goTypes = []any{
 	(*DeleteWidgetRequest)(nil),   // 6: toy.v1.DeleteWidgetRequest
 	(*DeleteWidgetResponse)(nil),  // 7: toy.v1.DeleteWidgetResponse
 	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil), // 9: google.protobuf.FieldMask
 }
 var file_widgets_proto_depIdxs = []int32{
-	8, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
-	0, // 1: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
-	0, // 2: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
-	0, // 3: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
-	1, // 4: toy.v1.WidgetService.CreateWidget:input_type -> toy.v1.CreateWidgetRequest
-	2, // 5: toy.v1.WidgetService.GetWidget:input_type -> toy.v1.GetWidgetRequest
-	3, // 6: toy.v1.WidgetService.ListWidgets:input_type -> toy.v1.ListWidgetsRequest
-	5, // 7: toy.v1.WidgetService.UpdateWidget:input_type -> toy.v1.UpdateWidgetRequest
-	6, // 8: toy.v1.WidgetService.DeleteWidget:input_type -> toy.v1.DeleteWidgetRequest
-	0, // 9: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
-	0, // 10: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
-	4, // 11: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
-	0, // 12: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
-	7, // 13: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
-	9, // [9:14] is the sub-list for method output_type
-	4, // [4:9] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	8,  // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
+	0,  // 1: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
+	9,  // 2: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
+	9,  // 3: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
+	0,  // 4: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
+	0,  // 5: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
+	1,  // 6: toy.v1.WidgetService.CreateWidget:input_type -> toy.v1.CreateWidgetRequest
+	2,  // 7: toy.v1.WidgetService.GetWidget:input_type -> toy.v1.GetWidgetRequest
+	3,  // 8: toy.v1.WidgetService.ListWidgets:input_type -> toy.v1.ListWidgetsRequest
+	5,  // 9: toy.v1.WidgetService.UpdateWidget:input_type -> toy.v1.UpdateWidgetRequest
+	6,  // 10: toy.v1.WidgetService.DeleteWidget:input_type -> toy.v1.DeleteWidgetRequest
+	0,  // 11: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
+	0,  // 12: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
+	4,  // 13: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
+	0,  // 14: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
+	7,  // 15: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
+	11, // [11:16] is the sub-list for method output_type
+	6,  // [6:11] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_widgets_proto_init() }

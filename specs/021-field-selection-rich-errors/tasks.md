@@ -6,13 +6,13 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 1 — Rich error types + upgraded ErrorMapper (AIP-193)
 
-- [ ] [S] T001: Create `persistence/errors.go`. Define `FieldViolationError` struct with
+- [X] [S] T001: Create `persistence/errors.go`. Define `FieldViolationError` struct with
   `Field string` and `Description string`, implementing `error` (message: `"field violation: <Field>: <Description>"`).
   Add `NewFieldViolation(field, description string) *FieldViolationError` constructor.
   Do NOT move the existing sentinels (`ErrNotFound`, `ErrConflict`, `ErrPreconditionFailed`) —
   those stay in `persistence/repository.go`. (FR-001, FR-002)
 
-- [ ] [C] T002: Upgrade `middleware/errormapper.go`:
+- [X] [C] T002: Upgrade `middleware/errormapper.go`:
   - Add import for `google.golang.org/genproto/googleapis/rpc/errdetails`.
   - Before the existing `switch`, use `errors.As(err, &fv)` to detect `*persistence.FieldViolationError`;
     if matched, build `codes.InvalidArgument` status with `BadRequest.FieldViolation` detail and return.
@@ -23,7 +23,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   - If `WithDetails` returns an error, fall back to `status.Error(code, msg)` — no panic.
   (FR-020, FR-021, FR-022, FR-023, FR-024, FM-003, FM-004)
 
-- [ ] [S] T003: Update `middleware/errormapper_test.go`:
+- [X] [S] T003: Update `middleware/errormapper_test.go`:
   - For `ErrNotFound`: assert `st.Details()` contains a `*errdetails.ResourceInfo` with `Description == "resource not found"` (AC-010).
   - For `ErrConflict`: assert `*errdetails.ErrorInfo` with `Reason == "ALREADY_EXISTS"` (AC-011).
   - For `ErrPreconditionFailed`: assert `*errdetails.ErrorInfo` with `Reason == "PRECONDITION_FAILED"` (AC-012).
@@ -36,7 +36,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 2 — Field mask apply + interceptor (AIP-157)
 
-- [ ] [C] T004: In `middleware/fieldmask.go`, add `Apply(msg proto.Message, paths []string)`:
+- [X] [C] T004: In `middleware/fieldmask.go`, add `Apply(msg proto.Message, paths []string)`:
   - `if len(paths) == 0 { return }` — empty paths is a no-op (FM-001).
   - Build a `map[string]bool` from `paths` (add each path as-is — callers may pass either
     snake_case proto name or camelCase JSON name).
@@ -46,7 +46,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   - Add required imports: `google.golang.org/protobuf/proto`, `google.golang.org/protobuf/reflect/protoreflect`.
   (FR-010, FR-011, AC-001, AC-002, AC-003, AC-004)
 
-- [ ] [C] T005: In `middleware/fieldmask.go`, add `ReadMaskUnary() grpc.UnaryServerInterceptor`:
+- [X] [C] T005: In `middleware/fieldmask.go`, add `ReadMaskUnary() grpc.UnaryServerInterceptor`:
   - Type-assert request: `type readMaskGetter interface { GetReadMask() *fieldmaskpb.FieldMask }`.
   - If request implements `readMaskGetter` and `mask := req.GetReadMask(); mask != nil && len(mask.GetPaths()) > 0`:
     call handler, then on nil error + non-nil response, type-assert response to `proto.Message`
@@ -56,25 +56,25 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   - Add import: `google.golang.org/protobuf/types/known/fieldmaskpb`.
   (FR-012, AC-005, AC-006, AC-007)
 
-- [ ] [S] T006: In `server/server.go`, append `middleware.ReadMaskUnary()` to the framework chain
+- [X] [S] T006: In `server/server.go`, append `middleware.ReadMaskUnary()` to the framework chain
   after `etag.PreconditionUnary()` and before `cfg.Interceptors`. Update the package-level doc
   comment to list `ReadMaskUnary` in the chain description. (FR-030)
 
 ## Phase 3 — Fixture proto updates + regen
 
-- [ ] [S] T007: In `testdata/toy/widgets.proto`:
+- [X] [S] T007: In `testdata/toy/widgets.proto`:
   - Add `import "google/protobuf/field_mask.proto";`.
   - Add `google.protobuf.FieldMask read_mask = 8;` to `GetWidgetRequest`.
   - Add `google.protobuf.FieldMask read_mask = 4;` to `ListWidgetsRequest`.
   (FR-040, FR-041)
 
-- [ ] [S] T008: In `testdata/apikey/apikey.proto`:
+- [X] [S] T008: In `testdata/apikey/apikey.proto`:
   - Add `import "google/protobuf/field_mask.proto";`.
   - Add `google.protobuf.FieldMask read_mask = 3;` to `GetAPIKeyRequest`.
   - Add `google.protobuf.FieldMask read_mask = 4;` to `ListAPIKeysRequest`.
   (FR-042, FR-043)
 
-- [ ] [C] T009: Rebuild generated files for both fixture modules:
+- [X] [C] T009: Rebuild generated files for both fixture modules:
   - Run `buf generate` from `testdata/toy` (using `buf.gen.toy.yaml` or root `buf.gen.yaml`).
   - Run `buf generate` from `testdata/apikey`.
   - Inspect `git diff` of regenerated `*.pb.go`: confirm `GetWidgetRequest`/`GetAPIKeyRequest` gain
@@ -83,13 +83,13 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 4 — go.mod cleanup
 
-- [ ] [S] T010: In root `go.mod`, promote `google.golang.org/genproto/googleapis/rpc` from
+- [X] [S] T010: In root `go.mod`, promote `google.golang.org/genproto/googleapis/rpc` from
   `// indirect` to a direct `require` entry. Run `go mod tidy` and commit updated `go.mod` + `go.sum`.
   Verify `go build ./...` still clean. (FR-050)
 
 ## Phase 5 — Tests
 
-- [ ] [S] T011: Update `middleware/fieldmask_test.go` — add tests for `Apply` and `ReadMaskUnary`:
+- [X] [S] T011: Update `middleware/fieldmask_test.go` — add tests for `Apply` and `ReadMaskUnary`:
   - `TestApply_SubsetMask_ClearsOtherFields`: populate a `*widgetsv1.Widget` (import from testdata
     or use a hand-typed minimal proto); call `Apply` with `["display_name"]`; assert `DisplayName`
     is non-empty, `Color` / `Weight` / `Id` are zero (AC-001).
@@ -101,7 +101,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
   - `TestReadMaskUnary_NilResponse_NoPanic`: handler returns `nil, nil`; interceptor must not panic (AC-007).
   All existing fieldmask tests must still pass.
 
-- [ ] [C] T012: Add `TestGetWidget_ReadMask` integration scenario to
+- [X] [C] T012: Add `TestGetWidget_ReadMask` integration scenario to
   `testdata/toy/widgetsv1/server_test.go`:
   - Create a Widget, then call `GetWidget` with `read_mask{paths:["display_name"]}`.
   - Assert response has `DisplayName` non-empty, `Id` == `""`, `Color` == `""`, `Weight` == `0` (AC-008).
@@ -109,7 +109,7 @@ Each task produces a verifiable diff. Tags: `[S]` = mechanical (Sonnet),
 
 ## Phase 6 — Verification gate
 
-- [ ] [C] T013: Run the full verification gate:
+- [X] [C] T013: Run the full verification gate:
   - `go build ./...` from root — must compile clean.
   - `go vet ./...` from root — zero findings.
   - `go test ./middleware/...` — all new and existing tests pass.

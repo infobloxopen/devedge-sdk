@@ -10,6 +10,7 @@ option go_package = "github.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/authz/v1/authz.proto";
 
@@ -32,12 +33,18 @@ message Widget {
 }
 
 message CreateWidgetRequest { Widget widget = 1; }
-message GetWidgetRequest    { string id = 1; }
+message GetWidgetRequest    {
+  string id = 1;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 8;
+}
 message ListWidgetsRequest  {
   int32  page_size   = 1;
   string page_token  = 2;
   // AIP-148: include soft-deleted widgets when true.
   bool   show_deleted = 3;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 4;
 }
 message ListWidgetsResponse {
   repeated Widget widgets         = 1;

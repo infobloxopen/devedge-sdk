@@ -3,9 +3,11 @@ package middleware_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -117,4 +119,97 @@ func TestErrorMapper_UnmappedError_PassesThrough(t *testing.T) {
 			t.Fatalf("expected original sentinel error, got %v", err)
 		}
 	}
+}
+
+// AIP-193 detail tests
+
+func TestErrorMapper_NotFound_HasResourceInfoDetail(t *testing.T) {
+	err := runErrorMapper(t, persistence.ErrNotFound)
+	st, _ := status.FromError(err)
+	for _, d := range st.Details() {
+		if ri, ok := d.(*errdetails.ResourceInfo); ok {
+			if ri.Description != "resource not found" {
+				t.Fatalf("ResourceInfo.Description: got %q, want %q", ri.Description, "resource not found")
+			}
+			return
+		}
+	}
+	t.Fatal("expected ResourceInfo detail on ErrNotFound, found none")
+}
+
+func TestErrorMapper_Conflict_HasErrorInfoDetail(t *testing.T) {
+	err := runErrorMapper(t, persistence.ErrConflict)
+	st, _ := status.FromError(err)
+	for _, d := range st.Details() {
+		if ei, ok := d.(*errdetails.ErrorInfo); ok {
+			if ei.Reason != "ALREADY_EXISTS" {
+				t.Fatalf("ErrorInfo.Reason: got %q, want %q", ei.Reason, "ALREADY_EXISTS")
+			}
+			return
+		}
+	}
+	t.Fatal("expected ErrorInfo detail on ErrConflict, found none")
+}
+
+func TestErrorMapper_PreconditionFailed_HasErrorInfoDetail(t *testing.T) {
+	err := runErrorMapper(t, persistence.ErrPreconditionFailed)
+	st, _ := status.FromError(err)
+	for _, d := range st.Details() {
+		if ei, ok := d.(*errdetails.ErrorInfo); ok {
+			if ei.Reason != "PRECONDITION_FAILED" {
+				t.Fatalf("ErrorInfo.Reason: got %q, want %q", ei.Reason, "PRECONDITION_FAILED")
+			}
+			return
+		}
+	}
+	t.Fatal("expected ErrorInfo detail on ErrPreconditionFailed, found none")
+}
+
+func TestErrorMapper_FieldViolation_ReturnsBadRequestDetail(t *testing.T) {
+	fv := persistence.NewFieldViolation("color", "must be a hex code")
+	err := runErrorMapper(t, fv)
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status, got: %v", err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected codes.InvalidArgument, got %v", st.Code())
+	}
+	for _, d := range st.Details() {
+		if br, ok := d.(*errdetails.BadRequest); ok {
+			if len(br.FieldViolations) != 1 {
+				t.Fatalf("expected 1 FieldViolation, got %d", len(br.FieldViolations))
+			}
+			fvd := br.FieldViolations[0]
+			if fvd.Field != "color" {
+				t.Fatalf("FieldViolation.Field: got %q, want %q", fvd.Field, "color")
+			}
+			if fvd.Description != "must be a hex code" {
+				t.Fatalf("FieldViolation.Description: got %q, want %q", fvd.Description, "must be a hex code")
+			}
+			return
+		}
+	}
+	t.Fatal("expected BadRequest detail on FieldViolationError, found none")
+}
+
+func TestErrorMapper_WrappedFieldViolation_Unwraps(t *testing.T) {
+	fv := persistence.NewFieldViolation("weight", "must be positive")
+	wrapped := fmt.Errorf("outer: %w", fv)
+	err := runErrorMapper(t, wrapped)
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status, got: %v", err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected codes.InvalidArgument, got %v", st.Code())
+	}
+	for _, d := range st.Details() {
+		if br, ok := d.(*errdetails.BadRequest); ok {
+			if len(br.FieldViolations) == 1 && br.FieldViolations[0].Field == "weight" {
+				return
+			}
+		}
+	}
+	t.Fatal("expected BadRequest detail for wrapped FieldViolationError, found none")
 }
