@@ -32,6 +32,8 @@ const (
 	WidgetService_ArchiveWidget_FullMethodName      = "/toy.v1.WidgetService/ArchiveWidget"
 	WidgetService_BatchGetWidgets_FullMethodName    = "/toy.v1.WidgetService/BatchGetWidgets"
 	WidgetService_BatchDeleteWidgets_FullMethodName = "/toy.v1.WidgetService/BatchDeleteWidgets"
+	WidgetService_ProcessWidget_FullMethodName      = "/toy.v1.WidgetService/ProcessWidget"
+	WidgetService_GetOperationStatus_FullMethodName = "/toy.v1.WidgetService/GetOperationStatus"
 )
 
 // WidgetServiceClient is the client API for WidgetService service.
@@ -49,6 +51,10 @@ type WidgetServiceClient interface {
 	BatchGetWidgets(ctx context.Context, in *BatchGetWidgetsRequest, opts ...grpc.CallOption) (*BatchGetWidgetsResponse, error)
 	// AIP-137: soft-delete multiple widgets atomically.
 	BatchDeleteWidgets(ctx context.Context, in *BatchDeleteWidgetsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// AIP-151: start async processing; returns a pending OperationStatus immediately.
+	ProcessWidget(ctx context.Context, in *ProcessWidgetRequest, opts ...grpc.CallOption) (*OperationStatus, error)
+	// AIP-151: poll the status of a previously submitted ProcessWidget operation.
+	GetOperationStatus(ctx context.Context, in *GetOperationStatusRequest, opts ...grpc.CallOption) (*OperationStatus, error)
 }
 
 type widgetServiceClient struct {
@@ -139,6 +145,26 @@ func (c *widgetServiceClient) BatchDeleteWidgets(ctx context.Context, in *BatchD
 	return out, nil
 }
 
+func (c *widgetServiceClient) ProcessWidget(ctx context.Context, in *ProcessWidgetRequest, opts ...grpc.CallOption) (*OperationStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OperationStatus)
+	err := c.cc.Invoke(ctx, WidgetService_ProcessWidget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *widgetServiceClient) GetOperationStatus(ctx context.Context, in *GetOperationStatusRequest, opts ...grpc.CallOption) (*OperationStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OperationStatus)
+	err := c.cc.Invoke(ctx, WidgetService_GetOperationStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WidgetServiceServer is the server API for WidgetService service.
 // All implementations must embed UnimplementedWidgetServiceServer
 // for forward compatibility.
@@ -154,6 +180,10 @@ type WidgetServiceServer interface {
 	BatchGetWidgets(context.Context, *BatchGetWidgetsRequest) (*BatchGetWidgetsResponse, error)
 	// AIP-137: soft-delete multiple widgets atomically.
 	BatchDeleteWidgets(context.Context, *BatchDeleteWidgetsRequest) (*emptypb.Empty, error)
+	// AIP-151: start async processing; returns a pending OperationStatus immediately.
+	ProcessWidget(context.Context, *ProcessWidgetRequest) (*OperationStatus, error)
+	// AIP-151: poll the status of a previously submitted ProcessWidget operation.
+	GetOperationStatus(context.Context, *GetOperationStatusRequest) (*OperationStatus, error)
 	mustEmbedUnimplementedWidgetServiceServer()
 }
 
@@ -187,6 +217,12 @@ func (UnimplementedWidgetServiceServer) BatchGetWidgets(context.Context, *BatchG
 }
 func (UnimplementedWidgetServiceServer) BatchDeleteWidgets(context.Context, *BatchDeleteWidgetsRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BatchDeleteWidgets not implemented")
+}
+func (UnimplementedWidgetServiceServer) ProcessWidget(context.Context, *ProcessWidgetRequest) (*OperationStatus, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessWidget not implemented")
+}
+func (UnimplementedWidgetServiceServer) GetOperationStatus(context.Context, *GetOperationStatusRequest) (*OperationStatus, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetOperationStatus not implemented")
 }
 func (UnimplementedWidgetServiceServer) mustEmbedUnimplementedWidgetServiceServer() {}
 func (UnimplementedWidgetServiceServer) testEmbeddedByValue()                       {}
@@ -353,6 +389,42 @@ func _WidgetService_BatchDeleteWidgets_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WidgetService_ProcessWidget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProcessWidgetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WidgetServiceServer).ProcessWidget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WidgetService_ProcessWidget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WidgetServiceServer).ProcessWidget(ctx, req.(*ProcessWidgetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WidgetService_GetOperationStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOperationStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WidgetServiceServer).GetOperationStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WidgetService_GetOperationStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WidgetServiceServer).GetOperationStatus(ctx, req.(*GetOperationStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WidgetService_ServiceDesc is the grpc.ServiceDesc for WidgetService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -391,6 +463,14 @@ var WidgetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BatchDeleteWidgets",
 			Handler:    _WidgetService_BatchDeleteWidgets_Handler,
+		},
+		{
+			MethodName: "ProcessWidget",
+			Handler:    _WidgetService_ProcessWidget_Handler,
+		},
+		{
+			MethodName: "GetOperationStatus",
+			Handler:    _WidgetService_GetOperationStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

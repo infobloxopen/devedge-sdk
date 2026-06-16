@@ -18,6 +18,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 )
@@ -46,6 +47,9 @@ type Config struct {
 	Interceptors []grpc.UnaryServerInterceptor
 	// DeduplicationStore is the idempotency store for DeduplicateUnary. Defaults to MemoryDeduplicationStore (10-minute TTL) when nil.
 	DeduplicationStore middleware.DeduplicationStore
+	// LROStore is the operation store for long-running operations (AIP-151).
+	// Defaults to lro.NewMemoryStore(1h) when nil.
+	LROStore lro.Store
 }
 
 // Server is the assembled gRPC server (plus optional HTTP gateway).
@@ -71,6 +75,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.DeduplicationStore == nil {
 		cfg.DeduplicationStore = middleware.NewMemoryDeduplicationStore(10 * time.Minute)
+	}
+	if cfg.LROStore == nil {
+		cfg.LROStore = lro.NewMemoryStore(time.Hour)
 	}
 
 	// verbMap feeds FieldMaskUnary: FullMethod -> verb string.
@@ -203,6 +210,9 @@ func (s *Server) GRPCServer() *grpc.Server { return s.grpcSrv }
 
 // Rules returns the declared MethodRules this server was configured with.
 func (s *Server) Rules() []authz.MethodRule { return s.cfg.Rules }
+
+// LROStore returns the long-running operation store this server was configured with.
+func (s *Server) LROStore() lro.Store { return s.cfg.LROStore }
 
 // GatewayMux returns the HTTP gateway mux, or nil when no HTTP gateway is
 // configured.

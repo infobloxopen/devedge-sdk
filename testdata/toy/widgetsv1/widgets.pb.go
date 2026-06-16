@@ -724,6 +724,155 @@ func (x *BatchDeleteWidgetsRequest) GetIds() []string {
 	return nil
 }
 
+// AIP-151: long-running operation status for widget processing.
+type ProcessWidgetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProcessWidgetRequest) Reset() {
+	*x = ProcessWidgetRequest{}
+	mi := &file_widgets_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProcessWidgetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProcessWidgetRequest) ProtoMessage() {}
+
+func (x *ProcessWidgetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_widgets_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProcessWidgetRequest.ProtoReflect.Descriptor instead.
+func (*ProcessWidgetRequest) Descriptor() ([]byte, []int) {
+	return file_widgets_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ProcessWidgetRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type OperationStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Done          bool                   `protobuf:"varint,2,opt,name=done,proto3" json:"done,omitempty"`
+	Result        string                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OperationStatus) Reset() {
+	*x = OperationStatus{}
+	mi := &file_widgets_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OperationStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OperationStatus) ProtoMessage() {}
+
+func (x *OperationStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_widgets_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OperationStatus.ProtoReflect.Descriptor instead.
+func (*OperationStatus) Descriptor() ([]byte, []int) {
+	return file_widgets_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *OperationStatus) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *OperationStatus) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+func (x *OperationStatus) GetResult() string {
+	if x != nil {
+		return x.Result
+	}
+	return ""
+}
+
+type GetOperationStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOperationStatusRequest) Reset() {
+	*x = GetOperationStatusRequest{}
+	mi := &file_widgets_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOperationStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOperationStatusRequest) ProtoMessage() {}
+
+func (x *GetOperationStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_widgets_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOperationStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetOperationStatusRequest) Descriptor() ([]byte, []int) {
+	return file_widgets_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetOperationStatusRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
@@ -773,7 +922,15 @@ const file_widgets_proto_rawDesc = "" +
 	"\x17BatchGetWidgetsResponse\x12(\n" +
 	"\awidgets\x18\x01 \x03(\v2\x0e.toy.v1.WidgetR\awidgets\"-\n" +
 	"\x19BatchDeleteWidgetsRequest\x12\x10\n" +
-	"\x03ids\x18\x01 \x03(\tR\x03ids2\xe2\a\n" +
+	"\x03ids\x18\x01 \x03(\tR\x03ids\"&\n" +
+	"\x14ProcessWidgetRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"Q\n" +
+	"\x0fOperationStatus\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04done\x18\x02 \x01(\bR\x04done\x12\x16\n" +
+	"\x06result\x18\x03 \x01(\tR\x06result\"/\n" +
+	"\x19GetOperationStatusRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name2\xeb\t\n" +
 	"\rWidgetService\x12m\n" +
 	"\fCreateWidget\x12\x1b.toy.v1.CreateWidgetRequest\x1a\x0e.toy.v1.Widget\"0\x8a\xb5\x18\x11\n" +
 	"\x06create\x12\awidgets\x82\xd3\xe4\x93\x02\x15:\x06widget\"\v/v1/widgets\x12b\n" +
@@ -790,7 +947,11 @@ const file_widgets_proto_rawDesc = "" +
 	"\x0fBatchGetWidgets\x12\x1e.toy.v1.BatchGetWidgetsRequest\x1a\x1f.toy.v1.BatchGetWidgetsResponse\"/\x8a\xb5\x18\x0f\n" +
 	"\x04read\x12\awidgets\x82\xd3\xe4\x93\x02\x16\x12\x14/v1/widgets:batchGet\x12\x88\x01\n" +
 	"\x12BatchDeleteWidgets\x12!.toy.v1.BatchDeleteWidgetsRequest\x1a\x16.google.protobuf.Empty\"7\x8a\xb5\x18\x11\n" +
-	"\x06delete\x12\awidgets\x82\xd3\xe4\x93\x02\x1c:\x01*\"\x17/v1/widgets:batchDeleteBFZDgithub.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1b\x06proto3"
+	"\x06delete\x12\awidgets\x82\xd3\xe4\x93\x02\x1c:\x01*\"\x17/v1/widgets:batchDelete\x12\x7f\n" +
+	"\rProcessWidget\x12\x1c.toy.v1.ProcessWidgetRequest\x1a\x17.toy.v1.OperationStatus\"7\x8a\xb5\x18\x10\n" +
+	"\x05write\x12\awidgets\x82\xd3\xe4\x93\x02\x1d:\x01*\"\x18/v1/widgets/{id}:process\x12\x85\x01\n" +
+	"\x12GetOperationStatus\x12!.toy.v1.GetOperationStatusRequest\x1a\x17.toy.v1.OperationStatus\"3\x8a\xb5\x18\x0f\n" +
+	"\x04read\x12\awidgets\x82\xd3\xe4\x93\x02\x1a\x12\x18/v1/operations/{name=**}BFZDgithub.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1;widgetsv1b\x06proto3"
 
 var (
 	file_widgets_proto_rawDescOnce sync.Once
@@ -804,7 +965,7 @@ func file_widgets_proto_rawDescGZIP() []byte {
 	return file_widgets_proto_rawDescData
 }
 
-var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_widgets_proto_goTypes = []any{
 	(*Widget)(nil),                    // 0: toy.v1.Widget
 	(*CreateWidgetRequest)(nil),       // 1: toy.v1.CreateWidgetRequest
@@ -819,16 +980,19 @@ var file_widgets_proto_goTypes = []any{
 	(*BatchGetWidgetsRequest)(nil),    // 10: toy.v1.BatchGetWidgetsRequest
 	(*BatchGetWidgetsResponse)(nil),   // 11: toy.v1.BatchGetWidgetsResponse
 	(*BatchDeleteWidgetsRequest)(nil), // 12: toy.v1.BatchDeleteWidgetsRequest
-	(*timestamppb.Timestamp)(nil),     // 13: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),     // 14: google.protobuf.FieldMask
-	(*emptypb.Empty)(nil),             // 15: google.protobuf.Empty
+	(*ProcessWidgetRequest)(nil),      // 13: toy.v1.ProcessWidgetRequest
+	(*OperationStatus)(nil),           // 14: toy.v1.OperationStatus
+	(*GetOperationStatusRequest)(nil), // 15: toy.v1.GetOperationStatusRequest
+	(*timestamppb.Timestamp)(nil),     // 16: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),     // 17: google.protobuf.FieldMask
+	(*emptypb.Empty)(nil),             // 18: google.protobuf.Empty
 }
 var file_widgets_proto_depIdxs = []int32{
-	13, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
-	13, // 1: toy.v1.Widget.archived_time:type_name -> google.protobuf.Timestamp
+	16, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
+	16, // 1: toy.v1.Widget.archived_time:type_name -> google.protobuf.Timestamp
 	0,  // 2: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
-	14, // 3: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
-	14, // 4: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
+	17, // 3: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
+	17, // 4: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
 	0,  // 5: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
 	0,  // 6: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
 	0,  // 7: toy.v1.ArchiveWidgetResponse.widget:type_name -> toy.v1.Widget
@@ -841,16 +1005,20 @@ var file_widgets_proto_depIdxs = []int32{
 	8,  // 14: toy.v1.WidgetService.ArchiveWidget:input_type -> toy.v1.ArchiveWidgetRequest
 	10, // 15: toy.v1.WidgetService.BatchGetWidgets:input_type -> toy.v1.BatchGetWidgetsRequest
 	12, // 16: toy.v1.WidgetService.BatchDeleteWidgets:input_type -> toy.v1.BatchDeleteWidgetsRequest
-	0,  // 17: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
-	0,  // 18: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
-	4,  // 19: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
-	0,  // 20: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
-	7,  // 21: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
-	9,  // 22: toy.v1.WidgetService.ArchiveWidget:output_type -> toy.v1.ArchiveWidgetResponse
-	11, // 23: toy.v1.WidgetService.BatchGetWidgets:output_type -> toy.v1.BatchGetWidgetsResponse
-	15, // 24: toy.v1.WidgetService.BatchDeleteWidgets:output_type -> google.protobuf.Empty
-	17, // [17:25] is the sub-list for method output_type
-	9,  // [9:17] is the sub-list for method input_type
+	13, // 17: toy.v1.WidgetService.ProcessWidget:input_type -> toy.v1.ProcessWidgetRequest
+	15, // 18: toy.v1.WidgetService.GetOperationStatus:input_type -> toy.v1.GetOperationStatusRequest
+	0,  // 19: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
+	0,  // 20: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
+	4,  // 21: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
+	0,  // 22: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
+	7,  // 23: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
+	9,  // 24: toy.v1.WidgetService.ArchiveWidget:output_type -> toy.v1.ArchiveWidgetResponse
+	11, // 25: toy.v1.WidgetService.BatchGetWidgets:output_type -> toy.v1.BatchGetWidgetsResponse
+	18, // 26: toy.v1.WidgetService.BatchDeleteWidgets:output_type -> google.protobuf.Empty
+	14, // 27: toy.v1.WidgetService.ProcessWidget:output_type -> toy.v1.OperationStatus
+	14, // 28: toy.v1.WidgetService.GetOperationStatus:output_type -> toy.v1.OperationStatus
+	19, // [19:29] is the sub-list for method output_type
+	9,  // [9:19] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -867,7 +1035,7 @@ func file_widgets_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_widgets_proto_rawDesc), len(file_widgets_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
