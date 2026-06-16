@@ -15,6 +15,7 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -180,8 +181,10 @@ func (x *CreateAPIKeyRequest) GetApiKey() *APIKey {
 }
 
 type GetAPIKeyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// AIP-157: fields to return; empty means all fields.
+	ReadMask      *fieldmaskpb.FieldMask `protobuf:"bytes,3,opt,name=read_mask,json=readMask,proto3" json:"read_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -223,11 +226,20 @@ func (x *GetAPIKeyRequest) GetId() string {
 	return ""
 }
 
+func (x *GetAPIKeyRequest) GetReadMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.ReadMask
+	}
+	return nil
+}
+
 type ListAPIKeysRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PageSize      int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	ShowDeleted   bool                   `protobuf:"varint,3,opt,name=show_deleted,json=showDeleted,proto3" json:"show_deleted,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	PageSize    int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken   string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	ShowDeleted bool                   `protobuf:"varint,3,opt,name=show_deleted,json=showDeleted,proto3" json:"show_deleted,omitempty"`
+	// AIP-157: fields to return; empty means all fields.
+	ReadMask      *fieldmaskpb.FieldMask `protobuf:"bytes,4,opt,name=read_mask,json=readMask,proto3" json:"read_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -281,6 +293,13 @@ func (x *ListAPIKeysRequest) GetShowDeleted() bool {
 		return x.ShowDeleted
 	}
 	return false
+}
+
+func (x *ListAPIKeysRequest) GetReadMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.ReadMask
+	}
+	return nil
 }
 
 type ListAPIKeysResponse struct {
@@ -419,7 +438,7 @@ var File_apikey_proto protoreflect.FileDescriptor
 
 const file_apikey_proto_rawDesc = "" +
 	"\n" +
-	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xe1\x02\n" +
+	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xe1\x02\n" +
 	"\x06APIKey\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1d\n" +
@@ -435,14 +454,16 @@ const file_apikey_proto_rawDesc = "" +
 	"expireTime:1\xeaA.\n" +
 	"\x19apikey.example.com/APIKey\x12\x11apikeys/{api_key}\"A\n" +
 	"\x13CreateAPIKeyRequest\x12*\n" +
-	"\aapi_key\x18\x01 \x01(\v2\x11.apikey.v1.APIKeyR\x06apiKey\"\"\n" +
+	"\aapi_key\x18\x01 \x01(\v2\x11.apikey.v1.APIKeyR\x06apiKey\"[\n" +
 	"\x10GetAPIKeyRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"s\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x127\n" +
+	"\tread_mask\x18\x03 \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"\xac\x01\n" +
 	"\x12ListAPIKeysRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\x12!\n" +
-	"\fshow_deleted\x18\x03 \x01(\bR\vshowDeleted\"k\n" +
+	"\fshow_deleted\x18\x03 \x01(\bR\vshowDeleted\x127\n" +
+	"\tread_mask\x18\x04 \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"k\n" +
 	"\x13ListAPIKeysResponse\x12,\n" +
 	"\bapi_keys\x18\x01 \x03(\v2\x11.apikey.v1.APIKeyR\aapiKeys\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"%\n" +
@@ -481,25 +502,28 @@ var file_apikey_proto_goTypes = []any{
 	(*DeleteAPIKeyRequest)(nil),   // 5: apikey.v1.DeleteAPIKeyRequest
 	(*DeleteAPIKeyResponse)(nil),  // 6: apikey.v1.DeleteAPIKeyResponse
 	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil), // 8: google.protobuf.FieldMask
 }
 var file_apikey_proto_depIdxs = []int32{
-	7, // 0: apikey.v1.APIKey.delete_time:type_name -> google.protobuf.Timestamp
-	7, // 1: apikey.v1.APIKey.expire_time:type_name -> google.protobuf.Timestamp
-	0, // 2: apikey.v1.CreateAPIKeyRequest.api_key:type_name -> apikey.v1.APIKey
-	0, // 3: apikey.v1.ListAPIKeysResponse.api_keys:type_name -> apikey.v1.APIKey
-	1, // 4: apikey.v1.APIKeyService.CreateAPIKey:input_type -> apikey.v1.CreateAPIKeyRequest
-	2, // 5: apikey.v1.APIKeyService.GetAPIKey:input_type -> apikey.v1.GetAPIKeyRequest
-	3, // 6: apikey.v1.APIKeyService.ListAPIKeys:input_type -> apikey.v1.ListAPIKeysRequest
-	5, // 7: apikey.v1.APIKeyService.DeleteAPIKey:input_type -> apikey.v1.DeleteAPIKeyRequest
-	0, // 8: apikey.v1.APIKeyService.CreateAPIKey:output_type -> apikey.v1.APIKey
-	0, // 9: apikey.v1.APIKeyService.GetAPIKey:output_type -> apikey.v1.APIKey
-	4, // 10: apikey.v1.APIKeyService.ListAPIKeys:output_type -> apikey.v1.ListAPIKeysResponse
-	6, // 11: apikey.v1.APIKeyService.DeleteAPIKey:output_type -> apikey.v1.DeleteAPIKeyResponse
-	8, // [8:12] is the sub-list for method output_type
-	4, // [4:8] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	7,  // 0: apikey.v1.APIKey.delete_time:type_name -> google.protobuf.Timestamp
+	7,  // 1: apikey.v1.APIKey.expire_time:type_name -> google.protobuf.Timestamp
+	0,  // 2: apikey.v1.CreateAPIKeyRequest.api_key:type_name -> apikey.v1.APIKey
+	8,  // 3: apikey.v1.GetAPIKeyRequest.read_mask:type_name -> google.protobuf.FieldMask
+	8,  // 4: apikey.v1.ListAPIKeysRequest.read_mask:type_name -> google.protobuf.FieldMask
+	0,  // 5: apikey.v1.ListAPIKeysResponse.api_keys:type_name -> apikey.v1.APIKey
+	1,  // 6: apikey.v1.APIKeyService.CreateAPIKey:input_type -> apikey.v1.CreateAPIKeyRequest
+	2,  // 7: apikey.v1.APIKeyService.GetAPIKey:input_type -> apikey.v1.GetAPIKeyRequest
+	3,  // 8: apikey.v1.APIKeyService.ListAPIKeys:input_type -> apikey.v1.ListAPIKeysRequest
+	5,  // 9: apikey.v1.APIKeyService.DeleteAPIKey:input_type -> apikey.v1.DeleteAPIKeyRequest
+	0,  // 10: apikey.v1.APIKeyService.CreateAPIKey:output_type -> apikey.v1.APIKey
+	0,  // 11: apikey.v1.APIKeyService.GetAPIKey:output_type -> apikey.v1.APIKey
+	4,  // 12: apikey.v1.APIKeyService.ListAPIKeys:output_type -> apikey.v1.ListAPIKeysResponse
+	6,  // 13: apikey.v1.APIKeyService.DeleteAPIKey:output_type -> apikey.v1.DeleteAPIKeyResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_apikey_proto_init() }

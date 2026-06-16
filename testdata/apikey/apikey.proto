@@ -9,6 +9,7 @@ option go_package = "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/authz/v1/authz.proto";
 import "infoblox/field/v1/field.proto";
@@ -56,8 +57,18 @@ service APIKeyService {
 }
 
 message CreateAPIKeyRequest  { APIKey api_key = 1; }
-message GetAPIKeyRequest     { string id = 1; }
-message ListAPIKeysRequest   { int32 page_size = 1; string page_token = 2; bool show_deleted = 3; }
+message GetAPIKeyRequest     {
+  string id = 1;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 3;
+}
+message ListAPIKeysRequest   {
+  int32  page_size    = 1;
+  string page_token   = 2;
+  bool   show_deleted = 3;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 4;
+}
 message ListAPIKeysResponse  { repeated APIKey api_keys = 1; string next_page_token = 2; }
 message DeleteAPIKeyRequest  { string id = 1; }
 message DeleteAPIKeyResponse {}
