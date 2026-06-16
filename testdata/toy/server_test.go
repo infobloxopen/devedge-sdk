@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -486,7 +487,7 @@ func TestIntegration_HTTPGateway(t *testing.T) {
 	})
 
 	// 3. GET /v1/widgets?page_size=2 → 200 with next_page_token when >2 items exist.
-	t.Run("ListWidgets", func(t *testing.T) {
+	t.Run("ListWidgetsPage", func(t *testing.T) {
 		// Create a few more to ensure pagination triggers.
 		for i := range 3 {
 			body := fmt.Sprintf(`{"name":"paginate-%d"}`, i)
@@ -518,4 +519,67 @@ func TestIntegration_HTTPGateway(t *testing.T) {
 		}
 		t.Logf("list page1: %d items, next_page_token=%v", len(items), result["nextPageToken"])
 	})
+}
+
+// -----------------------------------------------------------------------
+// TestIntegration_ReadMask: GetWidget with read_mask returns only requested fields
+// -----------------------------------------------------------------------
+
+func TestIntegration_ReadMask(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	// Create a widget with all fields populated.
+	created, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget: &widgetsv1.Widget{
+			Id:          "mask-test-1",
+			DisplayName: "Blue Gadget",
+			Color:       "blue",
+			Weight:      42,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget: %v", err)
+	}
+	if created.Id == "" {
+		t.Fatal("created widget has empty id")
+	}
+
+	// Get with read_mask restricted to display_name only.
+	got, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{
+		Id:       created.Id,
+		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	if err != nil {
+		t.Fatalf("GetWidget with read_mask: %v", err)
+	}
+
+	// display_name must be retained.
+	if got.DisplayName != "Blue Gadget" {
+		t.Errorf("DisplayName: want %q, got %q", "Blue Gadget", got.DisplayName)
+	}
+	// All other fields must be zeroed by the read_mask.
+	if got.Id != "" {
+		t.Errorf("Id: want empty (cleared by read_mask), got %q", got.Id)
+	}
+	if got.Color != "" {
+		t.Errorf("Color: want empty (cleared by read_mask), got %q", got.Color)
+	}
+	if got.Weight != 0 {
+		t.Errorf("Weight: want 0 (cleared by read_mask), got %d", got.Weight)
+	}
+	if got.Etag != "" {
+		t.Errorf("Etag: want empty (cleared by read_mask), got %q", got.Etag)
+	}
+	t.Logf("read_mask=display_name: got widget with DisplayName=%q, Id=%q, Color=%q, Weight=%d",
+		got.DisplayName, got.Id, got.Color, got.Weight)
 }

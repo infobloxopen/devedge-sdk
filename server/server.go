@@ -1,8 +1,8 @@
 // Package server provides a batteries-included gRPC server builder for
 // Infoblox services. It assembles the framework interceptor chain (request-ID,
 // error mapping, tenant-ID, fail-closed authz, field-mask validation, ETag
-// preconditions) and, optionally, an HTTP/JSON gateway in front of the gRPC
-// endpoint.
+// preconditions, read-mask response shaping) and, optionally, an HTTP/JSON
+// gateway in front of the gRPC endpoint.
 package server
 
 import (
@@ -87,6 +87,7 @@ func New(cfg Config) (*Server, error) {
 		grpcauthz.UnaryServerInterceptor("sdk", authzOpts...),
 		middleware.FieldMaskUnary(verbMap),
 		etag.PreconditionUnary(),
+		middleware.ReadMaskUnary(),
 	}
 	chain = append(chain, cfg.Interceptors...)
 
