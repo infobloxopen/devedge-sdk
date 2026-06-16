@@ -3,6 +3,12 @@
 *.exe
 *.out
 *.test
+# Compiled protoc plugins / tools — build from ./cmd via `make generate` (never commit)
+/protoc-gen-storage
+/protoc-gen-ent
+/protoc-gen-svc
+/protoc-gen-devedge-authz
+/security-check
 
 # Go workspace files
 go.work

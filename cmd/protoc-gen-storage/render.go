@@ -515,6 +515,14 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	} else {
 		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
 	}
+	// Collect the regular (scalar, persisted) columns that a full update writes.
+	var regularFields []fieldInfo
+	for _, f := range msg.Fields {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+			continue
+		}
+		regularFields = append(regularFields, f)
+	}
 	fmt.Fprintf(b, "\tif len(fieldMask) > 0 {\n")
 	fmt.Fprintf(b, "\t\tdbCols := make([]string, 0, len(fieldMask))\n")
 	fmt.Fprintf(b, "\t\tfor _, f := range fieldMask {\n")
@@ -524,11 +532,52 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "\t\t\t}\n")
 	fmt.Fprintf(b, "\t\t\tdbCols = append(dbCols, col)\n")
 	fmt.Fprintf(b, "\t\t}\n")
-	fmt.Fprintf(b, "\t\tq = q.Select(dbCols)\n")
-	fmt.Fprintf(b, "\t}\n")
-	b.WriteString("\tif err := q.Updates(m).Error; err != nil {\n")
-	fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
-	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\t\t// Select makes GORM write the named columns even when their value is\n")
+	fmt.Fprintf(b, "\t\t// the zero value (false, 0, \"\"); a bare struct Updates would skip them.\n")
+	fmt.Fprintf(b, "\t\tif err := q.Select(dbCols).Updates(m).Error; err != nil {\n")
+	fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
+	fmt.Fprintf(b, "\t\t}\n")
+	if len(regularFields) > 0 {
+		fmt.Fprintf(b, "\t} else {\n")
+		fmt.Fprintf(b, "\t\t// No field mask: full update of every writable column via a map, so\n")
+		fmt.Fprintf(b, "\t\t// zero values (false, 0, \"\") persist — a struct Updates skips zero fields\n")
+		fmt.Fprintf(b, "\t\t// and would silently drop \"disable this\" / \"clear that\" updates.\n")
+		fmt.Fprintf(b, "\t\tupdates := map[string]interface{}{\n")
+		for _, f := range regularFields {
+			col := f.SnakeName
+			if f.ColumnName != "" {
+				col = f.ColumnName
+			}
+			fmt.Fprintf(b, "\t\t\t%q: m.%s,\n", col, goFieldName(f))
+		}
+		fmt.Fprintf(b, "\t\t}\n")
+		if msgHasSecrets {
+			for _, f := range msg.Fields {
+				if !f.IsSecret {
+					continue
+				}
+				gfn := goFieldName(f)
+				// Only rewrite the secret columns when the caller supplied a new value,
+				// otherwise the stored hash/cipher would be wiped to empty.
+				fmt.Fprintf(b, "\t\tif entity.%s != \"\" {\n", gfn)
+				fmt.Fprintf(b, "\t\t\tupdates[%q] = m.%sHash\n", f.SnakeName+"_hash", gfn)
+				fmt.Fprintf(b, "\t\t\tupdates[%q] = m.%sCipher\n", f.SnakeName+"_cipher", gfn)
+				fmt.Fprintf(b, "\t\t}\n")
+			}
+		}
+		fmt.Fprintf(b, "\t\tif err := q.Updates(updates).Error; err != nil {\n")
+		fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
+		fmt.Fprintf(b, "\t\t}\n")
+		fmt.Fprintf(b, "\t}\n")
+	} else {
+		// No writable scalar columns (id + secrets only): a struct update is
+		// sufficient — there are no zero-valued scalar columns to lose.
+		fmt.Fprintf(b, "\t} else {\n")
+		fmt.Fprintf(b, "\t\tif err := q.Updates(m).Error; err != nil {\n")
+		fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
+		fmt.Fprintf(b, "\t\t}\n")
+		fmt.Fprintf(b, "\t}\n")
+	}
 	fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n")
 
 	// Delete — soft (AIP-148) or hard depending on opt-in.

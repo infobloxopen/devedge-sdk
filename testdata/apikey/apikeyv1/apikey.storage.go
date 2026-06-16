@@ -230,10 +230,27 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 			}
 			dbCols = append(dbCols, col)
 		}
-		q = q.Select(dbCols)
-	}
-	if err := q.Updates(m).Error; err != nil {
-		return nil, fmt.Errorf("update APIKey: %w", err)
+		// Select makes GORM write the named columns even when their value is
+		// the zero value (false, 0, ""); a bare struct Updates would skip them.
+		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+			return nil, fmt.Errorf("update APIKey: %w", err)
+		}
+	} else {
+		// No field mask: full update of every writable column via a map, so
+		// zero values (false, 0, "") persist — a struct Updates skips zero fields
+		// and would silently drop "disable this" / "clear that" updates.
+		updates := map[string]interface{}{
+			"account_id": m.AccountId,
+			"key_prefix": m.KeyPrefix,
+			"label":      m.Label,
+		}
+		if entity.KeyValue != "" {
+			updates["key_value_hash"] = m.KeyValueHash
+			updates["key_value_cipher"] = m.KeyValueCipher
+		}
+		if err := q.Updates(updates).Error; err != nil {
+			return nil, fmt.Errorf("update APIKey: %w", err)
+		}
 	}
 	return r.Get(ctx, key)
 }

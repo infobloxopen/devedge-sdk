@@ -98,6 +98,64 @@ A `secret` field drives behavior across three packages:
 - **Security** (`seccheck.AssertNoSecretFieldsLeaked`) walks every response proto and fails if a
   secret field is non-empty (other than the literal `[REDACTED]`).
 
+## `(infoblox.field.v1.opts)` — storage constraints
+
+`secret` is the most visible option, but the same `FieldOptions` extension carries the storage
+constraints and column overrides the codegen plugins translate into the generated model:
+
+| Field | Number | Generates (GORM / ent) |
+|---|---|---|
+| `not_null` | 2 | `NOT NULL` constraint on the column (GORM tag `not null`). |
+| `unique` | 3 | `UNIQUE` index (GORM tag `uniqueIndex`). |
+| `index` | 4 | non-unique index (GORM tag `index`). |
+| `column_name` | 5 | overrides the default snake_case column name (GORM tag `column:<name>`). |
+| `column_type` | 6 | overrides the DB column type, e.g. `varchar(255)` (GORM tag `type:<type>`). |
+
+```proto
+message Widget {
+  string id    = 1;
+  string slug  = 2 [(infoblox.field.v1.opts) = {unique: true, not_null: true}];
+  string notes = 3 [(infoblox.field.v1.opts) = {column_type: "text"}];
+}
+```
+
+`unique` takes precedence over `index` (a unique index already covers the lookup). The constraints
+are applied by `db.AutoMigrate`; for production schemas drive DDL through
+[`infobloxopen/migrate`](../../reference/persistence/#migrations) rather than relying on
+AutoMigrate.
+
+## `(infoblox.field.v1.opts)` — relationships
+
+`FieldOptions` also declares ORM relationships on a message-typed (or repeated message-typed)
+field. `protoc-gen-storage` emits the corresponding GORM association tag (and `protoc-gen-ent` the
+equivalent edge):
+
+| Option | Number | Declare on | Generates (GORM) |
+|---|---|---|---|
+| `has_one` | 20 | a message field (1:1, FK on the *other* table) | `gorm:"foreignKey:<foreign_key>"` |
+| `has_many` | 21 | a repeated message field (1:N, FK on the *other* table) | `[]T gorm:"foreignKey:<foreign_key>"` |
+| `belongs_to` | 22 | a message field (the inverse — FK on *this* table) | `gorm:"foreignKey:<foreign_key>"` **plus** the FK column field |
+| `many_to_many` | 23 | a repeated message field (N:N via a join table) | `[]T gorm:"many2many:<join_table>"` |
+
+```proto
+import "infoblox/field/v1/field.proto";
+
+message Order {
+  string id      = 1;
+  string user_id = 2;
+  // belongs_to: the FK (user_id) lives on the orders table.
+  User   user    = 3 [(infoblox.field.v1.opts) = {belongs_to: {foreign_key: "user_id"}}];
+  // has_many: line_items.order_id is the FK on the other table.
+  repeated LineItem line_items = 4 [(infoblox.field.v1.opts) = {has_many: {foreign_key: "order_id"}}];
+}
+```
+
+`has_one`/`has_many`/`belongs_to` accept `foreign_key` and `association_foreign_key`; `has_many`
+also accepts `position_field` for an ordered association; `many_to_many` takes `join_table`,
+`foreign_key`, and `association_foreign_key`. A scalar repeated field with no relationship option is
+skipped in the GORM model (it needs JSONB serialization), so reach for these options whenever a
+field references another resource.
+
 ## Extension numbers
 
 The annotations are protobuf custom options:

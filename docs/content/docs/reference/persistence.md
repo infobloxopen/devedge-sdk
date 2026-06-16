@@ -20,38 +20,129 @@ type Repository[T any, K comparable] interface {
     Create(ctx context.Context, entity T) (T, error)
     Update(ctx context.Context, key K, entity T, fieldMask ...string) (T, error)
     Delete(ctx context.Context, key K) error
+    // Undelete restores a soft-deleted entity (AIP-149). Returns ErrNotFound when the
+    // entity does not exist, was never soft-deleted, or has been permanently purged.
+    // Implementations backed by hard-delete storage always return ErrNotFound.
+    Undelete(ctx context.Context, key K) (T, error)
 }
 ```
 
-The neutral seam. Its method set matches the API verb vocabulary (get/list/create/update/delete),
-so service code can depend on it and swap the underlying shape (GORM, ent, sqlc, hand-written)
-without changes. The generated GORM and ent repositories both satisfy it for their resource type
-(`Repository[*APIKey, string]`).
+The neutral seam. Its method set matches the API verb vocabulary (get/list/create/update/delete,
+plus AIP-149 `Undelete`), so service code can depend on it and swap the underlying shape (GORM,
+ent, sqlc, hand-written) without changes. The generated GORM and ent repositories both satisfy it
+for their resource type (`Repository[*APIKey, string]`). A resource that does not opt into
+soft-delete still gets an `Undelete` that returns `ErrNotFound`, so the seam stays uniform.
+
+### Update and the field mask
+
+`Update(ctx, key, entity, fieldMask...)` follows AIP-134:
+
+- **With a field mask** — only the named proto fields are written. Unknown names return
+  `codes.InvalidArgument`. Names are validated against the `<Msg>Columns` whitelist (below).
+- **Without a field mask** — every writable column is updated to the entity's value, **including
+  zero values** (`false`, `0`, `""`). The generated GORM repository writes via a column map so a
+  "disable this" (`active=false`) or "clear that" (`label=""`) update is persisted rather than
+  silently dropped. Secret columns are only rewritten when the entity carries a new secret value,
+  so a non-secret update never wipes the stored secret.
 
 ## ListOptions
 
 ```go
 type ListOptions struct {
-    Filter    string
-    PageSize  int
-    PageToken string
-    // (order/filter parameters for resource-oriented listing)
+    Filter      string // AIP-160 filter expression (see "Filtering & ordering")
+    OrderBy     string // AIP-132 order_by, e.g. "created_at desc, name"
+    PageSize    int    // generated repos default to 50 when <= 0
+    PageToken   string // opaque; generated repos encode the next offset as base64
+    ShowDeleted bool   // AIP-148: include soft-deleted resources in List (default false)
 }
 ```
 
-Resource-oriented list parameters: filter, page size, and an opaque page token. Generated
-repositories default `PageSize` to 50 and encode the next offset as a base64 page token.
+Resource-oriented list parameters. Generated repositories default `PageSize` to 50, encode the
+next offset as a base64 page token, and — for soft-delete resources — exclude deleted rows unless
+`ShowDeleted` is set.
+
+## Filtering & ordering (`persistence/filter`)
+
+```go
+import "github.com/infobloxopen/devedge-sdk/persistence/filter"
+```
+
+`ListOptions.Filter` and `ListOptions.OrderBy` are parsed by the `persistence/filter` subpackage,
+which the generated GORM repository calls for you. Both are **safe by construction**: literal
+values become bind arguments (never string-interpolated, so the grammar is SQL-injection-proof),
+and every field name is validated against a per-message whitelist.
+
+**Filter grammar (AIP-160 subset):**
+
+| Element | Supported |
+|---|---|
+| Comparison | `=`, `!=`, `<`, `<=`, `>`, `>=` |
+| Boolean | `AND`, `OR` (case-insensitive), parentheses for grouping |
+| Values | double-quoted strings (`"alice"`) and numbers (`5`) |
+
+```
+name = "alice" AND weight > 5
+(status = "active" OR status = "pending") AND weight >= 0
+```
+
+**Order_by grammar (AIP-132):** a comma-separated list of `field [asc|desc]` terms (direction
+case-insensitive; `asc` is the default), e.g. `created_at desc, name`.
+
+```go
+cond, err := filter.Parse(opts.Filter, APIKeyColumns)        // → parameterized WHERE
+clauses, err := filter.ParseOrderBy(opts.OrderBy, APIKeyColumns) // → validated ORDER BY terms
+```
+
+### The `<Msg>Columns` whitelist
+
+`protoc-gen-storage` emits a `var <Msg>Columns = map[string]string{…}` mapping each filterable
+proto field name → its DB column. `filter.Parse` / `filter.ParseOrderBy` reject any field not in
+this map with `codes.InvalidArgument`. This is what you point API clients at: only the fields in
+`<Msg>Columns` are valid in `filter` / `order_by` strings. Secret and output-only fields are
+deliberately excluded.
+
+## Generated repository helpers
+
+Beyond the `Repository` interface, `protoc-gen-storage` emits per-resource helpers when the proto
+opts into the relevant feature:
+
+- **`LookupBy<Field>Hash(ctx, hash) (T, error)`** — for each secret field, a constant-time-ish
+  lookup by stored hash (the secret is never compared in plaintext). Returns `ErrNotFound` when no
+  row matches.
+- **`PurgeExpired(ctx, before time.Time) (int64, error)`** — for resources with an `expire_time`
+  field, hard-deletes soft-deleted rows whose `expire_time` is before the cutoff; returns the count
+  removed.
+
+## BatchRepository[T,K]
+
+```go
+type BatchRepository[T any, K comparable] interface {
+    Repository[T, K]
+    BatchGet(ctx context.Context, keys []K) ([]T, error)   // AIP-137, atomic
+    BatchDelete(ctx context.Context, keys []K) error        // AIP-137, atomic
+}
+```
+
+The AIP-137 extension for multi-resource operations. Both methods are atomic: if any key is invalid
+the whole call fails without modifying any resource. `MemoryRepository` implements it; the
+generated GORM repository implements it when the service declares batch methods.
 
 ## Errors
 
 ```go
-var ErrNotFound = errors.New("persistence: not found")
+var (
+    ErrNotFound           = errors.New("persistence: not found")
+    ErrConflict           = errors.New("persistence: conflict")
+    ErrPreconditionFailed = errors.New("persistence: precondition failed")
+)
 ```
 
-Returned by `Get` (and the generated `LookupBy<Field>Hash`) when no record matches. Map it to
-`codes.NotFound` at the gRPC boundary — that mapping is what makes cross-tenant reads look like
-"does not exist", which is exactly what [tenant isolation](../../concepts/tenant-isolation/)
-requires.
+`ErrNotFound` is returned by `Get`, `Undelete`, and the generated `LookupBy<Field>Hash` when no
+record matches. Map it to `codes.NotFound` at the gRPC boundary — that mapping is what makes
+cross-tenant reads look like "does not exist", which is exactly what
+[tenant isolation](../../concepts/tenant-isolation/) requires. `ErrConflict` and
+`ErrPreconditionFailed` map to `codes.AlreadyExists` and `codes.FailedPrecondition` (e.g. an ETag
+mismatch).
 
 ## MemoryRepository
 

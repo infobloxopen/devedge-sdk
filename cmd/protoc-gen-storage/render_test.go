@@ -432,6 +432,55 @@ func TestRenderStorageFile_softDeleteWithTenant(t *testing.T) {
 	mustNotContain(t, out, "Unscoped().Delete(")
 }
 
+// Regression for issue 011 (devedge-assessment-2026-06-16): the no-field-mask
+// Update path must write a column map so zero values (false, 0, "") persist;
+// a bare struct Updates would silently drop them.
+func TestRenderStorageFile_updatePersistsZeroValues(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Widget",
+		PbPkgName:   "widgetsv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "display_name", GoFieldName: "DisplayName", GoType: "string", SnakeName: "display_name"},
+			{Name: "weight", GoFieldName: "Weight", GoType: "int32", SnakeName: "weight"},
+		},
+	}
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg})
+
+	// No-field-mask branch updates via a map of every writable column.
+	mustContain(t, out, "updates := map[string]interface{}{")
+	mustContain(t, out, `"display_name": m.DisplayName,`)
+	mustContain(t, out, `"weight": m.Weight,`)
+	mustContain(t, out, "q.Updates(updates)")
+	// Field-mask branch keeps Select (which also forces zero-value writes).
+	mustContain(t, out, "q.Select(dbCols).Updates(m)")
+}
+
+// Regression for issue 011: with secret fields, the no-field-mask map update must
+// only rewrite the secret hash/cipher columns when the caller supplied a new
+// value, so a non-secret update never wipes the stored secret.
+func TestRenderStorageFile_updateZeroValuesPreservesSecret(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Cred",
+		PbPkgName:   "credv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "label", GoFieldName: "Label", GoType: "string", SnakeName: "label"},
+			{Name: "token", GoFieldName: "Token", GoType: "string", SnakeName: "token", IsSecret: true},
+		},
+	}
+	out := renderStorageFile("credv1storage", []messageInfo{msg})
+
+	mustContain(t, out, "updates := map[string]interface{}{")
+	mustContain(t, out, `"label": m.Label,`)
+	// Secret columns are guarded by a presence check, not unconditionally written.
+	mustContain(t, out, `if entity.Token != "" {`)
+	mustContain(t, out, `updates["token_hash"] = m.TokenHash`)
+	mustContain(t, out, `updates["token_cipher"] = m.TokenCipher`)
+	// The plaintext secret is never a column in the update map.
+	mustNotContain(t, out, `"token": m.Token,`)
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {

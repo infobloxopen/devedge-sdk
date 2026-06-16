@@ -68,7 +68,8 @@ Two annotations ship with the SDK, registered in `github.com/infobloxopen/apis`:
 
 Extension numbers: `50001` (authz rule), `50003` (field opts) — both placeholder; reserve before broad adoption.
 
-Canonical Go import: `github.com/infobloxopen/apis/proto/infoblox/authz@v1.0.0-alpha.2`
+Canonical Go imports (versions per `go.mod`): `github.com/infobloxopen/apis/proto/infoblox/authz@v1.0.0-alpha.4`
+and `github.com/infobloxopen/apis/proto/infoblox/field@v1.0.0-alpha.1`
 
 The local `proto/` copy is a **buf codegen input only** — the canonical module is the single protoregistry registration. Never import both (two copies panic at `init`).
 

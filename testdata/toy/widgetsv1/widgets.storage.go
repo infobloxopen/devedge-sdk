@@ -183,10 +183,24 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 			}
 			dbCols = append(dbCols, col)
 		}
-		q = q.Select(dbCols)
-	}
-	if err := q.Updates(m).Error; err != nil {
-		return nil, fmt.Errorf("update Widget: %w", err)
+		// Select makes GORM write the named columns even when their value is
+		// the zero value (false, 0, ""); a bare struct Updates would skip them.
+		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+			return nil, fmt.Errorf("update Widget: %w", err)
+		}
+	} else {
+		// No field mask: full update of every writable column via a map, so
+		// zero values (false, 0, "") persist — a struct Updates skips zero fields
+		// and would silently drop "disable this" / "clear that" updates.
+		updates := map[string]interface{}{
+			"display_name": m.DisplayName,
+			"color":        m.Color,
+			"weight":       m.Weight,
+			"etag":         m.Etag,
+		}
+		if err := q.Updates(updates).Error; err != nil {
+			return nil, fmt.Errorf("update Widget: %w", err)
+		}
 	}
 	return r.Get(ctx, key)
 }

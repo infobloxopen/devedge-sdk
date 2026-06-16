@@ -60,8 +60,35 @@ type Repository[T any, K comparable] interface {
     Create(ctx context.Context, entity T) (T, error)
     Update(ctx context.Context, key K, entity T, fieldMask ...string) (T, error)
     Delete(ctx context.Context, key K) error
+    Undelete(ctx context.Context, key K) (T, error) // AIP-149; ErrNotFound on hard-delete stores
 }
 ```
+
+## Opening the database — logger configuration
+
+**You** own the `gorm.Open` call; the generated repository uses whatever `*gorm.DB` you hand its
+constructor, including that DB's logger. GORM's **default** logger writes every query — and every
+"record not found" — to stderr, complete with the SQL, the bound values (tenant ids included), and
+the `file.go:line` of the call site. That output never crosses the API boundary
+(`seccheck.AssertErrorMessagesClean` still passes), but it is noisy in dev and leaks internals into
+server logs in prod. Set the logger explicitly when you open the connection:
+
+```go
+import (
+    "gorm.io/gorm"
+    "gorm.io/gorm/logger"
+)
+
+db, err := gorm.Open(dialector, &gorm.Config{
+    // Silence the SQL/notfound spam; or use logger.Default.LogMode(logger.Warn)
+    // to keep slow-query + error logs without the per-query firehose.
+    Logger: logger.Default.LogMode(logger.Silent),
+})
+```
+
+To route GORM through your service's `slog`/structured logger instead, implement
+`logger.Interface` (or adapt one of the community bridges) and pass it as `Logger`. The repository
+inherits it for every query.
 
 ## Two ways to plug a shape in
 
