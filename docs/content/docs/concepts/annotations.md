@@ -6,9 +6,11 @@ weight: 2
 devedge-sdk's contract is two proto annotations. They are **engine-neutral**: they name *what*
 is required, not *how* it is evaluated, so they carry no policy-engine-specific fields.
 
-The annotations come from `infoblox/authz/v1/authz.proto`. The canonical schema lives in the
-[`infobloxopen/apis`](https://github.com/infobloxopen/apis) module; the SDK depends on its
-generated Go bindings (`github.com/infobloxopen/apis/proto/infoblox/authz/v1`).
+The two annotations live in `infoblox/authz/v1/authz.proto` (the method rule) and
+`infoblox/field/v1/field.proto` (the field options). The canonical schemas live in the
+[`infobloxopen/apis`](https://github.com/infobloxopen/apis) module; the SDK depends on their
+generated Go bindings (`github.com/infobloxopen/apis/proto/infoblox/authz/v1` and
+`.../infoblox/field/v1`).
 
 ## `(infoblox.authz.v1.rule)` — method authorization
 
@@ -61,23 +63,27 @@ That single set feeds **both** enforcement (the interceptor's rule table) **and*
 catalog (`catalog.Build`), which renders per-resource verbs, the endpoints implementing each, and
 the View/Manage intent groups.
 
-## `(infoblox.authz.v1.field).secret` — secret fields
+## `(infoblox.field.v1.opts).secret` — secret fields
 
-Attach a `FieldRule` to a message field to mark it sensitive:
+Attach `FieldOptions` (the `infoblox.field.v1.opts` extension) to a message field to mark it
+sensitive. The proto must `import "infoblox/field/v1/field.proto"`:
 
 ```proto
+import "infoblox/field/v1/field.proto";
+
 message APIKey {
   string id         = 1;
   string name       = 2;
   string account_id = 3;
   // key_value is raw API key material. Hashed for lookup, encrypted for recovery,
   // never stored as plaintext, never returned after creation.
-  string key_value  = 4 [(infoblox.authz.v1.field).secret = true];
+  string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
   string key_prefix = 5; // first 8 chars, for display — NOT secret
 }
 ```
 
-`FieldRule` has one field:
+`FieldOptions` also carries storage constraints and ORM relationship options; the field that drives
+secret handling is `secret`:
 
 | Field | Number | Meaning |
 |---|---|---|
@@ -98,14 +104,14 @@ The annotations are protobuf custom options:
 
 ```proto
 extend google.protobuf.MethodOptions {
-  Rule rule = 50001;
+  Rule rule = 50001;          // (infoblox.authz.v1.rule)
 }
 extend google.protobuf.FieldOptions {
-  FieldRule field = 50002;
+  FieldOptions opts = 50003;  // (infoblox.field.v1.opts)
 }
 ```
 
-Both numbers (`50001`, `50002`) are in the protobuf **50000–99999 "internal use"** range. Before
+Both numbers (`50001`, `50003`) are in the protobuf **50000–99999 "internal use"** range. Before
 any cross-org publication, obtain a globally-unique number from the protobuf registry.
 
 {{< callout type="warning" >}}

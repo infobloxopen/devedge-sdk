@@ -8,7 +8,7 @@ import "github.com/infobloxopen/devedge-sdk/secret"
 ```
 
 Package `secret` provides encrypt, decrypt, and hash operations for secret fields. It is the seam
-behind the `(infoblox.authz.v1.field).secret` annotation: generated storage code calls an
+behind the `(infoblox.field.v1.opts).secret` annotation: generated storage code calls an
 `Encryptor` to hash and encrypt secret fields and never stores plaintext.
 
 ## Encryptor

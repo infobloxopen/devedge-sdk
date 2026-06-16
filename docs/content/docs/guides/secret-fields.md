@@ -9,12 +9,14 @@ This guide follows the full lifecycle: proto annotation → generated columns �
 ## 1. Annotate the field
 
 ```proto
+import "infoblox/field/v1/field.proto";
+
 message APIKey {
   string id         = 1;
   string name       = 2;
   string account_id = 3;
   // key_value is raw API key material — hashed for lookup, encrypted for recovery.
-  string key_value  = 4 [(infoblox.authz.v1.field).secret = true];
+  string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
   string key_prefix = 5; // first 8 chars, for display — NOT secret
 }
 ```

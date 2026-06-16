@@ -26,8 +26,19 @@ type Config struct {
     // Authorizer is the pluggable decision point.
     // Defaults to authz.NewDevAuthorizer() (default-deny) if nil.
     Authorizer authz.Authorizer
+    // PrincipalFunc derives the authz.Principal from each request (threaded to
+    // grpcauthz.WithPrincipalFunc). nil → empty principal → every non-public
+    // call is denied. Use grpcauthz.DevPrincipalFunc() in dev; a verified-token
+    // function in production.
+    PrincipalFunc grpcauthz.PrincipalFunc
     // Interceptors are additional unary interceptors appended after the framework chain.
     Interceptors []grpc.UnaryServerInterceptor
+    // DeduplicationStore backs the idempotency interceptor. Defaults to an
+    // in-memory store (10-minute TTL) when nil.
+    DeduplicationStore middleware.DeduplicationStore
+    // LROStore backs long-running operations (AIP-151). Defaults to an in-memory
+    // store (1-hour TTL) when nil.
+    LROStore lro.Store
 }
 ```
 
@@ -37,7 +48,10 @@ type Config struct {
 | `HTTPAddr` | no | `""` (disabled) | enables the grpc-gateway HTTP/JSON proxy |
 | `Rules` | no* | `nil` | feeds **both** authz enforcement and field-mask verb lookup; *required in practice or every non-public call is denied |
 | `Authorizer` | no | `authz.NewDevAuthorizer()` (no grants → deny all) | swap for OPA/Cedar/remote PDP |
+| `PrincipalFunc` | no* | `nil` → empty principal | how the caller's identity is derived; *without it **no grant can match**, so every non-public call is denied. Use `grpcauthz.DevPrincipalFunc()` in dev, a verified-token function in prod |
 | `Interceptors` | no | `nil` | appended **after** the framework chain |
+| `DeduplicationStore` | no | in-memory (10m TTL) | idempotency replay store for `DeduplicateUnary` |
+| `LROStore` | no | in-memory (1h TTL) | long-running operation store (AIP-151) |
 
 `DefaultGRPCAddr` is `":9090"`.
 
@@ -58,9 +72,12 @@ chain := []grpc.UnaryServerInterceptor{
     middleware.RequestIDUnary(),
     middleware.ErrorMapperUnary(),
     middleware.TenantIDUnary(),
-    grpcauthz.UnaryServerInterceptor("sdk", authzOpts...), // fail-closed
+    grpcauthz.UnaryServerInterceptor("sdk", authzOpts...), // fail-closed; authzOpts adds WithPrincipalFunc when Config.PrincipalFunc is set
     middleware.FieldMaskUnary(verbMap),                    // verbMap built from cfg.Rules
     etag.PreconditionUnary(),
+    middleware.ReadMaskUnary(),                            // AIP-157 response field selection
+    middleware.ValidateOnlyUnary(),                        // short-circuit validate_only requests
+    middleware.DeduplicateUnary(cfg.DeduplicationStore),   // idempotency replay
 }
 chain = append(chain, cfg.Interceptors...)
 ```
@@ -104,6 +121,7 @@ import (
     "syscall"
 
     "github.com/infobloxopen/devedge-sdk/authz"
+    "github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
     "github.com/infobloxopen/devedge-sdk/server"
 
     "github.com/example/widget/widgetv1"
@@ -123,6 +141,10 @@ func main() {
             Verbs:    []authz.Verb{"*"},
             Resource: "*",
         }),
+        // Dev: derive the principal from request metadata so the grant above can
+        // match (account-id → Tenant, groups → group:<name>). In production use a
+        // PrincipalFunc backed by a verified token, never raw client headers.
+        PrincipalFunc: grpcauthz.DevPrincipalFunc(),
     })
     if err != nil {
         log.Fatal(err)
@@ -141,3 +163,23 @@ func main() {
     log.Println("shut down cleanly")
 }
 ```
+
+## Make an authorized request
+
+`server.New` installs a gateway header matcher that forwards the identity headers `account-id`,
+`subject`, and `groups` into gRPC metadata, and `grpcauthz.DevPrincipalFunc()` (wired above) turns
+them into the `authz.Principal`. So the grant `{Tenant: "t1", Subjects: ["group:admin"]}`
+authorizes a caller who presents `account-id: t1` and `groups: admin`:
+
+```bash
+# Allowed — identity matches the dev grant:
+curl -s -X POST localhost:8080/v1/widgets \
+  -H 'account-id: t1' -H 'groups: admin' \
+  -d '{"name": "w1"}'
+
+# Denied — no identity → empty principal → fail closed:
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/v1/widgets/w1   # 403
+```
+
+In production, set `PrincipalFunc` to one that reads a **verified** token (never raw client
+headers) and swap `Authorizer` for your PDP — nothing else in the service changes.

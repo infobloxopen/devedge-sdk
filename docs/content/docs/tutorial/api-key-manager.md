@@ -28,6 +28,7 @@ option go_package = "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv
 
 import "google/api/annotations.proto";
 import "infoblox/authz/v1/authz.proto";
+import "infoblox/field/v1/field.proto";
 
 message APIKey {
   string id         = 1;
@@ -35,7 +36,7 @@ message APIKey {
   string account_id = 3;
   // key_value is raw API key material. The storage layer hashes and encrypts it;
   // it is cleared in all responses after creation.
-  string key_value  = 4 [(infoblox.authz.v1.field).secret = true];
+  string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
   string key_prefix = 5; // first 8 chars, for display (NOT secret)
 }
 
@@ -266,19 +267,24 @@ without a restart.
 de project up        # boots the service + a Postgres backing store
 ```
 
-Then exercise the HTTP gateway (mapped from the proto's `google.api.http` options):
+Then exercise the HTTP gateway (mapped from the proto's `google.api.http` options). The service is
+wired with `PrincipalFunc: grpcauthz.DevPrincipalFunc()` and a dev grant for `group:admins` (see the
+[server reference](../../reference/server.md)), and `server.New`'s gateway forwards the
+`account-id`/`groups` headers — so the caller's identity reaches authz:
 
 ```bash
-# Create a key (returns key_value exactly once).
+# Create a key (returns key_value exactly once). The mapping is {post: "/v1/apikeys",
+# body: "api_key"}, so the body is the BARE APIKey object — grpc-gateway decodes it
+# straight into the api_key field. Do NOT wrap it in {"api_key": {...}}.
 curl -s -X POST localhost:8080/v1/apikeys \
-  -H 'account-id: alice' \
-  -d '{"api_key": {"name": "ci-bot", "key_value": "sk_live_xxx"}}'
+  -H 'account-id: alice' -H 'groups: admins' \
+  -d '{"name": "ci-bot", "key_value": "sk_live_xxx"}'
 
 # Read it back — key_value is now empty.
-curl -s localhost:8080/v1/apikeys/$ID -H 'account-id: alice'
+curl -s localhost:8080/v1/apikeys/$ID -H 'account-id: alice' -H 'groups: admins'
 
 # bob cannot see alice's key → 404.
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/v1/apikeys/$ID -H 'account-id: bob'
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/v1/apikeys/$ID -H 'account-id: bob' -H 'groups: admins'
 ```
 
 When you're done:

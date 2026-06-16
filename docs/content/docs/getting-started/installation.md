@@ -57,6 +57,18 @@ go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-ent@latest
 go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@latest
 ```
 
+If you expose an HTTP/JSON gateway (the quickstart's `curl` examples and the
+[Define a service](../../guides/define-a-service/) buf template both do), also install the
+**third-party** grpc-gateway plugin. It is independently versioned, so `@latest` is correct here:
+
+```bash
+go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
+```
+
+Its `google/api/*.proto` imports (`annotations.proto`, `http.proto`) come from the
+`buf.build/googleapis/googleapis` module — add it to your `buf.yaml` `deps` and run `buf dep update`
+(see [Define a service](../../guides/define-a-service/)).
+
 | Plugin | Output |
 |---|---|
 | `protoc-gen-svc` | the service scaffold (`*.svc.go`) |

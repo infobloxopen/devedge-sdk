@@ -1,9 +1,14 @@
 ---
 name: build-run
-description: Build devedge-sdk. It is a library (no app binary) — "running" means exercising it from the toy integration tests.
+description: Build devedge-sdk (SDK-internal — for maintainers of the SDK repo). It is a library (no app binary) — "running" means exercising it from the toy integration tests. Building/running a service that USES the SDK? follow the docs quickstart, not these make targets.
 ---
 
 # Build
+
+> **Audience: devedge-sdk maintainers.** These targets build the SDK repo itself. If you are
+> building a *service that imports* devedge-sdk, follow the docs quickstart
+> (`docs/content/docs/getting-started/quickstart.md`); your service has its own `main`, `buf`, and
+> `go build`.
 
 ```
 make build             # go build ./... (root module)
