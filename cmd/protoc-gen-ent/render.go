@@ -9,8 +9,10 @@ import (
 
 // entMessageInfo describes a proto resource message for ent schema generation.
 type entMessageInfo struct {
-	MessageName string // Go message name (e.g. "APIKey")
-	Fields      []entFieldInfo
+	MessageName   string // Go message name (e.g. "APIKey")
+	Fields        []entFieldInfo
+	SoftDelete    bool // true when the message has a delete_time OUTPUT_ONLY Timestamp field (AIP-148)
+	HasExpireTime bool // true when the message has an expire_time OUTPUT_ONLY Timestamp field (AIP-148)
 }
 
 // entFieldInfo describes a single proto message field for ent schema generation.
@@ -94,6 +96,7 @@ func renderEntSchema(msg entMessageInfo) string {
 	}
 
 	hasTenant := msgHasTenantField(msg)
+	hasSoftDelete := msg.SoftDelete
 	hasSecret := msgHasSecretField(msg)
 	hasIndex := msgHasIndexField(msg)
 	hasEdges := msgHasEdges(msg)
@@ -106,7 +109,7 @@ func renderEntSchema(msg entMessageInfo) string {
 	// Imports. The index package is only needed when at least one index is
 	// emitted (secret fields or index-annotated fields). The edge package is
 	// only needed when relationship annotations are present. The entrepo
-	// package is only needed when TenantMixin is referenced.
+	// package is only needed when TenantMixin or SoftDeleteMixin is referenced.
 	b.WriteString("import (\n")
 	b.WriteString("\t\"entgo.io/ent\"\n")
 	if hasEdges {
@@ -116,7 +119,7 @@ func renderEntSchema(msg entMessageInfo) string {
 	if hasSecret || hasIndex {
 		b.WriteString("\t\"entgo.io/ent/schema/index\"\n")
 	}
-	if hasTenant {
+	if hasTenant || hasSoftDelete {
 		b.WriteString("\n\t\"github.com/infobloxopen/devedge-sdk/persistence/entrepo\"\n")
 	}
 	b.WriteString(")\n\n")
@@ -127,14 +130,17 @@ func renderEntSchema(msg entMessageInfo) string {
 	b.WriteString("\tent.Schema\n")
 	b.WriteString("}\n\n")
 
-	// Mixin(): emitted only when there is at least one mixin to apply. Today
-	// that is TenantMixin, added when the proto message carries account_id.
-	if hasTenant {
+	// Mixin(): emitted when any mixin is needed (TenantMixin, SoftDeleteMixin).
+	if hasTenant || hasSoftDelete {
 		fmt.Fprintf(&b, "// Mixin returns the mixins applied to %s.\n", msg.MessageName)
-		b.WriteString("// TenantMixin adds the account_id field and tenant-scoping interceptor.\n")
 		fmt.Fprintf(&b, "func (%s) Mixin() []ent.Mixin {\n", msg.MessageName)
 		b.WriteString("\treturn []ent.Mixin{\n")
-		b.WriteString("\t\tentrepo.TenantMixin{},\n")
+		if hasTenant {
+			b.WriteString("\t\tentrepo.TenantMixin{},\n")
+		}
+		if hasSoftDelete {
+			b.WriteString("\t\tentrepo.SoftDeleteMixin{},\n")
+		}
 		b.WriteString("\t}\n")
 		b.WriteString("}\n\n")
 	}
@@ -185,6 +191,12 @@ func renderEntSchema(msg entMessageInfo) string {
 			}
 			fmt.Fprintf(&b, "\t\t%s,\n", chain)
 		}
+	}
+	// AIP-148 TTL: expire_time is excluded from msg.Fields (detected in main.go)
+	// but still needs a Time field in the ent schema.
+	if msg.HasExpireTime {
+		b.WriteString("\t\tfield.Time(\"expire_time\").Optional().Nillable().\n")
+		b.WriteString("\t\t\tComment(\"AIP-148 TTL: soft-delete rows may be purged after this time.\"),\n")
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")

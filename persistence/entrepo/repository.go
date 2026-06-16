@@ -22,15 +22,20 @@ type UpdateFn[T any, K comparable] func(ctx context.Context, key K, entity T, fi
 // DeleteFn deletes entity by key.
 type DeleteFn[K comparable] func(ctx context.Context, key K) error
 
+// UndeleteFn restores a soft-deleted entity by key (AIP-149).
+type UndeleteFn[T any, K comparable] func(ctx context.Context, key K) (T, error)
+
 // EntRepository adapts ent-generated client functions to persistence.Repository[T,K].
 // Construct via New; each function field wraps the corresponding ent client method.
 type EntRepository[T any, K comparable] struct {
-	Enc     secret.Encryptor // may be nil if no secret fields
-	Create_ CreateFn[T]
-	Get_    GetFn[T, K]
-	List_   ListFn[T]
-	Update_ UpdateFn[T, K]
-	Delete_ DeleteFn[K]
+	Enc       secret.Encryptor // may be nil if no secret fields
+	Create_   CreateFn[T]
+	Get_      GetFn[T, K]
+	List_     ListFn[T]
+	Update_   UpdateFn[T, K]
+	Delete_   DeleteFn[K]
+	// Undelete_ is optional; when nil, Undelete always returns persistence.ErrNotFound.
+	Undelete_ UndeleteFn[T, K]
 }
 
 func (r *EntRepository[T, K]) Create(ctx context.Context, entity T) (T, error) {
@@ -51,6 +56,16 @@ func (r *EntRepository[T, K]) Update(ctx context.Context, key K, entity T, field
 
 func (r *EntRepository[T, K]) Delete(ctx context.Context, key K) error {
 	return r.Delete_(ctx, key)
+}
+
+// Undelete implements [persistence.Repository]. Delegates to Undelete_ when set;
+// otherwise returns persistence.ErrNotFound (hard-delete or not-yet-wired storage).
+func (r *EntRepository[T, K]) Undelete(ctx context.Context, key K) (T, error) {
+	if r.Undelete_ != nil {
+		return r.Undelete_(ctx, key)
+	}
+	var zero T
+	return zero, persistence.ErrNotFound
 }
 
 // compile-time check

@@ -30,7 +30,14 @@ func TestRenderStorageFile_basic(t *testing.T) {
 	mustContain(t, out, "ETag")
 	mustContain(t, out, "CreatedAt")
 	mustContain(t, out, "UpdatedAt")
-	mustContain(t, out, "gorm.DeletedAt")
+	// F020: no delete_time field → no DeletedAt column, no ShowDeleted, no real Undelete.
+	mustNotContain(t, out, "gorm.DeletedAt")
+	mustNotContain(t, out, "opts.ShowDeleted")
+	mustNotContain(t, out, "deleted_at IS NOT NULL")
+	// Stub Undelete is emitted to satisfy the persistence.Repository interface.
+	mustContain(t, out, "func (r *WidgetRepository) Undelete(")
+	// Hard delete uses Unscoped().
+	mustContain(t, out, "Unscoped()")
 	mustContain(t, out, "type WidgetRepository struct")
 	mustContain(t, out, "NewWidgetRepository")
 	mustContain(t, out, "persistence.Repository")
@@ -322,6 +329,107 @@ func TestRenderStorageFile_hasManyRepeatedField(t *testing.T) {
 	mustNotContain(t, out, "TODO: repeated field comments skipped")
 	mustContain(t, out, `Comments []Comment`)
 	mustContain(t, out, `foreignKey:post_id`)
+}
+
+// F020: soft-delete tests (AC-001 through AC-007).
+
+func TestRenderStorageFile_softDelete(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Widget",
+		SoftDelete:  true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg})
+
+	// AC-001: soft-delete model carries gorm.DeletedAt.
+	mustContain(t, out, "gorm.DeletedAt")
+
+	// AC-002: full Undelete implementation (not a stub).
+	mustContain(t, out, "func (r *WidgetRepository) Undelete(")
+	mustContain(t, out, "Unscoped()")
+	mustContain(t, out, "deleted_at IS NOT NULL")
+	mustContain(t, out, `Update("deleted_at", nil)`)
+	mustContain(t, out, "RowsAffected == 0")
+	mustContain(t, out, "persistence.ErrNotFound")
+
+	// AC-003: soft Delete does NOT chain Unscoped before Delete.
+	mustNotContain(t, out, "Unscoped().Delete(")
+
+	// AC-004: List has ShowDeleted branch.
+	mustContain(t, out, "opts.ShowDeleted")
+	mustContain(t, out, "q.Unscoped()")
+
+	// AC-005: fromModel populates delete_time.
+	mustContain(t, out, "m.DeletedAt.Valid")
+	mustContain(t, out, "timestamppb.New(m.DeletedAt.Time)")
+	mustNotContain(t, out, "m.DeleteTime = ")  // OUTPUT_ONLY: toModel never copies it
+
+	// AC-007: column map includes delete_time.
+	mustContain(t, out, `"delete_time": "deleted_at"`)
+
+	// timestamppb import present.
+	mustContain(t, out, "timestamppb")
+}
+
+func TestRenderStorageFile_expireTime(t *testing.T) {
+	msg := messageInfo{
+		MessageName:   "APIKey",
+		SoftDelete:    true,
+		HasExpireTime: true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "label", GoType: "string", SnakeName: "label"},
+		},
+	}
+	out := renderStorageFile("apikeyv1storage", []messageInfo{msg})
+
+	// Model has both DeletedAt and ExpireTime.
+	mustContain(t, out, "gorm.DeletedAt")
+	mustContain(t, out, "ExpireTime sql.NullTime")
+	mustContain(t, out, "column:expire_time")
+
+	// fromModel populates expire_time.
+	mustContain(t, out, "m.ExpireTime.Valid")
+	mustContain(t, out, "timestamppb.New(m.ExpireTime.Time)")
+
+	// AC-007: column map includes expire_time.
+	mustContain(t, out, `"expire_time": "expire_time"`)
+
+	// PurgeExpired emitted.
+	mustContain(t, out, "func (r *APIKeyRepository) PurgeExpired(")
+	mustContain(t, out, "expire_time IS NOT NULL AND expire_time <= ?")
+	mustContain(t, out, "res.RowsAffected")
+
+	// database/sql import present.
+	mustContain(t, out, `"database/sql"`)
+}
+
+func TestRenderStorageFile_softDeleteWithTenant(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Record",
+		SoftDelete:  true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "value", GoType: "string", SnakeName: "value"},
+		},
+	}
+	out := renderStorageFile("recordv1storage", []messageInfo{msg})
+
+	// Undelete has tenant scoping BEFORE the deleted_at predicate.
+	mustContain(t, out, "func (r *RecordRepository) Undelete(")
+	mustContain(t, out, "TenantIDFromContext")
+	mustContain(t, out, "deleted_at IS NOT NULL")
+
+	// ShowDeleted appears before tenant WHERE in List.
+	mustContain(t, out, "opts.ShowDeleted")
+	mustContain(t, out, `"account_id = ?"`)
+
+	// Soft delete: no Unscoped in the Delete method itself.
+	mustNotContain(t, out, "Unscoped().Delete(")
 }
 
 func mustContain(t *testing.T, s, substr string) {

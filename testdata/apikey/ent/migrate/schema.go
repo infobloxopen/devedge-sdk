@@ -12,10 +12,13 @@ var (
 	APIKeysColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
 		{Name: "account_id", Type: field.TypeString},
+		{Name: "delete_time", Type: field.TypeTime, Nullable: true},
 		{Name: "name", Type: field.TypeString, Nullable: true},
 		{Name: "key_value_hash", Type: field.TypeString, Nullable: true},
 		{Name: "key_value_cipher", Type: field.TypeString, Nullable: true},
 		{Name: "key_prefix", Type: field.TypeString, Nullable: true},
+		{Name: "label", Type: field.TypeString, Nullable: true},
+		{Name: "expire_time", Type: field.TypeTime, Nullable: true},
 	}
 	// APIKeysTable holds the schema information for the "api_keys" table.
 	APIKeysTable = &schema.Table{
@@ -26,7 +29,7 @@ var (
 			{
 				Name:    "apikey_key_value_hash",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[3]},
+				Columns: []*schema.Column{APIKeysColumns[4]},
 			},
 		},
 	}

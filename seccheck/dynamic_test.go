@@ -146,3 +146,129 @@ func TestAssertErrorMessagesClean_UnexpectedSuccess(t *testing.T) {
 		t.Errorf("expected Warning severity, got %v", findings[0].Severity)
 	}
 }
+
+// --- AssertCrossAccountIsolation soft-delete tests (F020 / FR-015) ---
+
+// fakeSoftDeleteStore is a trivial in-memory store for isolation testing.
+type fakeSoftDeleteStore struct {
+	items   map[string]bool // id → exists
+	deleted map[string]bool // id → soft-deleted
+}
+
+func newFakeStore() *fakeSoftDeleteStore {
+	return &fakeSoftDeleteStore{items: map[string]bool{}, deleted: map[string]bool{}}
+}
+
+func (s *fakeSoftDeleteStore) create(accountID string) (string, error) {
+	id := accountID + "-item"
+	s.items[id] = true
+	return id, nil
+}
+
+func (s *fakeSoftDeleteStore) read(accountID, id string) error {
+	if !s.items[id] || s.deleted[id] {
+		return status.Error(codes.NotFound, "not found")
+	}
+	// Tenant check: only the owning account can read.
+	if id != accountID+"-item" {
+		return status.Error(codes.NotFound, "not found")
+	}
+	return nil
+}
+
+func (s *fakeSoftDeleteStore) softDelete(accountID, id string) error {
+	if !s.items[id] {
+		return status.Error(codes.NotFound, "not found")
+	}
+	s.deleted[id] = true
+	return nil
+}
+
+func (s *fakeSoftDeleteStore) listDeleted(accountID string) (int, error) {
+	count := 0
+	for id, del := range s.deleted {
+		if del && id == accountID+"-item" {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func TestAssertCrossAccountIsolation_SoftDeleteIsolated(t *testing.T) {
+	store := newFakeStore()
+	cfg := IsolationConfig{
+		PrincipalA: "tenantA",
+		PrincipalB: "tenantB",
+		CreateFn: func(ctx context.Context) (string, error) {
+			return store.create("tenantA")
+		},
+		ReadFn: func(ctx context.Context, id string) error {
+			return store.read("tenantB", id)
+		},
+		DeleteFn: func(ctx context.Context, id string) error {
+			return store.softDelete("tenantA", id)
+		},
+		ListDeletedFn: func(ctx context.Context) (int, error) {
+			return store.listDeleted("tenantB")
+		},
+	}
+	findings := AssertCrossAccountIsolation(context.Background(), cfg)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings (properly isolated), got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestAssertCrossAccountIsolation_SoftDeleteLeaks(t *testing.T) {
+	// A store that leaks soft-deleted rows across tenants.
+	leaked := false
+	cfg := IsolationConfig{
+		PrincipalA: "tenantA",
+		PrincipalB: "tenantB",
+		CreateFn: func(ctx context.Context) (string, error) {
+			return "shared-id", nil
+		},
+		ReadFn: func(ctx context.Context, id string) error {
+			// B can't read live — returns NotFound.
+			return status.Error(codes.NotFound, "not found")
+		},
+		DeleteFn: func(ctx context.Context, id string) error {
+			return nil // soft-delete succeeds
+		},
+		ListDeletedFn: func(ctx context.Context) (int, error) {
+			// Bug: B can see A's soft-deleted item.
+			leaked = true
+			return 1, nil
+		},
+	}
+	findings := AssertCrossAccountIsolation(context.Background(), cfg)
+	if !leaked {
+		t.Fatal("ListDeletedFn was never called")
+	}
+	found := false
+	for _, f := range findings {
+		if f.Method == "(list-deleted)" && f.Severity == Error {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a list-deleted Error finding, got %+v", findings)
+	}
+}
+
+func TestAssertCrossAccountIsolation_SoftDeleteNilFns_NoChange(t *testing.T) {
+	// When DeleteFn/ListDeletedFn are nil, behavior is unchanged from before.
+	cfg := IsolationConfig{
+		PrincipalA: "tenantA",
+		PrincipalB: "tenantB",
+		CreateFn: func(ctx context.Context) (string, error) {
+			return "item-1", nil
+		},
+		ReadFn: func(ctx context.Context, id string) error {
+			return status.Error(codes.NotFound, "not found")
+		},
+	}
+	findings := AssertCrossAccountIsolation(context.Background(), cfg)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings, got %d: %+v", len(findings), findings)
+	}
+}

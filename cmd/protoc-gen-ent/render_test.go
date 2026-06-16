@@ -76,7 +76,7 @@ func TestRenderEntSchema_accountIDAddsTenantMixin(t *testing.T) {
 	mustContain(t, out, "func (Record) Mixin() []ent.Mixin {")
 	mustContain(t, out, "entrepo.TenantMixin{}")
 	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/persistence/entrepo"`)
-	mustContain(t, out, "TenantMixin adds the account_id field")
+	mustContain(t, out, "Mixin returns the mixins applied to Record")
 
 	// account_id is supplied by the mixin — never emitted as a direct field.
 	mustNotContain(t, out, `field.String("account_id")`)

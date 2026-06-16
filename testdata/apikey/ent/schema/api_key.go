@@ -15,10 +15,10 @@ type APIKey struct {
 }
 
 // Mixin returns the mixins applied to APIKey.
-// TenantMixin adds the account_id field and tenant-scoping interceptor.
 func (APIKey) Mixin() []ent.Mixin {
 	return []ent.Mixin{
 		entrepo.TenantMixin{},
+		entrepo.SoftDeleteMixin{},
 	}
 }
 
@@ -32,6 +32,8 @@ func (APIKey) Fields() []ent.Field {
 		field.String("key_value_cipher").Optional().Comment("encrypted key_value for recovery"),
 		field.String("key_prefix").Optional(),
 		field.String("label").Optional(),
+		field.Time("expire_time").Optional().Nillable().
+			Comment("AIP-148 TTL: soft-delete rows may be purged after this time."),
 	}
 }
 

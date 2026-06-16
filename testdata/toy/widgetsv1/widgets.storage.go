@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
@@ -27,6 +28,7 @@ var (
 	_ = codes.OK
 	_ = status.Error
 	_ = resourcename.IDVarName
+	_ = timestamppb.New
 )
 
 // WidgetModel is the GORM model for Widget.
@@ -64,6 +66,9 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 	p.Color = m.Color
 	p.Weight = m.Weight
 	p.Etag = m.Etag
+	if m.DeletedAt.Valid {
+		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
+	}
 	return p
 }
 
@@ -74,6 +79,7 @@ var WidgetColumns = map[string]string{
 	"color":        "color",
 	"weight":       "weight",
 	"etag":         "etag",
+	"delete_time":  "deleted_at",
 }
 
 // WidgetNamePattern is the AIP-122 resource name pattern for Widget.
@@ -112,6 +118,9 @@ func (r *WidgetRepository) Get(ctx context.Context, key string) (*Widget, error)
 func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Widget, string, error) {
 	var models []WidgetModel
 	q := r.db.WithContext(ctx)
+	if opts.ShowDeleted {
+		q = q.Unscoped()
+	}
 	if opts.Filter != "" {
 		cond, err := filter.Parse(opts.Filter, WidgetColumns)
 		if err != nil {
@@ -183,10 +192,27 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 }
 
 func (r *WidgetRepository) Delete(ctx context.Context, key string) error {
-	if err := r.db.WithContext(ctx).Where("id = ?", key).Delete(&WidgetModel{}).Error; err != nil {
-		return fmt.Errorf("delete Widget: %w", err)
+	res := r.db.WithContext(ctx).Where("id = ?", key).Delete(&WidgetModel{})
+	if res.Error != nil {
+		return fmt.Errorf("delete Widget: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return persistence.ErrNotFound
 	}
 	return nil
+}
+
+func (r *WidgetRepository) Undelete(ctx context.Context, key string) (*Widget, error) {
+	q := r.db.WithContext(ctx).Unscoped().Model(&WidgetModel{}).
+		Where("id = ?", key).Where("deleted_at IS NOT NULL")
+	res := q.Update("deleted_at", nil)
+	if res.Error != nil {
+		return nil, fmt.Errorf("undelete Widget: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, persistence.ErrNotFound
+	}
+	return r.Get(ctx, key)
 }
 
 // compile-time check.

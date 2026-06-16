@@ -33,10 +33,13 @@ var (
 // ListOptions carries resource-oriented list parameters (filter/order/paging),
 // aligned with standard API list semantics.
 type ListOptions struct {
-	Filter    string
-	OrderBy   string
-	PageSize  int
-	PageToken string
+	Filter      string
+	OrderBy     string
+	PageSize    int
+	PageToken   string
+	// ShowDeleted includes soft-deleted resources in List results (AIP-148).
+	// When false (the zero value), soft-deleted resources are excluded.
+	ShowDeleted bool
 }
 
 // Repository is a generic CRUD seam for an entity T keyed by K. The methods
@@ -48,4 +51,8 @@ type Repository[T any, K comparable] interface {
 	Create(ctx context.Context, entity T) (T, error)
 	Update(ctx context.Context, key K, entity T, fieldMask ...string) (T, error)
 	Delete(ctx context.Context, key K) error
+	// Undelete restores a soft-deleted entity (AIP-149). Returns ErrNotFound when the
+	// entity does not exist, was never soft-deleted, or has been permanently purged.
+	// Implementations backed by hard-delete storage always return ErrNotFound.
+	Undelete(ctx context.Context, key K) (T, error)
 }
