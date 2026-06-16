@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -42,6 +43,12 @@ type Config struct {
 	// Authorizer is the pluggable decision point. Defaults to
 	// authz.NewDevAuthorizer(nil) if nil.
 	Authorizer authz.Authorizer
+	// PrincipalFunc derives the authenticated authz.Principal from each request's
+	// context. When nil the principal is empty, so — with a default-deny
+	// Authorizer — every non-public method is denied (fail closed). For local
+	// development set grpcauthz.DevPrincipalFunc() to derive the principal from
+	// request metadata; in production supply one backed by a verified token.
+	PrincipalFunc grpcauthz.PrincipalFunc
 	// Interceptors are additional unary interceptors appended after the
 	// framework chain.
 	Interceptors []grpc.UnaryServerInterceptor
@@ -90,6 +97,9 @@ func New(cfg Config) (*Server, error) {
 		grpcauthz.WithRules(cfg.Rules...),
 		grpcauthz.WithAuthorizer(cfg.Authorizer),
 	}
+	if cfg.PrincipalFunc != nil {
+		authzOpts = append(authzOpts, grpcauthz.WithPrincipalFunc(cfg.PrincipalFunc))
+	}
 
 	// Interceptor chain — outermost first.
 	chain := []grpc.UnaryServerInterceptor{
@@ -109,10 +119,25 @@ func New(cfg Config) (*Server, error) {
 
 	var gwMux *runtime.ServeMux
 	if cfg.HTTPAddr != "" {
-		gwMux = runtime.NewServeMux()
+		gwMux = runtime.NewServeMux(runtime.WithIncomingHeaderMatcher(incomingHeaderMatcher))
 	}
 
 	return &Server{cfg: cfg, grpcSrv: grpcSrv, gwMux: gwMux}, nil
+}
+
+// incomingHeaderMatcher forwards the identity headers the framework chain reads —
+// account-id (tenant scoping, via middleware.TenantIDUnary) plus subject/groups
+// (consumed by grpcauthz.DevPrincipalFunc) — from the HTTP gateway into gRPC
+// metadata, so the documented REST examples work with plain headers such as
+// `-H 'account-id: t1'`. All other headers keep grpc-gateway's default behavior,
+// including the standard `Grpc-Metadata-` prefix passthrough.
+func incomingHeaderMatcher(key string) (string, bool) {
+	switch strings.ToLower(key) {
+	case "account-id", "subject", "groups":
+		return strings.ToLower(key), true
+	default:
+		return runtime.DefaultHeaderMatcher(key)
+	}
 }
 
 // Serve starts the gRPC server (and the HTTP gateway when configured) and

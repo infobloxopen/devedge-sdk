@@ -64,9 +64,9 @@ Two annotations ship with the SDK, registered in `github.com/infobloxopen/apis`:
 | Annotation | Path | Purpose |
 |-----------|------|---------|
 | `(infoblox.authz.v1.rule)` | `proto/infoblox/authz/v1/authz.proto` | `{verb, resource, public}` on each service method — feeds enforcement, the permission catalog, and PARG generators |
-| `(infoblox.field.v1.rule)` | `proto/infoblox/field/v1/field.proto` | `{secret}` on message fields — drives log redaction and seccheck |
+| `(infoblox.field.v1.opts)` | `proto/infoblox/field/v1/field.proto` | `{secret: true}` on message fields — drives log redaction and seccheck |
 
-Extension numbers: `50001` (authz rule), `50002` (field rule) — both placeholder; reserve before broad adoption.
+Extension numbers: `50001` (authz rule), `50003` (field opts) — both placeholder; reserve before broad adoption.
 
 Canonical Go import: `github.com/infobloxopen/apis/proto/infoblox/authz@v1.0.0-alpha.2`
 

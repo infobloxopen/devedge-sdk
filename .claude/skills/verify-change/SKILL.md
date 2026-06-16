@@ -1,9 +1,13 @@
 ---
 name: verify-change
-description: QA gate for devedge-sdk — run before marking any change done. Functional (build + vet + lint + tests) and scope (diff vs acceptance criteria; keep the core clean).
+description: QA gate for devedge-sdk (SDK-internal — for maintainers of the SDK repo). Functional (build + vet + lint + tests) and scope (diff vs acceptance criteria; keep the core clean). To verify a service built ON the SDK, run that service's own tests + seccheck, not these make targets.
 ---
 
 # Verify a change (QA gate)
+
+> **Audience: devedge-sdk maintainers.** This gate is for changes to the SDK repo. A *service built
+> on* the SDK should run its own module's build/test plus `seccheck.Assert*` (see
+> `docs/content/docs/guides/security-check.md`).
 
 Both checks must pass before a change is "done".
 

@@ -20,12 +20,13 @@ option go_package = "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv
 
 import "google/api/annotations.proto";
 import "infoblox/authz/v1/authz.proto";
+import "infoblox/field/v1/field.proto";
 
 message APIKey {
   string id         = 1;
   string name       = 2;
   string account_id = 3;
-  string key_value  = 4 [(infoblox.authz.v1.field).secret = true];
+  string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
   string key_prefix = 5;
 }
 
@@ -95,6 +96,62 @@ never enter the SDK's own `go.mod`. The SDK's apikey fixture does exactly this �
 own module under `testdata/apikey/`.
 {{< /callout >}}
 
+### Building in your own module (consumer setup)
+
+The `buf.gen.yaml` above is the SDK's **in-repo** setup. In **your own** service module you also
+need a `buf.yaml` that resolves the non-local imports — `google/api/annotations.proto` and the two
+`infoblox/...` annotation protos — none of which live in your repo by default:
+
+1. **Vendor the annotation protos.** They come from the canonical
+   [`infobloxopen/apis`](https://github.com/infobloxopen/apis) module. Copy them into a `proto/`
+   tree (or `buf export`), preserving import paths, in a directory **separate** from your own protos
+   (buf v2 module roots must not overlap):
+
+   ```text
+   your-service/
+   ├── api/                     # your protos       → one buf module
+   │   └── notes.proto
+   └── proto/                   # vendored imports   → a second buf module
+       └── infoblox/{authz,field}/v1/*.proto
+   ```
+
+2. **`buf.yaml`** — declare both roots plus the googleapis dep, then run `buf dep update` (this
+   writes `buf.lock`; it is required before the first `buf generate`):
+
+   ```yaml {filename="buf.yaml"}
+   version: v2
+   modules:
+     - path: api
+     - path: proto
+   deps:
+     - buf.build/googleapis/googleapis   # provides google/api/*.proto
+   ```
+   ```bash
+   buf dep update
+   ```
+
+3. **`buf.gen.yaml`** — generate only your module (`inputs: api`) and use `module=` output so the
+   generated Go lands at your import path:
+
+   ```yaml {filename="buf.gen.yaml"}
+   version: v2
+   inputs:
+     - directory: api
+   plugins:
+     - {local: protoc-gen-go,            out: ., opt: module=github.com/example/notes}
+     - {local: protoc-gen-go-grpc,       out: ., opt: module=github.com/example/notes}
+     - {local: protoc-gen-devedge-authz, out: ., opt: module=github.com/example/notes}
+     - {local: protoc-gen-svc,           out: ., opt: module=github.com/example/notes}
+     - {local: protoc-gen-grpc-gateway,  out: ., opt: module=github.com/example/notes}
+   ```
+
+4. **`go.mod`** — the generated code imports the canonical annotation bindings:
+
+   ```bash
+   go get github.com/infobloxopen/apis/proto/infoblox/authz@latest
+   go get github.com/infobloxopen/apis/proto/infoblox/field@latest
+   ```
+
 ## 3. Generate
 
 ```bash
@@ -107,7 +164,7 @@ You now have:
 |---|---|---|
 | `apikey.pb.go`, `apikey_grpc.pb.go` | base plugins | message types + gRPC stubs |
 | `apikey.authz.go` | `protoc-gen-devedge-authz` | `APIKeyServiceAuthzRules []authz.MethodRule` |
-| `apikey.svc.go` | `protoc-gen-svc` | the service scaffold, handlers wired to a repository |
+| `apikey.svc.go` | `protoc-gen-svc` | `RegisterAPIKeyService(srv, impl)` — boot-gate + gRPC/gateway registration (you write the handlers) |
 | `apikey.storage.go` | `protoc-gen-storage` | `APIKeyModel` + `APIKeyRepository` (GORM) |
 | `apikey.pb.gw.go` | gateway plugin | HTTP/JSON gateway registration |
 | `ent/schema/api_key.go` | `protoc-gen-ent` | the ent schema (run `go generate ./ent` to build the client) |
@@ -122,8 +179,16 @@ srv, err := server.New(server.Config{
     HTTPAddr: ":8080",
     Rules:    apikeyv1.APIKeyServiceAuthzRules,
     Authorizer: authz.NewDevAuthorizer(/* grants */),
+    // Derive the principal from request metadata in dev so grants can match;
+    // swap for a verified-token PrincipalFunc in production. See server reference.
+    PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 })
-// register the generated service impl, then srv.Serve(ctx)
+// The generated RegisterAPIKeyService runs the boot-time authz gate and registers
+// the service on both the gRPC server and the HTTP gateway in one call:
+if err := apikeyv1.RegisterAPIKeyService(srv, &apiKeyServer{ /* repo, enc */ }); err != nil {
+    log.Fatal(err)
+}
+// then srv.Serve(ctx)
 ```
 
 The generated rules feed both the authz interceptor and the field-mask validator. See the

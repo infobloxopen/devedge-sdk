@@ -94,7 +94,7 @@ an `Error`; a nil error from a trigger is a `Warning`. The forbidden set:
 func AssertNoSecretFieldsLeaked(responses ...proto.Message) []Finding
 ```
 Walks each response proto (recursing into nested messages) and returns an `Error` for any field
-annotated `(infoblox.authz.v1.field).secret = true` that holds a non-empty string (other than the
+annotated `(infoblox.field.v1.opts) = {secret: true}` that holds a non-empty string (other than the
 literal `[REDACTED]`) or a non-zero value of another kind. nil messages are skipped.
 
 ## Summary

@@ -14,9 +14,11 @@ deployment substrate): devedge is **dev- and deploy-time** tooling; devedge-sdk 
 ## What it gives you
 
 - A **proto annotation contract** — `(infoblox.authz.v1.rule)` declares a method's authz
-  requirement; `(infoblox.authz.v1.field).secret` marks a field as sensitive.
-- **Codegen plugins** — `protoc-gen-svc`, `protoc-gen-storage`, `protoc-gen-ent` turn the
-  proto into a service scaffold, a GORM repository, and an ent schema.
+  requirement; `(infoblox.field.v1.opts).secret` marks a field as sensitive.
+- **Codegen plugins** — `protoc-gen-devedge-authz` (the authz-rules table), `protoc-gen-svc`,
+  `protoc-gen-storage`, and `protoc-gen-ent` (plus the third-party `protoc-gen-grpc-gateway`) turn
+  the proto into the authz rules, a service scaffold, a GORM repository, an ent schema, and an
+  HTTP/JSON gateway.
 - A **batteries-included server** — `server.New` assembles the framework interceptor chain
   (request-ID → error mapper → tenant-ID → fail-closed authz → field-mask → ETag/412) and an
   optional HTTP/JSON gateway.

@@ -1,9 +1,13 @@
 ---
 name: run-tests
-description: Run devedge-sdk's tests. Use when verifying a change or before committing.
+description: Run devedge-sdk's tests (SDK-internal — for maintainers of the SDK repo). Use when verifying a change or before committing. Building a service that IMPORTS the SDK? run that module's own `go test`, not these make targets.
 ---
 
 # Run tests
+
+> **Audience: devedge-sdk maintainers.** These `make` targets run inside the SDK repo. If you are
+> building a *service that imports* devedge-sdk, follow the docs quickstart
+> (`docs/content/docs/getting-started/quickstart.md`) and run your own module's tests instead.
 
 ## Root module (fast, no external services)
 

@@ -28,8 +28,12 @@ Emits a generated `[]authz.MethodRule` table from the method annotations — the
 
 ## protoc-gen-svc
 
-Generates the service scaffold: handler stubs wired to a `persistence.Repository`, request
-validation, and the CRUDL plumbing that maps API verbs onto repository methods.
+Generates a single registration helper, `Register<Service>(s *server.Server, impl <Service>Server) error`.
+It runs the **boot-time authz completeness gate** (`grpcauthz.AssertMethodsDeclared` over
+`s.Rules()`), registers your implementation on the gRPC server, and registers the HTTP/JSON gateway
+handler — all in one call. It does **not** generate handler bodies or repository wiring: you write
+the `<Service>Server` methods over a `persistence.Repository`. (The `*.storage.go` from
+`protoc-gen-storage` gives you that repository.)
 
 ## protoc-gen-storage
 
@@ -45,7 +49,7 @@ Generates a GORM-backed `Repository` for each message. For a message named `APIK
 
 ### Secret fields
 
-A field marked `(infoblox.authz.v1.field).secret = true` does **not** get a plaintext column.
+A field marked `(infoblox.field.v1.opts) = {secret: true}` does **not** get a plaintext column.
 Instead `protoc-gen-storage` emits two columns:
 
 ```go

@@ -2,8 +2,16 @@ package server_test
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
@@ -94,5 +102,78 @@ func TestServer_Rules_ReturnsConfiguredRules(t *testing.T) {
 		if got[i].Method != r.Method || got[i].Verb != r.Verb || got[i].Resource != r.Resource {
 			t.Fatalf("rule[%d] mismatch: want %+v, got %+v", i, r, got[i])
 		}
+	}
+}
+
+const probeMethod = "/test.v1.Svc/Do"
+
+// probeServiceDesc is a one-method gRPC service whose handler is a no-op, used
+// to drive a real request through the interceptor chain server.New builds.
+var probeServiceDesc = grpc.ServiceDesc{
+	ServiceName: "test.v1.Svc",
+	HandlerType: (*any)(nil),
+	Methods: []grpc.MethodDesc{{
+		MethodName: "Do",
+		Handler: func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			in := new(emptypb.Empty)
+			if err := dec(in); err != nil {
+				return nil, err
+			}
+			h := func(ctx context.Context, req any) (any, error) { return &emptypb.Empty{}, nil }
+			if interceptor == nil {
+				return h(ctx, in)
+			}
+			return interceptor(ctx, in, &grpc.UnaryServerInfo{Server: srv, FullMethod: probeMethod}, h)
+		},
+	}},
+}
+
+// TestNew_PrincipalFunc_AuthorizesDocumentedGrant is the regression guard for
+// IMPL-002: before the PrincipalFunc seam existed, server.New hard-wired an
+// empty principal, so the documented DevAuthorizer grant could never match and
+// every non-public call was denied. With Config.PrincipalFunc set to
+// grpcauthz.DevPrincipalFunc(), the documented "group:admin in t1" grant must
+// authorize a real request — while an unauthenticated caller still fails closed.
+func TestNew_PrincipalFunc_AuthorizesDocumentedGrant(t *testing.T) {
+	s, err := server.New(server.Config{
+		GRPCAddr: ":0",
+		Rules:    []authz.MethodRule{{Method: probeMethod, Verb: authz.Get, Resource: "thing"}},
+		Authorizer: authz.NewDevAuthorizer(authz.Grant{
+			Tenant: "t1", Subjects: []string{"group:admin"}, Verbs: []authz.Verb{"*"}, Resource: "*",
+		}),
+		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.GRPCServer().RegisterService(&probeServiceDesc, struct{}{})
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = s.GRPCServer().Serve(lis) }()
+	defer s.GRPCServer().Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Allowed: caller presents the documented identity (account-id -> tenant,
+	// groups -> group:admin).
+	okCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	okCtx = metadata.NewOutgoingContext(okCtx, metadata.Pairs("account-id", "t1", "groups", "admin"))
+	if err := conn.Invoke(okCtx, probeMethod, &emptypb.Empty{}, &emptypb.Empty{}); err != nil {
+		t.Fatalf("authorized call denied (IMPL-002 regression): %v", err)
+	}
+
+	// Denied: no identity -> empty principal -> default deny (fail closed).
+	denyCtx, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	if err := conn.Invoke(denyCtx, probeMethod, &emptypb.Empty{}, &emptypb.Empty{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for unauthenticated caller, got %v", err)
 	}
 }

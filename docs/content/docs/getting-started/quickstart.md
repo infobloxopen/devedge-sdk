@@ -91,6 +91,7 @@ import (
 
     "github.com/example/widget/widgetv1"
     "github.com/infobloxopen/devedge-sdk/authz"
+    "github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
     "github.com/infobloxopen/devedge-sdk/server"
 )
 
@@ -110,6 +111,10 @@ func main() {
             Verbs:    []authz.Verb{"*"},
             Resource: "*",
         }),
+        // Derive the principal from request metadata so the grant above can match
+        // (account-id → Tenant, groups → group:<name>). Without this the principal
+        // is empty and every call is denied. Use a verified-token func in prod.
+        PrincipalFunc: grpcauthz.DevPrincipalFunc(),
     })
     if err != nil {
         log.Fatal(err)
@@ -128,7 +133,7 @@ func main() {
 The chain `server.New` builds, outermost first:
 
 ```
-RequestID → ErrorMapper → TenantID → grpcauthz (fail-closed) → FieldMask → ETag/412
+RequestID → ErrorMapper → TenantID → grpcauthz (fail-closed) → FieldMask → ETag/412 → ReadMask → ValidateOnly → Deduplicate
 ```
 
 See [server reference](../../reference/server.md) for every `Config` field.
@@ -146,6 +151,16 @@ func TestGetWidget_DeniedForUnknownPrincipal(t *testing.T) {
         t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
     }
 }
+```
+
+Conversely, a caller that presents the granted identity is **allowed** — `DevPrincipalFunc` reads
+it from metadata (`account-id` → tenant, `groups` → `group:<name>`):
+
+```go
+md := metadata.Pairs("account-id", "t1", "groups", "admin")
+ctx = metadata.NewOutgoingContext(ctx, md)
+_, err = client.GetWidget(ctx, &widgetv1.GetWidgetRequest{Id: "w1"})
+// no longer PermissionDenied — the group:admin grant matches.
 ```
 
 ```bash

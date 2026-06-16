@@ -11,7 +11,7 @@ Package `middleware` provides the framework's unary gRPC interceptors. `server.N
 into a chain in this order (outermost first):
 
 ```
-RequestID → ErrorMapper → TenantID → grpcauthz → FieldMask → ETag/412
+RequestID → ErrorMapper → TenantID → grpcauthz → FieldMask → ETag/412 → ReadMask → ValidateOnly → Deduplicate
 ```
 
 Each is also usable standalone if you build your own `grpc.Server`.
@@ -56,9 +56,13 @@ func UnaryServerInterceptor(app string, opts ...Option) grpc.UnaryServerIntercep
 // Options:
 func WithRules(rules ...authz.MethodRule) Option
 func WithAuthorizer(a authz.Authorizer) Option
-func WithPrincipalFunc(fn func(ctx context.Context) authz.Principal) Option
+func WithPrincipalFunc(fn PrincipalFunc) Option
 func WithMethodRule(method string, verb authz.Verb, resource string) Option
 func WithPublicMethod(method string) Option
+
+// Principal extraction:
+type PrincipalFunc func(ctx context.Context) (authz.Principal, error)
+func DevPrincipalFunc() PrincipalFunc   // dev-only: account-id/subject/groups metadata → Principal
 
 // Boot-time gate:
 func AssertMethodsDeclared(served []string, opts ...Option) error
@@ -68,6 +72,12 @@ grant, gets `codes.PermissionDenied`. `AssertMethodsDeclared` refuses to start i
 method is undeclared — call it at boot for a fail-closed completeness gate. The constructor and
 options are rough-compatible with `infobloxopen/atlas-authz-middleware/grpc_opa` (see the repo's
 `COMPAT.md`).
+
+Through `server.New`, set the principal with `Config.PrincipalFunc` (it threads to
+`WithPrincipalFunc`). `grpcauthz.DevPrincipalFunc()` is a **dev-only** extractor that reads
+`account-id`/`subject`/`groups` from request metadata; in production supply a `PrincipalFunc`
+backed by a **verified** token, never raw client headers. With no `PrincipalFunc` the principal is
+empty, so no grant can match and every non-public call is denied.
 
 ## FieldMaskUnary
 
@@ -115,7 +125,7 @@ import "github.com/infobloxopen/devedge-sdk/middleware/redact"
 func Message(m proto.Message) proto.Message       // clone with secret fields → "[REDACTED]"
 func UnaryServerInterceptor() grpc.UnaryServerInterceptor // logs redacted req/resp at Debug
 ```
-`Message` returns a **clone** of `m` with every `(infoblox.authz.v1.field).secret = true` field
+`Message` returns a **clone** of `m` with every `(infoblox.field.v1.opts) = {secret: true}` field
 replaced by `[REDACTED]` (string) or its zero value (other kinds) — the original is untouched.
 `UnaryServerInterceptor` logs redacted copies of the request and response via `slog.Debug`; the
 real request/response passed to the handler are unchanged. This is **not** part of the default

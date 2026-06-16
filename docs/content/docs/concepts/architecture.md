@@ -12,7 +12,7 @@ proto contract a team authors and the engine/policy backends a platform team ope
 
 | Layer | What lives there | Who owns it |
 |---|---|---|
-| **1 — Contract** | the `.proto` files: resources, RPCs, `(infoblox.authz.v1.rule)` and `(infoblox.authz.v1.field).secret` annotations | the service team |
+| **1 — Contract** | the `.proto` files: resources, RPCs, `(infoblox.authz.v1.rule)` and `(infoblox.field.v1.opts).secret` annotations | the service team |
 | **2 — SDK runtime** (this repo) | the interceptor chain, the authz seam, secret handling, the persistence seam + generated shapes, seccheck | shared, imported by every service |
 | **3 — Backends** | the decision point (OPA/Cedar/remote PDP), the secret store (Vault), the database (Postgres) | platform / infra |
 
@@ -59,6 +59,15 @@ FieldMask      validate the request field mask against the method's verb
 ETag/412       read If-Match precondition; write the response ETag trailer
    │
    ▼
+ReadMask       apply the response read-mask (AIP-157 field selection)
+   │
+   ▼
+ValidateOnly   short-circuit when validate_only is set (no mutation)
+   │
+   ▼
+Deduplicate    idempotency replay for retried mutations
+   │
+   ▼
 your handler   → Repository (tenant-scoped) → Encryptor (secret fields)
 ```
 
@@ -71,7 +80,7 @@ declare once, consume in several places.
 The proto contract is compiled by `buf`, and the SDK's plugins turn it into running code:
 
 - **`protoc-gen-devedge-authz`** → the `<Service>AuthzRules` `[]MethodRule` table.
-- **`protoc-gen-svc`** → the service scaffold (handlers wired to a repository).
+- **`protoc-gen-svc`** → a `Register<Service>` helper (boot-gate + gRPC/gateway registration); you write the handlers.
 - **`protoc-gen-storage`** → a GORM-backed `Repository` with tenant scoping and secret columns.
 - **`protoc-gen-ent`** → an ent schema with the same tenant/secret behavior via ent's privacy
   and hook layers.
