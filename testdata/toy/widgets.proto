@@ -82,7 +82,9 @@ message OperationStatus          {
   bool   done   = 2;
   string result = 3;
 }
-message GetOperationStatusRequest { string name = 1; }
+message GetOperationStatusRequest    { string name = 1; }
+// AIP-152: cancel a running long-running operation.
+message CancelWidgetOperationRequest { string name = 1; }
 
 service WidgetService {
   rpc CreateWidget(CreateWidgetRequest) returns (Widget) {
@@ -129,5 +131,10 @@ service WidgetService {
   rpc GetOperationStatus(GetOperationStatusRequest) returns (OperationStatus) {
     option (google.api.http) = {get: "/v1/operations/{name=**}"};
     option (infoblox.authz.v1.rule) = {verb: "read", resource: "widgets"};
+  }
+  // AIP-152: cancel a running ProcessWidget operation.
+  rpc CancelWidgetOperation(CancelWidgetOperationRequest) returns (OperationStatus) {
+    option (google.api.http) = {post: "/v1/operations/{name=**}:cancel", body: "*"};
+    option (infoblox.authz.v1.rule) = {verb: "write", resource: "widgets"};
   }
 }

@@ -218,3 +218,109 @@ func TestOperationName(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "operations/123")
 	}
 }
+
+// --- MemoryStore.Cancel ---
+
+func TestMemoryStore_Cancel_Pending(t *testing.T) {
+	s := lro.NewMemoryStore(time.Hour)
+	ctx := context.Background()
+
+	op := &lro.Operation{Name: lro.OperationName("cancel-1"), CreateTime: time.Now(), UpdateTime: time.Now()}
+	_ = s.Create(ctx, op)
+
+	if err := s.Cancel(ctx, op.Name); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got, err := s.Get(ctx, op.Name)
+	if err != nil {
+		t.Fatalf("Get after Cancel: %v", err)
+	}
+	if !got.Done {
+		t.Error("after Cancel: want Done=true")
+	}
+	if !errors.Is(got.Err, lro.ErrCancelled) {
+		t.Errorf("after Cancel: Err = %v, want ErrCancelled", got.Err)
+	}
+}
+
+func TestMemoryStore_Cancel_AlreadyDone(t *testing.T) {
+	s := lro.NewMemoryStore(time.Hour)
+	ctx := context.Background()
+
+	op := &lro.Operation{Name: lro.OperationName("cancel-done"), Done: true, Response: "ok", CreateTime: time.Now(), UpdateTime: time.Now()}
+	_ = s.Create(ctx, op)
+
+	if err := s.Cancel(ctx, op.Name); !errors.Is(err, lro.ErrAlreadyDone) {
+		t.Errorf("Cancel on done op: want ErrAlreadyDone, got %v", err)
+	}
+}
+
+func TestMemoryStore_Cancel_NotFound(t *testing.T) {
+	s := lro.NewMemoryStore(time.Hour)
+	if err := s.Cancel(context.Background(), "operations/missing"); !errors.Is(err, lro.ErrNotFound) {
+		t.Errorf("Cancel missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// --- Manager.Cancel ---
+
+func TestManager_Cancel_PendingOp(t *testing.T) {
+	store := lro.NewMemoryStore(time.Hour)
+	mgr := lro.NewManager(store)
+	ctx := context.Background()
+
+	// fn blocks until its context is cancelled, then returns context.Canceled.
+	op, err := mgr.Submit(ctx, "meta", func(ctx context.Context) (any, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if err := mgr.Cancel(ctx, op.Name); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	// Store must show Done=true with ErrCancelled immediately.
+	got, err := store.Get(ctx, op.Name)
+	if err != nil {
+		t.Fatalf("Get after Cancel: %v", err)
+	}
+	if !got.Done {
+		t.Error("after Cancel: want Done=true")
+	}
+	if !errors.Is(got.Err, lro.ErrCancelled) {
+		t.Errorf("after Cancel: Err = %v, want ErrCancelled", got.Err)
+	}
+}
+
+func TestManager_Cancel_AlreadyDone(t *testing.T) {
+	store := lro.NewMemoryStore(time.Hour)
+	mgr := lro.NewManager(store)
+	ctx := context.Background()
+
+	op, err := mgr.Submit(ctx, nil, func(ctx context.Context) (any, error) {
+		return "done", nil
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Wait for completion.
+	if _, err := lro.WaitOperation(ctx, store, op.Name, 10*time.Millisecond); err != nil {
+		t.Fatalf("WaitOperation: %v", err)
+	}
+
+	if err := mgr.Cancel(ctx, op.Name); !errors.Is(err, lro.ErrAlreadyDone) {
+		t.Errorf("Cancel on done op: want ErrAlreadyDone, got %v", err)
+	}
+}
+
+func TestManager_Cancel_NotFound(t *testing.T) {
+	store := lro.NewMemoryStore(time.Hour)
+	mgr := lro.NewManager(store)
+	if err := mgr.Cancel(context.Background(), "operations/ghost"); !errors.Is(err, lro.ErrNotFound) {
+		t.Errorf("Cancel missing: want ErrNotFound, got %v", err)
+	}
+}
