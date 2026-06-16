@@ -324,6 +324,97 @@ func TestSecurity_CrossAccountIsolation_Ent(t *testing.T) {
 	seccheck.RunT(t, findings)
 }
 
+// TestSecurity_CrossAccountIsolation_Ent_SoftDelete verifies that soft-deleted
+// resources created by alice are not visible to bob even with show_deleted=true.
+// AC-009 / AC-010 (ent).
+func TestSecurity_CrossAccountIsolation_Ent_SoftDelete(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:sec_ent_sd?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
+
+	cfg := seccheck.IsolationConfig{
+		PrincipalA: "alice",
+		PrincipalB: "bob",
+		CreateFn: func(ctx context.Context) (string, error) {
+			aliceCtx := middleware.WithTenantID(ctx, "alice")
+			k := &apikeyv1.APIKey{
+				Id:        "sec-ent-sd-alice-1",
+				AccountId: "alice",
+				KeyValue:  "sk_alice_sd",
+			}
+			created, err := repo.Create(aliceCtx, k)
+			if err != nil {
+				return "", err
+			}
+			return created.Id, nil
+		},
+		ReadFn: func(ctx context.Context, id string) error {
+			bobCtx := middleware.WithTenantID(ctx, "bob")
+			_, err := repo.Get(bobCtx, id)
+			return mapToNotFound(err)
+		},
+		ListFn: func(ctx context.Context) (int, error) {
+			bobCtx := middleware.WithTenantID(ctx, "bob")
+			items, _, err := repo.List(bobCtx, persistence.ListOptions{})
+			return len(items), err
+		},
+		DeleteFn: func(ctx context.Context, id string) error {
+			aliceCtx := middleware.WithTenantID(ctx, "alice")
+			return mapToNotFound(repo.Delete(aliceCtx, id))
+		},
+		ListDeletedFn: func(ctx context.Context) (int, error) {
+			bobCtx := middleware.WithTenantID(ctx, "bob")
+			items, _, err := repo.List(bobCtx, persistence.ListOptions{ShowDeleted: true})
+			return len(items), err
+		},
+	}
+
+	findings := seccheck.AssertCrossAccountIsolation(context.Background(), cfg)
+	seccheck.RunT(t, findings)
+}
+
+// TestEntRepository_Undelete_RoundTrip verifies that delete → undelete restores
+// a resource in the ent-backed repository. AC-010.
+func TestEntRepository_Undelete_RoundTrip(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:ent_undelete?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
+	ctx := tenantCtx("alice")
+
+	k := &apikeyv1.APIKey{Id: "ent-undelete-1", AccountId: "alice", Label: "restore me"}
+	if _, err := repo.Create(ctx, k); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Delete soft-deletes the row.
+	if err := repo.Delete(ctx, "ent-undelete-1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Get returns NotFound.
+	if _, err := repo.Get(ctx, "ent-undelete-1"); err != persistence.ErrNotFound {
+		t.Fatalf("Get after Delete: want ErrNotFound, got %v", err)
+	}
+
+	// Undelete restores it.
+	restored, err := repo.Undelete(ctx, "ent-undelete-1")
+	if err != nil {
+		t.Fatalf("Undelete: %v", err)
+	}
+	if restored.Id != "ent-undelete-1" {
+		t.Errorf("Undelete returned wrong id: %s", restored.Id)
+	}
+
+	// Get now succeeds.
+	if _, err := repo.Get(ctx, "ent-undelete-1"); err != nil {
+		t.Fatalf("Get after Undelete: %v", err)
+	}
+}
+
 // ----------------------------------------------------------------------------
 // TestSecurity_CrossAccountIsolation_GORM
 // ----------------------------------------------------------------------------
@@ -375,6 +466,19 @@ func TestSecurity_CrossAccountIsolation_GORM(t *testing.T) {
 		ListFn: func(ctx context.Context) (int, error) {
 			bobCtx := middleware.WithTenantID(ctx, "bob")
 			items, _, err := repo.List(bobCtx, persistence.ListOptions{})
+			if err != nil {
+				return 0, err
+			}
+			return len(items), nil
+		},
+		// AC-009: soft-deleted isolation.
+		DeleteFn: func(ctx context.Context, id string) error {
+			aliceCtx := middleware.WithTenantID(ctx, "alice")
+			return mapToNotFound(repo.Delete(aliceCtx, id))
+		},
+		ListDeletedFn: func(ctx context.Context) (int, error) {
+			bobCtx := middleware.WithTenantID(ctx, "bob")
+			items, _, err := repo.List(bobCtx, persistence.ListOptions{ShowDeleted: true})
 			if err != nil {
 				return 0, err
 			}

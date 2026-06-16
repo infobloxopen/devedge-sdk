@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
@@ -33,10 +34,13 @@ type APIKeyMutation struct {
 	typ              string
 	id               *string
 	account_id       *string
+	delete_time      *time.Time
 	name             *string
 	key_value_hash   *string
 	key_value_cipher *string
 	key_prefix       *string
+	label            *string
+	expire_time      *time.Time
 	clearedFields    map[string]struct{}
 	done             bool
 	oldValue         func(context.Context) (*APIKey, error)
@@ -181,6 +185,55 @@ func (m *APIKeyMutation) OldAccountID(ctx context.Context) (v string, err error)
 // ResetAccountID resets all changes to the "account_id" field.
 func (m *APIKeyMutation) ResetAccountID() {
 	m.account_id = nil
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (m *APIKeyMutation) SetDeleteTime(t time.Time) {
+	m.delete_time = &t
+}
+
+// DeleteTime returns the value of the "delete_time" field in the mutation.
+func (m *APIKeyMutation) DeleteTime() (r time.Time, exists bool) {
+	v := m.delete_time
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeleteTime returns the old "delete_time" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldDeleteTime(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeleteTime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeleteTime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeleteTime: %w", err)
+	}
+	return oldValue.DeleteTime, nil
+}
+
+// ClearDeleteTime clears the value of the "delete_time" field.
+func (m *APIKeyMutation) ClearDeleteTime() {
+	m.delete_time = nil
+	m.clearedFields[apikey.FieldDeleteTime] = struct{}{}
+}
+
+// DeleteTimeCleared returns if the "delete_time" field was cleared in this mutation.
+func (m *APIKeyMutation) DeleteTimeCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldDeleteTime]
+	return ok
+}
+
+// ResetDeleteTime resets all changes to the "delete_time" field.
+func (m *APIKeyMutation) ResetDeleteTime() {
+	m.delete_time = nil
+	delete(m.clearedFields, apikey.FieldDeleteTime)
 }
 
 // SetName sets the "name" field.
@@ -379,6 +432,104 @@ func (m *APIKeyMutation) ResetKeyPrefix() {
 	delete(m.clearedFields, apikey.FieldKeyPrefix)
 }
 
+// SetLabel sets the "label" field.
+func (m *APIKeyMutation) SetLabel(s string) {
+	m.label = &s
+}
+
+// Label returns the value of the "label" field in the mutation.
+func (m *APIKeyMutation) Label() (r string, exists bool) {
+	v := m.label
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLabel returns the old "label" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldLabel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLabel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLabel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLabel: %w", err)
+	}
+	return oldValue.Label, nil
+}
+
+// ClearLabel clears the value of the "label" field.
+func (m *APIKeyMutation) ClearLabel() {
+	m.label = nil
+	m.clearedFields[apikey.FieldLabel] = struct{}{}
+}
+
+// LabelCleared returns if the "label" field was cleared in this mutation.
+func (m *APIKeyMutation) LabelCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldLabel]
+	return ok
+}
+
+// ResetLabel resets all changes to the "label" field.
+func (m *APIKeyMutation) ResetLabel() {
+	m.label = nil
+	delete(m.clearedFields, apikey.FieldLabel)
+}
+
+// SetExpireTime sets the "expire_time" field.
+func (m *APIKeyMutation) SetExpireTime(t time.Time) {
+	m.expire_time = &t
+}
+
+// ExpireTime returns the value of the "expire_time" field in the mutation.
+func (m *APIKeyMutation) ExpireTime() (r time.Time, exists bool) {
+	v := m.expire_time
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpireTime returns the old "expire_time" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldExpireTime(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpireTime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpireTime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpireTime: %w", err)
+	}
+	return oldValue.ExpireTime, nil
+}
+
+// ClearExpireTime clears the value of the "expire_time" field.
+func (m *APIKeyMutation) ClearExpireTime() {
+	m.expire_time = nil
+	m.clearedFields[apikey.FieldExpireTime] = struct{}{}
+}
+
+// ExpireTimeCleared returns if the "expire_time" field was cleared in this mutation.
+func (m *APIKeyMutation) ExpireTimeCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldExpireTime]
+	return ok
+}
+
+// ResetExpireTime resets all changes to the "expire_time" field.
+func (m *APIKeyMutation) ResetExpireTime() {
+	m.expire_time = nil
+	delete(m.clearedFields, apikey.FieldExpireTime)
+}
+
 // Where appends a list predicates to the APIKeyMutation builder.
 func (m *APIKeyMutation) Where(ps ...predicate.APIKey) {
 	m.predicates = append(m.predicates, ps...)
@@ -413,9 +564,12 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 5)
+	fields := make([]string, 0, 8)
 	if m.account_id != nil {
 		fields = append(fields, apikey.FieldAccountID)
+	}
+	if m.delete_time != nil {
+		fields = append(fields, apikey.FieldDeleteTime)
 	}
 	if m.name != nil {
 		fields = append(fields, apikey.FieldName)
@@ -429,6 +583,12 @@ func (m *APIKeyMutation) Fields() []string {
 	if m.key_prefix != nil {
 		fields = append(fields, apikey.FieldKeyPrefix)
 	}
+	if m.label != nil {
+		fields = append(fields, apikey.FieldLabel)
+	}
+	if m.expire_time != nil {
+		fields = append(fields, apikey.FieldExpireTime)
+	}
 	return fields
 }
 
@@ -439,6 +599,8 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 	switch name {
 	case apikey.FieldAccountID:
 		return m.AccountID()
+	case apikey.FieldDeleteTime:
+		return m.DeleteTime()
 	case apikey.FieldName:
 		return m.Name()
 	case apikey.FieldKeyValueHash:
@@ -447,6 +609,10 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.KeyValueCipher()
 	case apikey.FieldKeyPrefix:
 		return m.KeyPrefix()
+	case apikey.FieldLabel:
+		return m.Label()
+	case apikey.FieldExpireTime:
+		return m.ExpireTime()
 	}
 	return nil, false
 }
@@ -458,6 +624,8 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 	switch name {
 	case apikey.FieldAccountID:
 		return m.OldAccountID(ctx)
+	case apikey.FieldDeleteTime:
+		return m.OldDeleteTime(ctx)
 	case apikey.FieldName:
 		return m.OldName(ctx)
 	case apikey.FieldKeyValueHash:
@@ -466,6 +634,10 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldKeyValueCipher(ctx)
 	case apikey.FieldKeyPrefix:
 		return m.OldKeyPrefix(ctx)
+	case apikey.FieldLabel:
+		return m.OldLabel(ctx)
+	case apikey.FieldExpireTime:
+		return m.OldExpireTime(ctx)
 	}
 	return nil, fmt.Errorf("unknown APIKey field %s", name)
 }
@@ -481,6 +653,13 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAccountID(v)
+		return nil
+	case apikey.FieldDeleteTime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeleteTime(v)
 		return nil
 	case apikey.FieldName:
 		v, ok := value.(string)
@@ -509,6 +688,20 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetKeyPrefix(v)
+		return nil
+	case apikey.FieldLabel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLabel(v)
+		return nil
+	case apikey.FieldExpireTime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpireTime(v)
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey field %s", name)
@@ -540,6 +733,9 @@ func (m *APIKeyMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *APIKeyMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(apikey.FieldDeleteTime) {
+		fields = append(fields, apikey.FieldDeleteTime)
+	}
 	if m.FieldCleared(apikey.FieldName) {
 		fields = append(fields, apikey.FieldName)
 	}
@@ -551,6 +747,12 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(apikey.FieldKeyPrefix) {
 		fields = append(fields, apikey.FieldKeyPrefix)
+	}
+	if m.FieldCleared(apikey.FieldLabel) {
+		fields = append(fields, apikey.FieldLabel)
+	}
+	if m.FieldCleared(apikey.FieldExpireTime) {
+		fields = append(fields, apikey.FieldExpireTime)
 	}
 	return fields
 }
@@ -566,6 +768,9 @@ func (m *APIKeyMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *APIKeyMutation) ClearField(name string) error {
 	switch name {
+	case apikey.FieldDeleteTime:
+		m.ClearDeleteTime()
+		return nil
 	case apikey.FieldName:
 		m.ClearName()
 		return nil
@@ -578,6 +783,12 @@ func (m *APIKeyMutation) ClearField(name string) error {
 	case apikey.FieldKeyPrefix:
 		m.ClearKeyPrefix()
 		return nil
+	case apikey.FieldLabel:
+		m.ClearLabel()
+		return nil
+	case apikey.FieldExpireTime:
+		m.ClearExpireTime()
+		return nil
 	}
 	return fmt.Errorf("unknown APIKey nullable field %s", name)
 }
@@ -588,6 +799,9 @@ func (m *APIKeyMutation) ResetField(name string) error {
 	switch name {
 	case apikey.FieldAccountID:
 		m.ResetAccountID()
+		return nil
+	case apikey.FieldDeleteTime:
+		m.ResetDeleteTime()
 		return nil
 	case apikey.FieldName:
 		m.ResetName()
@@ -600,6 +814,12 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldKeyPrefix:
 		m.ResetKeyPrefix()
+		return nil
+	case apikey.FieldLabel:
+		m.ResetLabel()
+		return nil
+	case apikey.FieldExpireTime:
+		m.ResetExpireTime()
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey field %s", name)

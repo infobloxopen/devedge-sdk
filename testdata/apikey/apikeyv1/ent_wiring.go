@@ -5,6 +5,9 @@ package apikeyv1
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
@@ -49,8 +52,7 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 			return fromEntAPIKey(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*APIKey, error) {
-			// TenantMixin interceptor on the ent client automatically scopes this
-			// query to the tenant in ctx — if bob queries alice's id he gets not-found.
+			// TenantMixin + SoftDeleteMixin interceptors scope and filter automatically.
 			e, err := client.APIKey.Get(ctx, key)
 			if err != nil {
 				if ent.IsNotFound(err) {
@@ -61,7 +63,11 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 			return fromEntAPIKey(e), nil
 		},
 		List_: func(ctx context.Context, opts persistence.ListOptions) ([]*APIKey, string, error) {
-			// TenantMixin interceptor scopes the query to the tenant in ctx automatically.
+			// Route show_deleted flag into the context so SoftDeleteMixin interceptor
+			// lifts the delete_time IS NULL predicate when requested.
+			if opts.ShowDeleted {
+				ctx = entrepo.WithShowDeleted(ctx)
+			}
 			q := client.APIKey.Query()
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
@@ -97,12 +103,39 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 			}
 			return fromEntAPIKey(updated), nil
 		},
+		// AIP-148 soft delete: stamp delete_time instead of hard-deleting.
 		Delete_: func(ctx context.Context, key string) error {
-			err := client.APIKey.DeleteOneID(key).Exec(ctx)
+			tenantID := middleware.TenantIDFromContext(ctx)
+			q := client.APIKey.UpdateOneID(key)
+			// Tenant guard: UpdateOneID respects interceptors which scope by account_id.
+			_ = tenantID
+			now := time.Now()
+			err := q.SetDeleteTime(now).Exec(ctx)
 			if ent.IsNotFound(err) {
 				return persistence.ErrNotFound
 			}
 			return err
+		},
+		// AIP-149 undelete: clear delete_time. WithShowDeleted lets us query
+		// soft-deleted rows; DeleteTimeNotNil ensures only deleted rows match
+		// (returns ErrNotFound for live rows, per OQ-3 decision).
+		Undelete_: func(ctx context.Context, key string) (*APIKey, error) {
+			showCtx := entrepo.WithShowDeleted(ctx)
+			existing, err := client.APIKey.Query().Where(
+				entapikey.ID(key),
+				entapikey.DeleteTimeNotNil(),
+			).Only(showCtx)
+			if err != nil {
+				if ent.IsNotFound(err) {
+					return nil, persistence.ErrNotFound
+				}
+				return nil, fmt.Errorf("undelete apikey: %w", err)
+			}
+			restored, err := existing.Update().ClearDeleteTime().Save(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("undelete apikey: %w", err)
+			}
+			return fromEntAPIKey(restored), nil
 		},
 	}
 }
@@ -114,13 +147,20 @@ func fromEntAPIKey(e *ent.APIKey) *APIKey {
 	if e == nil {
 		return nil
 	}
-	return &APIKey{
+	p := &APIKey{
 		Id:        e.ID,
 		Name:      e.Name,
 		AccountId: e.AccountID,
 		KeyPrefix: e.KeyPrefix,
 		// KeyValue intentionally omitted — never returned from storage
 	}
+	if e.DeleteTime != nil {
+		p.DeleteTime = timestamppb.New(*e.DeleteTime)
+	}
+	if e.ExpireTime != nil {
+		p.ExpireTime = timestamppb.New(*e.ExpireTime)
+	}
+	return p
 }
 
 // LookupByKeyValueHash finds an APIKey by the HMAC-SHA256 hash of its key_value.

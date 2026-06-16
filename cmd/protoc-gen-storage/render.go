@@ -29,6 +29,26 @@ func msgHasTenantField(msg messageInfo) bool {
 	return false
 }
 
+// hasSoftDeleteMsg returns true when at least one message opts into soft-delete.
+func hasSoftDeleteMsg(messages []messageInfo) bool {
+	for _, msg := range messages {
+		if msg.SoftDelete {
+			return true
+		}
+	}
+	return false
+}
+
+// hasExpireTimeMsg returns true when at least one message has an expire_time field.
+func hasExpireTimeMsg(messages []messageInfo) bool {
+	for _, msg := range messages {
+		if msg.HasExpireTime {
+			return true
+		}
+	}
+	return false
+}
+
 // messageInfo describes a proto message for storage code generation.
 type messageInfo struct {
 	MessageName     string
@@ -36,18 +56,22 @@ type messageInfo struct {
 	PbImportPath    string // Go import path of the generated proto package
 	Fields          []fieldInfo
 	ResourcePattern string // AIP-122 resource name pattern, e.g. "widgets/{widget}"
+	// AIP-148 soft-delete opt-in: set when the message has a delete_time OUTPUT_ONLY Timestamp field.
+	SoftDelete bool
+	// AIP-148 TTL: set when the message has an expire_time OUTPUT_ONLY Timestamp field.
+	HasExpireTime bool
 }
 
 // fieldInfo describes a single proto message field.
 type fieldInfo struct {
-	Name        string
-	GoFieldName string // Go struct field name (e.g. "PageSize" for proto "page_size")
-	GoType      string
-	SnakeName   string
-	IsID        bool // this field is the resource primary key
-	IsRepeated  bool // repeated field — skipped in GORM model with a TODO
-	IsMessage   bool // nested message field — skipped with a TODO
-	IsSecret    bool // secret field — stored as hash+cipher columns; plaintext never persisted
+	Name         string
+	GoFieldName  string // Go struct field name (e.g. "PageSize" for proto "page_size")
+	GoType       string
+	SnakeName    string
+	IsID         bool // this field is the resource primary key
+	IsRepeated   bool // repeated field — skipped in GORM model with a TODO
+	IsMessage    bool // nested message field — skipped with a TODO
+	IsSecret     bool // secret field — stored as hash+cipher columns; plaintext never persisted
 	IsOutputOnly bool // OUTPUT_ONLY field (google.api.field_behavior) — computed, not persisted
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull    bool
@@ -75,6 +99,8 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("// source: (proto input)\n\n")
 	fmt.Fprintf(&b, "package %s\n\n", storagePkgName)
 	withSecrets := hasSecretFields(messages)
+	withSoftDelete := hasSoftDeleteMsg(messages)
+	withExpireTime := hasExpireTimeMsg(messages)
 
 	// Determine if any message needs the middleware import (tenant or secret lookup).
 	withMiddleware := false
@@ -100,11 +126,18 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n")
+	if withExpireTime {
+		b.WriteString("\t\"database/sql\"\n")
+	}
 	b.WriteString("\t\"encoding/base64\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	b.WriteString("\t\"strconv\"\n")
 	b.WriteString("\t\"time\"\n\n")
-	b.WriteString("\t\"gorm.io/gorm\"\n\n")
+	b.WriteString("\t\"gorm.io/gorm\"\n")
+	if withSoftDelete || withExpireTime {
+		b.WriteString("\t\"google.golang.org/protobuf/types/known/timestamppb\"\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/filter\"\n")
 	// Emit resourcename import only when at least one message has a resource pattern.
@@ -139,6 +172,12 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\t_ = status.Error\n")
 	if hasResourcePattern {
 		b.WriteString("\t_ = resourcename.IDVarName\n")
+	}
+	if withSoftDelete || withExpireTime {
+		b.WriteString("\t_ = timestamppb.New\n")
+	}
+	if withExpireTime {
+		b.WriteString("\t_ = sql.NullTime{}\n")
 	}
 	b.WriteString(")\n\n")
 
@@ -234,7 +273,12 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\tETag      string         `gorm:\"column:etag\"`\n")
 	b.WriteString("\tCreatedAt time.Time\n")
 	b.WriteString("\tUpdatedAt time.Time\n")
-	b.WriteString("\tDeletedAt gorm.DeletedAt `gorm:\"index\"`\n")
+	if msg.SoftDelete {
+		b.WriteString("\tDeletedAt gorm.DeletedAt `gorm:\"index\"`\n")
+	}
+	if msg.HasExpireTime {
+		b.WriteString("\tExpireTime sql.NullTime `gorm:\"column:expire_time;index\"`\n")
+	}
 	b.WriteString("}\n\n")
 
 	pbType := fmt.Sprintf("*%s", msg.MessageName)
@@ -280,6 +324,17 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		gfn := goFieldName(f)
 		fmt.Fprintf(b, "\tp.%s = m.%s\n", gfn, gfn)
 	}
+	// AIP-148: populate delete_time / expire_time from GORM columns.
+	if msg.SoftDelete {
+		b.WriteString("\tif m.DeletedAt.Valid {\n")
+		b.WriteString("\t\tp.DeleteTime = timestamppb.New(m.DeletedAt.Time)\n")
+		b.WriteString("\t}\n")
+	}
+	if msg.HasExpireTime {
+		b.WriteString("\tif m.ExpireTime.Valid {\n")
+		b.WriteString("\t\tp.ExpireTime = timestamppb.New(m.ExpireTime.Time)\n")
+		b.WriteString("\t}\n")
+	}
 	b.WriteString("\treturn p\n}\n\n")
 
 	// Column map for safe filter/order_by parsing (AIP-160/132).
@@ -295,6 +350,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			col = f.ColumnName
 		}
 		fmt.Fprintf(b, "\t%q: %q,\n", f.Name, col)
+	}
+	// AIP-148: soft-delete timestamps admitted into the column map for filter/order_by.
+	if msg.SoftDelete {
+		fmt.Fprintf(b, "\t\"delete_time\": \"deleted_at\",\n")
+	}
+	if msg.HasExpireTime {
+		fmt.Fprintf(b, "\t\"expire_time\": \"expire_time\",\n")
 	}
 	b.WriteString("}\n\n")
 
@@ -357,6 +419,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "func (r *%sRepository) List(ctx context.Context, opts persistence.ListOptions) ([]%s, string, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tvar models []%sModel\n", msg.MessageName)
 	b.WriteString("\tq := r.db.WithContext(ctx)\n")
+	// AIP-148: lift soft-delete scope BEFORE tenant predicate (FR-008, FR-014).
+	if msg.SoftDelete {
+		b.WriteString("\tif opts.ShowDeleted {\n\t\tq = q.Unscoped()\n\t}\n")
+	}
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
@@ -465,20 +531,74 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n")
 
-	// Delete.
+	// Delete — soft (AIP-148) or hard depending on opt-in.
 	fmt.Fprintf(b, "func (r *%sRepository) Delete(ctx context.Context, key string) error {\n", msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
-		fmt.Fprintf(b, "\tif err := q.Delete(&%sModel{}).Error; err != nil {\n", msg.MessageName)
+		if msg.SoftDelete {
+			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", msg.MessageName)
+		} else {
+			fmt.Fprintf(b, "\tres := q.Unscoped().Delete(&%sModel{})\n", msg.MessageName)
+		}
 	} else {
-		fmt.Fprintf(b, "\tif err := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{}).Error; err != nil {\n", msg.MessageName)
+		if msg.SoftDelete {
+			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{})\n", msg.MessageName)
+		} else {
+			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Unscoped().Delete(&%sModel{})\n", msg.MessageName)
+		}
 	}
-	fmt.Fprintf(b, "\t\treturn fmt.Errorf(\"delete %s: %%w\", err)\n", msg.MessageName)
-	b.WriteString("\t}\n\treturn nil\n}\n\n")
+	b.WriteString("\tif res.Error != nil {\n")
+	fmt.Fprintf(b, "\t\treturn fmt.Errorf(\"delete %s: %%w\", res.Error)\n", msg.MessageName)
+	b.WriteString("\t}\n")
+	b.WriteString("\tif res.RowsAffected == 0 {\n\t\treturn persistence.ErrNotFound\n\t}\n")
+	b.WriteString("\treturn nil\n}\n\n")
 
-	// LookupByHash methods for secret fields (T002).
+	// Undelete — full implementation when SoftDelete, otherwise a stub satisfying the interface.
+	if msg.SoftDelete {
+		fmt.Fprintf(b, "func (r *%sRepository) Undelete(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
+		if hasTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).Where(\"id = ?\", key)\n", msg.MessageName)
+			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+			b.WriteString("\tq = q.Where(\"deleted_at IS NOT NULL\")\n")
+		} else {
+			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).\n", msg.MessageName)
+			b.WriteString("\t\tWhere(\"id = ?\", key).Where(\"deleted_at IS NOT NULL\")\n")
+		}
+		b.WriteString("\tres := q.Update(\"deleted_at\", nil)\n")
+		b.WriteString("\tif res.Error != nil {\n")
+		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", res.Error)\n", msg.MessageName)
+		b.WriteString("\t}\n")
+		b.WriteString("\tif res.RowsAffected == 0 {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
+		fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n", )
+	} else {
+		// Stub: hard-delete resources have no soft-deleted rows to restore.
+		fmt.Fprintf(b, "func (r *%sRepository) Undelete(_ context.Context, _ string) (%s, error) {\n", msg.MessageName, pbType)
+		b.WriteString("\treturn nil, persistence.ErrNotFound\n}\n\n")
+	}
+
+	// PurgeExpired — emitted only when HasExpireTime (AIP-148 TTL hook).
+	if msg.HasExpireTime {
+		fmt.Fprintf(b, "func (r *%sRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {\n", msg.MessageName)
+		if hasTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			b.WriteString("\tq := r.db.WithContext(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before)\n")
+			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", msg.MessageName)
+		} else {
+			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Unscoped().\n")
+			b.WriteString("\t\tWhere(\"expire_time IS NOT NULL AND expire_time <= ?\", before).\n")
+			fmt.Fprintf(b, "\t\tDelete(&%sModel{})\n", msg.MessageName)
+		}
+		b.WriteString("\tif res.Error != nil {\n")
+		fmt.Fprintf(b, "\t\treturn 0, fmt.Errorf(\"purge expired %s: %%w\", res.Error)\n", msg.MessageName)
+		b.WriteString("\t}\n")
+		b.WriteString("\treturn res.RowsAffected, nil\n}\n\n")
+	}
+
+	// LookupByHash methods for secret fields.
 	for _, f := range msg.Fields {
 		if !f.IsSecret {
 			continue

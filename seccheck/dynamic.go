@@ -65,6 +65,12 @@ type IsolationConfig struct {
 	// ListFn (optional) lists resources as PrincipalB.
 	// Must return count=0 for isolation to hold.
 	ListFn func(ctx context.Context) (count int, err error)
+	// DeleteFn (optional) soft-deletes the resource as PrincipalA.
+	// Used together with ListDeletedFn to verify soft-deleted isolation.
+	DeleteFn func(ctx context.Context, id string) error
+	// ListDeletedFn (optional) lists soft-deleted resources (show_deleted=true) as PrincipalB.
+	// Must return count=0 for isolation to hold. Requires DeleteFn to be set.
+	ListDeletedFn func(ctx context.Context) (count int, err error)
 }
 
 // AssertCrossAccountIsolation verifies that resources created by PrincipalA
@@ -104,6 +110,39 @@ func AssertCrossAccountIsolation(ctx context.Context, cfg IsolationConfig) []Fin
 				Severity: Error,
 				Message:  fmt.Sprintf("PrincipalB list returned %d item(s) owned by PrincipalA; expected 0", count),
 			})
+		}
+	}
+	// Soft-delete isolation: delete as A, then verify B cannot see the deleted resource.
+	if cfg.DeleteFn != nil && cfg.ListDeletedFn != nil {
+		if err := cfg.DeleteFn(ctxA, id); err != nil {
+			findings = append(findings, Finding{
+				Method:   "(delete)",
+				Severity: Warning,
+				Message:  fmt.Sprintf("DeleteFn returned error: %v", err),
+			})
+		} else {
+			// B must not see A's soft-deleted resource via show_deleted list.
+			if count, err := cfg.ListDeletedFn(ctxB); err != nil {
+				findings = append(findings, Finding{
+					Method:   "(list-deleted)",
+					Severity: Warning,
+					Message:  fmt.Sprintf("ListDeletedFn returned error: %v", err),
+				})
+			} else if count > 0 {
+				findings = append(findings, Finding{
+					Method:   "(list-deleted)",
+					Severity: Error,
+					Message:  fmt.Sprintf("PrincipalB show_deleted list returned %d soft-deleted item(s) owned by PrincipalA; expected 0", count),
+				})
+			}
+			// B must not see A's soft-deleted resource via direct read.
+			if err := cfg.ReadFn(ctxB, id); status.Code(err) != codes.NotFound {
+				findings = append(findings, Finding{
+					Method:   "(read-deleted)",
+					Severity: Error,
+					Message:  fmt.Sprintf("PrincipalB read soft-deleted PrincipalA resource (id=%s): expected NotFound, got %v", id, status.Code(err)),
+				})
+			}
 		}
 	}
 	return findings

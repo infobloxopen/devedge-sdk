@@ -61,17 +61,17 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		}
 		for _, field := range m.Fields {
 			var (
-				isSecret    bool
+				isSecret     bool
 				isOutputOnly bool
-				notNull     bool
-				unique      bool
-				index       bool
-				columnName  string
-				columnType  string
-				hasOne      *fieldv1.HasOne
-				hasMany     *fieldv1.HasMany
-				belongsTo   *fieldv1.BelongsTo
-				manyToMany  *fieldv1.ManyToMany
+				notNull      bool
+				unique       bool
+				index        bool
+				columnName   string
+				columnType   string
+				hasOne       *fieldv1.HasOne
+				hasMany      *fieldv1.HasMany
+				belongsTo    *fieldv1.BelongsTo
+				manyToMany   *fieldv1.ManyToMany
 			)
 			if opts := field.Desc.Options(); opts != nil {
 				if proto.HasExtension(opts, fieldv1.E_Opts) {
@@ -95,6 +95,22 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 							isOutputOnly = true
 						}
 					}
+				}
+			}
+			// AIP-148: detect soft-delete and TTL markers. These are handled specially
+			// by the renderer and must NOT be added to msg.Fields as ordinary columns.
+			fieldName := string(field.Desc.Name())
+			isTimestamp := field.Desc.Kind() == protoreflect.MessageKind &&
+				field.Desc.Message() != nil &&
+				field.Desc.Message().FullName() == "google.protobuf.Timestamp"
+			if isOutputOnly && isTimestamp {
+				if fieldName == "delete_time" {
+					msg.SoftDelete = true
+					continue // handled by renderer; not an ordinary column
+				}
+				if fieldName == "expire_time" {
+					msg.HasExpireTime = true
+					continue // handled by renderer; not an ordinary column
 				}
 			}
 			msg.Fields = append(msg.Fields, fieldInfo{

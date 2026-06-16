@@ -15,6 +15,7 @@ import (
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -31,12 +32,14 @@ const (
 type Widget struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is the AIP-122 resource name, e.g. "widgets/abc123".
-	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Id            string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
-	DisplayName   string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Color         string `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
-	Weight        int32  `protobuf:"varint,5,opt,name=weight,proto3" json:"weight,omitempty"`
-	Etag          string `protobuf:"bytes,6,opt,name=etag,proto3" json:"etag,omitempty"`
+	Name        string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id          string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	DisplayName string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Color       string `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
+	Weight      int32  `protobuf:"varint,5,opt,name=weight,proto3" json:"weight,omitempty"`
+	Etag        string `protobuf:"bytes,6,opt,name=etag,proto3" json:"etag,omitempty"`
+	// AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.
+	DeleteTime    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -111,6 +114,13 @@ func (x *Widget) GetEtag() string {
 		return x.Etag
 	}
 	return ""
+}
+
+func (x *Widget) GetDeleteTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeleteTime
+	}
+	return nil
 }
 
 type CreateWidgetRequest struct {
@@ -202,9 +212,11 @@ func (x *GetWidgetRequest) GetId() string {
 }
 
 type ListWidgetsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PageSize      int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	PageSize  int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// AIP-148: include soft-deleted widgets when true.
+	ShowDeleted   bool `protobuf:"varint,3,opt,name=show_deleted,json=showDeleted,proto3" json:"show_deleted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -251,6 +263,13 @@ func (x *ListWidgetsRequest) GetPageToken() string {
 		return x.PageToken
 	}
 	return ""
+}
+
+func (x *ListWidgetsRequest) GetShowDeleted() bool {
+	if x != nil {
+		return x.ShowDeleted
+	}
+	return false
 }
 
 type ListWidgetsResponse struct {
@@ -441,23 +460,26 @@ var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
 	"\n" +
-	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\xc5\x01\n" +
+	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\x87\x02\n" +
 	"\x06Widget\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x14\n" +
 	"\x05color\x18\x04 \x01(\tR\x05color\x12\x16\n" +
 	"\x06weight\x18\x05 \x01(\x05R\x06weight\x12\x12\n" +
-	"\x04etag\x18\x06 \x01(\tR\x04etag:-\xeaA*\n" +
+	"\x04etag\x18\x06 \x01(\tR\x04etag\x12@\n" +
+	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
+	"deleteTime:-\xeaA*\n" +
 	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\"=\n" +
 	"\x13CreateWidgetRequest\x12&\n" +
 	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\"\"\n" +
 	"\x10GetWidgetRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"P\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"s\n" +
 	"\x12ListWidgetsRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x02 \x01(\tR\tpageToken\"g\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\x12!\n" +
+	"\fshow_deleted\x18\x03 \x01(\bR\vshowDeleted\"g\n" +
 	"\x13ListWidgetsResponse\x12(\n" +
 	"\awidgets\x18\x01 \x03(\v2\x0e.toy.v1.WidgetR\awidgets\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"^\n" +
@@ -494,34 +516,36 @@ func file_widgets_proto_rawDescGZIP() []byte {
 
 var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_widgets_proto_goTypes = []any{
-	(*Widget)(nil),               // 0: toy.v1.Widget
-	(*CreateWidgetRequest)(nil),  // 1: toy.v1.CreateWidgetRequest
-	(*GetWidgetRequest)(nil),     // 2: toy.v1.GetWidgetRequest
-	(*ListWidgetsRequest)(nil),   // 3: toy.v1.ListWidgetsRequest
-	(*ListWidgetsResponse)(nil),  // 4: toy.v1.ListWidgetsResponse
-	(*UpdateWidgetRequest)(nil),  // 5: toy.v1.UpdateWidgetRequest
-	(*DeleteWidgetRequest)(nil),  // 6: toy.v1.DeleteWidgetRequest
-	(*DeleteWidgetResponse)(nil), // 7: toy.v1.DeleteWidgetResponse
+	(*Widget)(nil),                // 0: toy.v1.Widget
+	(*CreateWidgetRequest)(nil),   // 1: toy.v1.CreateWidgetRequest
+	(*GetWidgetRequest)(nil),      // 2: toy.v1.GetWidgetRequest
+	(*ListWidgetsRequest)(nil),    // 3: toy.v1.ListWidgetsRequest
+	(*ListWidgetsResponse)(nil),   // 4: toy.v1.ListWidgetsResponse
+	(*UpdateWidgetRequest)(nil),   // 5: toy.v1.UpdateWidgetRequest
+	(*DeleteWidgetRequest)(nil),   // 6: toy.v1.DeleteWidgetRequest
+	(*DeleteWidgetResponse)(nil),  // 7: toy.v1.DeleteWidgetResponse
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
 }
 var file_widgets_proto_depIdxs = []int32{
-	0, // 0: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
-	0, // 1: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
-	0, // 2: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
-	1, // 3: toy.v1.WidgetService.CreateWidget:input_type -> toy.v1.CreateWidgetRequest
-	2, // 4: toy.v1.WidgetService.GetWidget:input_type -> toy.v1.GetWidgetRequest
-	3, // 5: toy.v1.WidgetService.ListWidgets:input_type -> toy.v1.ListWidgetsRequest
-	5, // 6: toy.v1.WidgetService.UpdateWidget:input_type -> toy.v1.UpdateWidgetRequest
-	6, // 7: toy.v1.WidgetService.DeleteWidget:input_type -> toy.v1.DeleteWidgetRequest
-	0, // 8: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
-	0, // 9: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
-	4, // 10: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
-	0, // 11: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
-	7, // 12: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
-	8, // [8:13] is the sub-list for method output_type
-	3, // [3:8] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	8, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
+	0, // 1: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
+	0, // 2: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
+	0, // 3: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
+	1, // 4: toy.v1.WidgetService.CreateWidget:input_type -> toy.v1.CreateWidgetRequest
+	2, // 5: toy.v1.WidgetService.GetWidget:input_type -> toy.v1.GetWidgetRequest
+	3, // 6: toy.v1.WidgetService.ListWidgets:input_type -> toy.v1.ListWidgetsRequest
+	5, // 7: toy.v1.WidgetService.UpdateWidget:input_type -> toy.v1.UpdateWidgetRequest
+	6, // 8: toy.v1.WidgetService.DeleteWidget:input_type -> toy.v1.DeleteWidgetRequest
+	0, // 9: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
+	0, // 10: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
+	4, // 11: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
+	0, // 12: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
+	7, // 13: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
+	9, // [9:14] is the sub-list for method output_type
+	4, // [4:9] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_widgets_proto_init() }

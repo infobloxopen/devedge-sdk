@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -49,14 +50,15 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		msg := entMessageInfo{MessageName: name}
 		for _, field := range m.Fields {
 			var (
-				isSecret   bool
-				notNull    bool
-				unique     bool
-				index      bool
-				hasOne     *fieldv1.HasOne
-				hasMany    *fieldv1.HasMany
-				belongsTo  *fieldv1.BelongsTo
-				manyToMany *fieldv1.ManyToMany
+				isSecret     bool
+				isOutputOnly bool
+				notNull      bool
+				unique       bool
+				index        bool
+				hasOne       *fieldv1.HasOne
+				hasMany      *fieldv1.HasMany
+				belongsTo    *fieldv1.BelongsTo
+				manyToMany   *fieldv1.ManyToMany
 			)
 			if opts := field.Desc.Options(); opts != nil {
 				if proto.HasExtension(opts, fieldv1.E_Opts) {
@@ -71,7 +73,31 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						manyToMany = fopts.GetManyToMany()
 					}
 				}
+				if proto.HasExtension(opts, apiannotations.E_FieldBehavior) {
+					behaviors, _ := proto.GetExtension(opts, apiannotations.E_FieldBehavior).([]apiannotations.FieldBehavior)
+					for _, b := range behaviors {
+						if b == apiannotations.FieldBehavior_OUTPUT_ONLY {
+							isOutputOnly = true
+						}
+					}
+				}
 			}
+			// AIP-148: detect soft-delete and TTL markers.
+			fieldName := string(field.Desc.Name())
+			isTimestamp := field.Desc.Kind() == protoreflect.MessageKind &&
+				field.Desc.Message() != nil &&
+				field.Desc.Message().FullName() == "google.protobuf.Timestamp"
+			if isOutputOnly && isTimestamp {
+				if fieldName == "delete_time" {
+					msg.SoftDelete = true
+					continue // SoftDeleteMixin owns this field
+				}
+				if fieldName == "expire_time" {
+					msg.HasExpireTime = true
+					continue // emitted as a direct Time field in renderEntSchema
+				}
+			}
+			_ = isOutputOnly // consumed above; not propagated to entFieldInfo
 			msg.Fields = append(msg.Fields, entFieldInfo{
 				Name:       string(field.Desc.Name()),
 				SnakeName:  toSnake(string(field.Desc.Name())),

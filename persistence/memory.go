@@ -19,32 +19,38 @@ func SetIfMatchExpectation(ctx context.Context, expectedETag string) context.Con
 // MemoryRepository is an in-memory, concurrency-safe [Repository] for
 // development and tests. Not for production: nothing is persisted. List
 // supports cursor-based pagination; filter/order are ignored.
+//
+// Soft-delete is uniform: Delete marks an entity deleted without removing it;
+// Undelete clears the mark. ShowDeleted in ListOptions includes deleted entities.
 type MemoryRepository[T any, K comparable] struct {
-	mu    sync.RWMutex
-	items map[K]T
-	etags map[K]string
-	keys  []K
-	keyFn func(T) K
+	mu      sync.RWMutex
+	items   map[K]T
+	etags   map[K]string
+	keys    []K
+	deleted map[K]bool
+	keyFn   func(T) K
 }
 
 // NewMemoryRepository returns an in-memory repository. keyFn extracts the key
 // from an entity (used by Create to detect conflicts).
 func NewMemoryRepository[T any, K comparable](keyFn func(T) K) *MemoryRepository[T, K] {
 	return &MemoryRepository[T, K]{
-		items: map[K]T{},
-		etags: map[K]string{},
-		keys:  []K{},
-		keyFn: keyFn,
+		items:   map[K]T{},
+		etags:   map[K]string{},
+		keys:    []K{},
+		deleted: map[K]bool{},
+		keyFn:   keyFn,
 	}
 }
 
 // Get implements [Repository]. If an ETag is stored for the key it is written
 // into ctx via [etag.SetNewETag] so callers (and interceptors) can read it.
+// Returns ErrNotFound for soft-deleted entities.
 func (r *MemoryRepository[T, K]) Get(ctx context.Context, key K) (T, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	v, ok := r.items[key]
-	if !ok {
+	if !ok || r.deleted[key] {
 		var zero T
 		return zero, ErrNotFound
 	}
@@ -65,6 +71,7 @@ func (r *MemoryRepository[T, K]) GetETagForKey(key K) string {
 // List implements [Repository] with cursor-based pagination.
 // PageToken is a base64-encoded decimal offset. PageSize defaults to 50.
 // Filter and OrderBy are ignored by the in-memory implementation.
+// Soft-deleted entities are excluded unless opts.ShowDeleted is true.
 func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -72,6 +79,15 @@ func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T,
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+
+	// Build a slice of visible keys respecting ShowDeleted.
+	visible := make([]K, 0, len(r.keys))
+	for _, k := range r.keys {
+		if r.deleted[k] && !opts.ShowDeleted {
+			continue
+		}
+		visible = append(visible, k)
 	}
 
 	offset := 0
@@ -83,7 +99,7 @@ func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T,
 		}
 	}
 
-	total := len(r.keys)
+	total := len(visible)
 	if offset > total {
 		offset = total
 	}
@@ -93,7 +109,7 @@ func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T,
 		end = total
 	}
 
-	page := r.keys[offset:end]
+	page := visible[offset:end]
 	items := make([]T, 0, len(page))
 	for _, k := range page {
 		items = append(items, r.items[k])
@@ -151,21 +167,37 @@ func (r *MemoryRepository[T, K]) Update(ctx context.Context, key K, entity T, _ 
 	return entity, nil
 }
 
-// Delete implements [Repository].
+// Delete implements [Repository] with soft-delete semantics: the entity is
+// marked deleted but not removed. Get returns ErrNotFound; List excludes it
+// unless opts.ShowDeleted is set. Returns ErrNotFound when the key is absent
+// or already soft-deleted.
 func (r *MemoryRepository[T, K]) Delete(_ context.Context, key K) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.items[key]; !ok {
 		return ErrNotFound
 	}
-	delete(r.items, key)
-	delete(r.etags, key)
-	// Remove from ordered keys slice.
-	for i, k := range r.keys {
-		if k == key {
-			r.keys = append(r.keys[:i], r.keys[i+1:]...)
-			break
-		}
+	if r.deleted[key] {
+		return ErrNotFound
 	}
+	r.deleted[key] = true
 	return nil
+}
+
+// Undelete implements [Repository]: clears the soft-delete mark so the entity
+// reappears in Get and List. Returns ErrNotFound when the key is absent or not
+// currently soft-deleted.
+func (r *MemoryRepository[T, K]) Undelete(_ context.Context, key K) (T, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[key]; !ok {
+		var zero T
+		return zero, ErrNotFound
+	}
+	if !r.deleted[key] {
+		var zero T
+		return zero, ErrNotFound
+	}
+	delete(r.deleted, key)
+	return r.items[key], nil
 }
