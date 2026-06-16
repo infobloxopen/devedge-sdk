@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
@@ -30,7 +31,8 @@ import (
 // toyHandler is a concrete in-memory WidgetServiceServer used by integration tests.
 type toyHandler struct {
 	widgetsv1.UnimplementedWidgetServiceServer
-	repo *persistence.MemoryRepository[*widgetsv1.Widget, string]
+	repo   *persistence.MemoryRepository[*widgetsv1.Widget, string]
+	lroMgr *lro.Manager
 }
 
 func (h *toyHandler) CreateWidget(ctx context.Context, req *widgetsv1.CreateWidgetRequest) (*widgetsv1.Widget, error) {
@@ -125,22 +127,57 @@ func (h *toyHandler) BatchDeleteWidgets(ctx context.Context, req *widgetsv1.Batc
 	return &emptypb.Empty{}, nil
 }
 
+// ProcessWidget starts an async job and returns a pending OperationStatus (AIP-151).
+func (h *toyHandler) ProcessWidget(ctx context.Context, req *widgetsv1.ProcessWidgetRequest) (*widgetsv1.OperationStatus, error) {
+	id := req.Id
+	op, err := h.lroMgr.Submit(ctx, id, func(ctx context.Context) (any, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+		return fmt.Sprintf("processed:%s", id), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &widgetsv1.OperationStatus{Name: op.Name, Done: op.Done}, nil
+}
+
+// GetOperationStatus polls a ProcessWidget operation (AIP-151).
+func (h *toyHandler) GetOperationStatus(ctx context.Context, req *widgetsv1.GetOperationStatusRequest) (*widgetsv1.OperationStatus, error) {
+	op, err := h.lroMgr.Store().Get(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	result := ""
+	if op.Done && op.Response != nil {
+		if r, ok := op.Response.(string); ok {
+			result = r
+		}
+	}
+	return &widgetsv1.OperationStatus{Name: op.Name, Done: op.Done, Result: result}, nil
+}
+
 // newTestServer boots a real server with port :0 (kernel-assigned), registers
 // the toy WidgetService, and returns the server plus its gRPC and HTTP addresses.
 // It also wires a Cleanup that cancels the server's context on test finish.
 func newTestServer(t *testing.T, authorizer authz.Authorizer) (*server.Server, string, string) {
 	t.Helper()
+	lroStore := lro.NewMemoryStore(time.Hour)
 	s, err := server.New(server.Config{
 		GRPCAddr:   ":0",
 		HTTPAddr:   ":0",
 		Rules:      widgetsv1.WidgetServiceAuthzRules,
 		Authorizer: authorizer,
+		LROStore:   lroStore,
 	})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
 	handler := &toyHandler{
-		repo: persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
+		repo:   persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
+		lroMgr: lro.NewManager(lroStore),
 	}
 	if err := widgetsv1.RegisterWidgetService(s, handler); err != nil {
 		t.Fatalf("RegisterWidgetService: %v", err)
@@ -863,18 +900,21 @@ func TestIntegration_ValidateOnly_NoSideEffects(t *testing.T) {
 
 func newTestServerWithDedup(t *testing.T, authorizer authz.Authorizer, store middleware.DeduplicationStore) (*server.Server, string, string) {
 	t.Helper()
+	lroStore := lro.NewMemoryStore(time.Hour)
 	s, err := server.New(server.Config{
 		GRPCAddr:           ":0",
 		HTTPAddr:           ":0",
 		Rules:              widgetsv1.WidgetServiceAuthzRules,
 		Authorizer:         authorizer,
 		DeduplicationStore: store,
+		LROStore:           lroStore,
 	})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
 	handler := &toyHandler{
-		repo: persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
+		repo:   persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
+		lroMgr: lro.NewManager(lroStore),
 	}
 	if err := widgetsv1.RegisterWidgetService(s, handler); err != nil {
 		t.Fatalf("RegisterWidgetService: %v", err)
@@ -1086,5 +1126,84 @@ func TestIntegration_Dedup_ChainIncludesBothInterceptors(t *testing.T) {
 	}
 	if s == nil {
 		t.Fatal("server.New returned nil")
+	}
+}
+
+// -----------------------------------------------------------------------
+// TestIntegration_LRO: AIP-151 long-running operations
+
+func TestIntegration_LRO_ProcessWidget(t *testing.T) {
+	// AC-007/AC-008: ProcessWidget returns a pending operation immediately;
+	// polling until done returns the expected result.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	// Start the async job.
+	pending, err := client.ProcessWidget(ctx, &widgetsv1.ProcessWidgetRequest{Id: "lro-widget-1"})
+	if err != nil {
+		t.Fatalf("ProcessWidget: %v", err)
+	}
+	if pending.Name == "" {
+		t.Fatal("ProcessWidget: operation name must not be empty")
+	}
+	if pending.Done {
+		t.Error("ProcessWidget: want Done=false on initial response")
+	}
+
+	// Poll until done (up to 500ms).
+	pollCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	var final *widgetsv1.OperationStatus
+	for {
+		op, err := client.GetOperationStatus(pollCtx, &widgetsv1.GetOperationStatusRequest{Name: pending.Name})
+		if err != nil {
+			t.Fatalf("GetOperationStatus: %v", err)
+		}
+		if op.Done {
+			final = op
+			break
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatal("operation did not complete within 500ms")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	want := "processed:lro-widget-1"
+	if final.Result != want {
+		t.Errorf("Result = %q, want %q", final.Result, want)
+	}
+}
+
+func TestIntegration_LRO_NilLROStoreAutoInit(t *testing.T) {
+	// AC-006: server.New with nil LROStore must auto-initialize without error.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	s, err := server.New(server.Config{
+		GRPCAddr:   ":0",
+		Rules:      widgetsv1.WidgetServiceAuthzRules,
+		Authorizer: permissive,
+		// LROStore intentionally nil — must auto-init.
+	})
+	if err != nil {
+		t.Fatalf("server.New with nil LROStore: %v", err)
+	}
+	if s.LROStore() == nil {
+		t.Error("server.New: LROStore must be non-nil after auto-init")
 	}
 }

@@ -6,11 +6,16 @@ package widgetsv1
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
@@ -28,6 +33,8 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 		WidgetService_ArchiveWidget_FullMethodName,
 		WidgetService_BatchGetWidgets_FullMethodName,
 		WidgetService_BatchDeleteWidgets_FullMethodName,
+		WidgetService_ProcessWidget_FullMethodName,
+		WidgetService_GetOperationStatus_FullMethodName,
 	}
 	if err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {
 		return err
@@ -42,12 +49,17 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 // WidgetServer is a concrete WidgetServiceServer backed by a WidgetRepository.
 type WidgetServer struct {
 	UnimplementedWidgetServiceServer
-	repo *WidgetRepository
+	repo   *WidgetRepository
+	lroMgr *lro.Manager
 }
 
 // NewWidgetServer creates a WidgetServer backed by the given repository.
-func NewWidgetServer(repo *WidgetRepository) *WidgetServer {
-	return &WidgetServer{repo: repo}
+// lroStore is optional; when nil a MemoryStore with a 1-hour TTL is used.
+func NewWidgetServer(repo *WidgetRepository, lroStore lro.Store) *WidgetServer {
+	if lroStore == nil {
+		lroStore = lro.NewMemoryStore(time.Hour)
+	}
+	return &WidgetServer{repo: repo, lroMgr: lro.NewManager(lroStore)}
 }
 
 // CreateWidget implements AIP-133 create. When validate_only is true (AIP-163)
@@ -67,4 +79,38 @@ func (s *WidgetServer) CreateWidget(ctx context.Context, req *CreateWidgetReques
 		return nil, err
 	}
 	return created, nil
+}
+
+// ProcessWidget starts an async processing job for the given widget ID (AIP-151).
+// It returns a pending OperationStatus immediately; the background work completes
+// after ~50ms and stores the result under the operation name.
+func (s *WidgetServer) ProcessWidget(ctx context.Context, req *ProcessWidgetRequest) (*OperationStatus, error) {
+	id := req.Id
+	op, err := s.lroMgr.Submit(ctx, id, func(ctx context.Context) (any, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+		return fmt.Sprintf("processed:%s", id), nil
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "submit operation: %v", err)
+	}
+	return &OperationStatus{Name: op.Name, Done: op.Done}, nil
+}
+
+// GetOperationStatus retrieves the current status of a ProcessWidget operation (AIP-151).
+func (s *WidgetServer) GetOperationStatus(ctx context.Context, req *GetOperationStatusRequest) (*OperationStatus, error) {
+	op, err := s.lroMgr.Store().Get(ctx, req.Name)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "operation %q not found", req.Name)
+	}
+	result := ""
+	if op.Done && op.Response != nil {
+		if r, ok := op.Response.(string); ok {
+			result = r
+		}
+	}
+	return &OperationStatus{Name: op.Name, Done: op.Done, Result: result}, nil
 }
