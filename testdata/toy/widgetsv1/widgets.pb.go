@@ -137,6 +137,8 @@ func (x *Widget) GetArchivedTime() *timestamppb.Timestamp {
 type CreateWidgetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Widget        *Widget                `protobuf:"bytes,1,opt,name=widget,proto3" json:"widget,omitempty"`
+	RequestId     string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`           // AIP-155: idempotency key; empty = no dedup.
+	ValidateOnly  bool                   `protobuf:"varint,3,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"` // AIP-163: dry-run; validate but do not persist.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -176,6 +178,20 @@ func (x *CreateWidgetRequest) GetWidget() *Widget {
 		return x.Widget
 	}
 	return nil
+}
+
+func (x *CreateWidgetRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CreateWidgetRequest) GetValidateOnly() bool {
+	if x != nil {
+		return x.ValidateOnly
+	}
+	return false
 }
 
 type GetWidgetRequest struct {
@@ -723,9 +739,12 @@ const file_widgets_proto_rawDesc = "" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"deleteTime\x12D\n" +
 	"\rarchived_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\farchivedTime:-\xeaA*\n" +
-	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\"=\n" +
+	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\"\x81\x01\n" +
 	"\x13CreateWidgetRequest\x12&\n" +
-	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\"[\n" +
+	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12#\n" +
+	"\rvalidate_only\x18\x03 \x01(\bR\fvalidateOnly\"[\n" +
 	"\x10GetWidgetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x127\n" +
 	"\tread_mask\x18\b \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"\xac\x01\n" +

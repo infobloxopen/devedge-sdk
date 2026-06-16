@@ -1,7 +1,7 @@
 # F023 — Request Deduplication (AIP-155) + Validate-Only (AIP-163)
 
 **AIPs**: AIP-155 (request deduplication), AIP-163 (validate-only)
-**Status**: in-progress
+**Status**: done
 **Branch**: `023-request-dedup-validate-only`
 
 ---
