@@ -14,6 +14,8 @@ const (
 	FieldID = "id"
 	// FieldAccountID holds the string denoting the account_id field in the database.
 	FieldAccountID = "account_id"
+	// FieldDeleteTime holds the string denoting the delete_time field in the database.
+	FieldDeleteTime = "delete_time"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
 	// FieldKeyValueHash holds the string denoting the key_value_hash field in the database.
@@ -22,6 +24,10 @@ const (
 	FieldKeyValueCipher = "key_value_cipher"
 	// FieldKeyPrefix holds the string denoting the key_prefix field in the database.
 	FieldKeyPrefix = "key_prefix"
+	// FieldLabel holds the string denoting the label field in the database.
+	FieldLabel = "label"
+	// FieldExpireTime holds the string denoting the expire_time field in the database.
+	FieldExpireTime = "expire_time"
 	// Table holds the table name of the apikey in the database.
 	Table = "api_keys"
 )
@@ -30,10 +36,13 @@ const (
 var Columns = []string{
 	FieldID,
 	FieldAccountID,
+	FieldDeleteTime,
 	FieldName,
 	FieldKeyValueHash,
 	FieldKeyValueCipher,
 	FieldKeyPrefix,
+	FieldLabel,
+	FieldExpireTime,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -52,7 +61,7 @@ func ValidColumn(column string) bool {
 //
 //	import _ "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/runtime"
 var (
-	Interceptors [1]ent.Interceptor
+	Interceptors [2]ent.Interceptor
 	// AccountIDValidator is a validator for the "account_id" field. It is called by the builders before save.
 	AccountIDValidator func(string) error
 )
@@ -68,6 +77,11 @@ func ByID(opts ...sql.OrderTermOption) OrderOption {
 // ByAccountID orders the results by the account_id field.
 func ByAccountID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAccountID, opts...).ToFunc()
+}
+
+// ByDeleteTime orders the results by the delete_time field.
+func ByDeleteTime(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDeleteTime, opts...).ToFunc()
 }
 
 // ByName orders the results by the name field.
@@ -88,4 +102,14 @@ func ByKeyValueCipher(opts ...sql.OrderTermOption) OrderOption {
 // ByKeyPrefix orders the results by the key_prefix field.
 func ByKeyPrefix(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldKeyPrefix, opts...).ToFunc()
+}
+
+// ByLabel orders the results by the label field.
+func ByLabel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLabel, opts...).ToFunc()
+}
+
+// ByExpireTime orders the results by the expire_time field.
+func ByExpireTime(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExpireTime, opts...).ToFunc()
 }

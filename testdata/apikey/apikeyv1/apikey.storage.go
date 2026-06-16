@@ -5,12 +5,14 @@ package apikeyv1
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"strconv"
 	"time"
 
 	"gorm.io/gorm"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
@@ -29,6 +31,8 @@ var (
 	_ = codes.OK
 	_ = status.Error
 	_ = resourcename.IDVarName
+	_ = timestamppb.New
+	_ = sql.NullTime{}
 )
 
 // APIKeyModel is the GORM model for APIKey.
@@ -43,6 +47,7 @@ type APIKeyModel struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	DeletedAt      gorm.DeletedAt `gorm:"index"`
+	ExpireTime     sql.NullTime   `gorm:"column:expire_time;index"`
 }
 
 func toModel_APIKey(p *APIKey) *APIKeyModel {
@@ -65,15 +70,23 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 	p.AccountId = m.AccountId
 	p.KeyPrefix = m.KeyPrefix
 	p.Label = m.Label
+	if m.DeletedAt.Valid {
+		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
+	}
+	if m.ExpireTime.Valid {
+		p.ExpireTime = timestamppb.New(m.ExpireTime.Time)
+	}
 	return p
 }
 
 // APIKeyColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var APIKeyColumns = map[string]string{
-	"id":         "id",
-	"account_id": "account_id",
-	"key_prefix": "key_prefix",
-	"label":      "label",
+	"id":          "id",
+	"account_id":  "account_id",
+	"key_prefix":  "key_prefix",
+	"label":       "label",
+	"delete_time": "deleted_at",
+	"expire_time": "expire_time",
 }
 
 // APIKeyNamePattern is the AIP-122 resource name pattern for APIKey.
@@ -120,6 +133,9 @@ func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error)
 func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*APIKey, string, error) {
 	var models []APIKeyModel
 	q := r.db.WithContext(ctx)
+	if opts.ShowDeleted {
+		q = q.Unscoped()
+	}
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -228,10 +244,44 @@ func (r *APIKeyRepository) Delete(ctx context.Context, key string) error {
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
-	if err := q.Delete(&APIKeyModel{}).Error; err != nil {
-		return fmt.Errorf("delete APIKey: %w", err)
+	res := q.Delete(&APIKeyModel{})
+	if res.Error != nil {
+		return fmt.Errorf("delete APIKey: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return persistence.ErrNotFound
 	}
 	return nil
+}
+
+func (r *APIKeyRepository) Undelete(ctx context.Context, key string) (*APIKey, error) {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Unscoped().Model(&APIKeyModel{}).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	q = q.Where("deleted_at IS NOT NULL")
+	res := q.Update("deleted_at", nil)
+	if res.Error != nil {
+		return nil, fmt.Errorf("undelete APIKey: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, persistence.ErrNotFound
+	}
+	return r.Get(ctx, key)
+}
+
+func (r *APIKeyRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	res := q.Delete(&APIKeyModel{})
+	if res.Error != nil {
+		return 0, fmt.Errorf("purge expired APIKey: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // LookupByKeyValueHash finds the APIKey by the hash of its KeyValue field.

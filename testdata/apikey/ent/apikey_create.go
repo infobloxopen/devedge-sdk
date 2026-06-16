@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
@@ -22,6 +23,20 @@ type APIKeyCreate struct {
 // SetAccountID sets the "account_id" field.
 func (_c *APIKeyCreate) SetAccountID(v string) *APIKeyCreate {
 	_c.mutation.SetAccountID(v)
+	return _c
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (_c *APIKeyCreate) SetDeleteTime(v time.Time) *APIKeyCreate {
+	_c.mutation.SetDeleteTime(v)
+	return _c
+}
+
+// SetNillableDeleteTime sets the "delete_time" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableDeleteTime(v *time.Time) *APIKeyCreate {
+	if v != nil {
+		_c.SetDeleteTime(*v)
+	}
 	return _c
 }
 
@@ -77,6 +92,34 @@ func (_c *APIKeyCreate) SetKeyPrefix(v string) *APIKeyCreate {
 func (_c *APIKeyCreate) SetNillableKeyPrefix(v *string) *APIKeyCreate {
 	if v != nil {
 		_c.SetKeyPrefix(*v)
+	}
+	return _c
+}
+
+// SetLabel sets the "label" field.
+func (_c *APIKeyCreate) SetLabel(v string) *APIKeyCreate {
+	_c.mutation.SetLabel(v)
+	return _c
+}
+
+// SetNillableLabel sets the "label" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableLabel(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetLabel(*v)
+	}
+	return _c
+}
+
+// SetExpireTime sets the "expire_time" field.
+func (_c *APIKeyCreate) SetExpireTime(v time.Time) *APIKeyCreate {
+	_c.mutation.SetExpireTime(v)
+	return _c
+}
+
+// SetNillableExpireTime sets the "expire_time" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableExpireTime(v *time.Time) *APIKeyCreate {
+	if v != nil {
+		_c.SetExpireTime(*v)
 	}
 	return _c
 }
@@ -168,6 +211,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 		_spec.SetField(apikey.FieldAccountID, field.TypeString, value)
 		_node.AccountID = value
 	}
+	if value, ok := _c.mutation.DeleteTime(); ok {
+		_spec.SetField(apikey.FieldDeleteTime, field.TypeTime, value)
+		_node.DeleteTime = &value
+	}
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 		_node.Name = value
@@ -183,6 +230,14 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.KeyPrefix(); ok {
 		_spec.SetField(apikey.FieldKeyPrefix, field.TypeString, value)
 		_node.KeyPrefix = value
+	}
+	if value, ok := _c.mutation.Label(); ok {
+		_spec.SetField(apikey.FieldLabel, field.TypeString, value)
+		_node.Label = value
+	}
+	if value, ok := _c.mutation.ExpireTime(); ok {
+		_spec.SetField(apikey.FieldExpireTime, field.TypeTime, value)
+		_node.ExpireTime = &value
 	}
 	return _node, _spec
 }

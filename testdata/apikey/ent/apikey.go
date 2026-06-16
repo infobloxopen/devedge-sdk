@@ -5,6 +5,7 @@ package ent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
@@ -18,6 +19,8 @@ type APIKey struct {
 	ID string `json:"id,omitempty"`
 	// Tenant discriminator — all queries are automatically scoped to this value.
 	AccountID string `json:"account_id,omitempty"`
+	// AIP-148 soft-delete timestamp; nil for live entities.
+	DeleteTime *time.Time `json:"delete_time,omitempty"`
 	// Name holds the value of the "name" field.
 	Name string `json:"name,omitempty"`
 	// HMAC-SHA256 of key_value for lookup
@@ -25,7 +28,11 @@ type APIKey struct {
 	// encrypted key_value for recovery
 	KeyValueCipher string `json:"key_value_cipher,omitempty"`
 	// KeyPrefix holds the value of the "key_prefix" field.
-	KeyPrefix    string `json:"key_prefix,omitempty"`
+	KeyPrefix string `json:"key_prefix,omitempty"`
+	// Label holds the value of the "label" field.
+	Label string `json:"label,omitempty"`
+	// AIP-148 TTL: soft-delete rows may be purged after this time.
+	ExpireTime   *time.Time `json:"expire_time,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -34,8 +41,10 @@ func (*APIKey) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case apikey.FieldID, apikey.FieldAccountID, apikey.FieldName, apikey.FieldKeyValueHash, apikey.FieldKeyValueCipher, apikey.FieldKeyPrefix:
+		case apikey.FieldID, apikey.FieldAccountID, apikey.FieldName, apikey.FieldKeyValueHash, apikey.FieldKeyValueCipher, apikey.FieldKeyPrefix, apikey.FieldLabel:
 			values[i] = new(sql.NullString)
+		case apikey.FieldDeleteTime, apikey.FieldExpireTime:
+			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
 		}
@@ -63,6 +72,13 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.AccountID = value.String
 			}
+		case apikey.FieldDeleteTime:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field delete_time", values[i])
+			} else if value.Valid {
+				_m.DeleteTime = new(time.Time)
+				*_m.DeleteTime = value.Time
+			}
 		case apikey.FieldName:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field name", values[i])
@@ -86,6 +102,19 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field key_prefix", values[i])
 			} else if value.Valid {
 				_m.KeyPrefix = value.String
+			}
+		case apikey.FieldLabel:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field label", values[i])
+			} else if value.Valid {
+				_m.Label = value.String
+			}
+		case apikey.FieldExpireTime:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field expire_time", values[i])
+			} else if value.Valid {
+				_m.ExpireTime = new(time.Time)
+				*_m.ExpireTime = value.Time
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -126,6 +155,11 @@ func (_m *APIKey) String() string {
 	builder.WriteString("account_id=")
 	builder.WriteString(_m.AccountID)
 	builder.WriteString(", ")
+	if v := _m.DeleteTime; v != nil {
+		builder.WriteString("delete_time=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
 	builder.WriteString("name=")
 	builder.WriteString(_m.Name)
 	builder.WriteString(", ")
@@ -137,6 +171,14 @@ func (_m *APIKey) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("key_prefix=")
 	builder.WriteString(_m.KeyPrefix)
+	builder.WriteString(", ")
+	builder.WriteString("label=")
+	builder.WriteString(_m.Label)
+	builder.WriteString(", ")
+	if v := _m.ExpireTime; v != nil {
+		builder.WriteString("expire_time=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

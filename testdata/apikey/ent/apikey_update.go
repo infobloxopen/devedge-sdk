@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
@@ -24,6 +25,26 @@ type APIKeyUpdate struct {
 // Where appends a list predicates to the APIKeyUpdate builder.
 func (_u *APIKeyUpdate) Where(ps ...predicate.APIKey) *APIKeyUpdate {
 	_u.mutation.Where(ps...)
+	return _u
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (_u *APIKeyUpdate) SetDeleteTime(v time.Time) *APIKeyUpdate {
+	_u.mutation.SetDeleteTime(v)
+	return _u
+}
+
+// SetNillableDeleteTime sets the "delete_time" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableDeleteTime(v *time.Time) *APIKeyUpdate {
+	if v != nil {
+		_u.SetDeleteTime(*v)
+	}
+	return _u
+}
+
+// ClearDeleteTime clears the value of the "delete_time" field.
+func (_u *APIKeyUpdate) ClearDeleteTime() *APIKeyUpdate {
+	_u.mutation.ClearDeleteTime()
 	return _u
 }
 
@@ -107,6 +128,46 @@ func (_u *APIKeyUpdate) ClearKeyPrefix() *APIKeyUpdate {
 	return _u
 }
 
+// SetLabel sets the "label" field.
+func (_u *APIKeyUpdate) SetLabel(v string) *APIKeyUpdate {
+	_u.mutation.SetLabel(v)
+	return _u
+}
+
+// SetNillableLabel sets the "label" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableLabel(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetLabel(*v)
+	}
+	return _u
+}
+
+// ClearLabel clears the value of the "label" field.
+func (_u *APIKeyUpdate) ClearLabel() *APIKeyUpdate {
+	_u.mutation.ClearLabel()
+	return _u
+}
+
+// SetExpireTime sets the "expire_time" field.
+func (_u *APIKeyUpdate) SetExpireTime(v time.Time) *APIKeyUpdate {
+	_u.mutation.SetExpireTime(v)
+	return _u
+}
+
+// SetNillableExpireTime sets the "expire_time" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableExpireTime(v *time.Time) *APIKeyUpdate {
+	if v != nil {
+		_u.SetExpireTime(*v)
+	}
+	return _u
+}
+
+// ClearExpireTime clears the value of the "expire_time" field.
+func (_u *APIKeyUpdate) ClearExpireTime() *APIKeyUpdate {
+	_u.mutation.ClearExpireTime()
+	return _u
+}
+
 // Mutation returns the APIKeyMutation object of the builder.
 func (_u *APIKeyUpdate) Mutation() *APIKeyMutation {
 	return _u.mutation
@@ -148,6 +209,12 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			}
 		}
 	}
+	if value, ok := _u.mutation.DeleteTime(); ok {
+		_spec.SetField(apikey.FieldDeleteTime, field.TypeTime, value)
+	}
+	if _u.mutation.DeleteTimeCleared() {
+		_spec.ClearField(apikey.FieldDeleteTime, field.TypeTime)
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 	}
@@ -172,6 +239,18 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.KeyPrefixCleared() {
 		_spec.ClearField(apikey.FieldKeyPrefix, field.TypeString)
 	}
+	if value, ok := _u.mutation.Label(); ok {
+		_spec.SetField(apikey.FieldLabel, field.TypeString, value)
+	}
+	if _u.mutation.LabelCleared() {
+		_spec.ClearField(apikey.FieldLabel, field.TypeString)
+	}
+	if value, ok := _u.mutation.ExpireTime(); ok {
+		_spec.SetField(apikey.FieldExpireTime, field.TypeTime, value)
+	}
+	if _u.mutation.ExpireTimeCleared() {
+		_spec.ClearField(apikey.FieldExpireTime, field.TypeTime)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{apikey.Label}
@@ -190,6 +269,26 @@ type APIKeyUpdateOne struct {
 	fields   []string
 	hooks    []Hook
 	mutation *APIKeyMutation
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (_u *APIKeyUpdateOne) SetDeleteTime(v time.Time) *APIKeyUpdateOne {
+	_u.mutation.SetDeleteTime(v)
+	return _u
+}
+
+// SetNillableDeleteTime sets the "delete_time" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableDeleteTime(v *time.Time) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetDeleteTime(*v)
+	}
+	return _u
+}
+
+// ClearDeleteTime clears the value of the "delete_time" field.
+func (_u *APIKeyUpdateOne) ClearDeleteTime() *APIKeyUpdateOne {
+	_u.mutation.ClearDeleteTime()
+	return _u
 }
 
 // SetName sets the "name" field.
@@ -272,6 +371,46 @@ func (_u *APIKeyUpdateOne) ClearKeyPrefix() *APIKeyUpdateOne {
 	return _u
 }
 
+// SetLabel sets the "label" field.
+func (_u *APIKeyUpdateOne) SetLabel(v string) *APIKeyUpdateOne {
+	_u.mutation.SetLabel(v)
+	return _u
+}
+
+// SetNillableLabel sets the "label" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableLabel(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetLabel(*v)
+	}
+	return _u
+}
+
+// ClearLabel clears the value of the "label" field.
+func (_u *APIKeyUpdateOne) ClearLabel() *APIKeyUpdateOne {
+	_u.mutation.ClearLabel()
+	return _u
+}
+
+// SetExpireTime sets the "expire_time" field.
+func (_u *APIKeyUpdateOne) SetExpireTime(v time.Time) *APIKeyUpdateOne {
+	_u.mutation.SetExpireTime(v)
+	return _u
+}
+
+// SetNillableExpireTime sets the "expire_time" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableExpireTime(v *time.Time) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetExpireTime(*v)
+	}
+	return _u
+}
+
+// ClearExpireTime clears the value of the "expire_time" field.
+func (_u *APIKeyUpdateOne) ClearExpireTime() *APIKeyUpdateOne {
+	_u.mutation.ClearExpireTime()
+	return _u
+}
+
 // Mutation returns the APIKeyMutation object of the builder.
 func (_u *APIKeyUpdateOne) Mutation() *APIKeyMutation {
 	return _u.mutation
@@ -343,6 +482,12 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 			}
 		}
 	}
+	if value, ok := _u.mutation.DeleteTime(); ok {
+		_spec.SetField(apikey.FieldDeleteTime, field.TypeTime, value)
+	}
+	if _u.mutation.DeleteTimeCleared() {
+		_spec.ClearField(apikey.FieldDeleteTime, field.TypeTime)
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 	}
@@ -366,6 +511,18 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if _u.mutation.KeyPrefixCleared() {
 		_spec.ClearField(apikey.FieldKeyPrefix, field.TypeString)
+	}
+	if value, ok := _u.mutation.Label(); ok {
+		_spec.SetField(apikey.FieldLabel, field.TypeString, value)
+	}
+	if _u.mutation.LabelCleared() {
+		_spec.ClearField(apikey.FieldLabel, field.TypeString)
+	}
+	if value, ok := _u.mutation.ExpireTime(); ok {
+		_spec.SetField(apikey.FieldExpireTime, field.TypeTime, value)
+	}
+	if _u.mutation.ExpireTimeCleared() {
+		_spec.ClearField(apikey.FieldExpireTime, field.TypeTime)
 	}
 	_node = &APIKey{config: _u.config}
 	_spec.Assign = _node.assignValues

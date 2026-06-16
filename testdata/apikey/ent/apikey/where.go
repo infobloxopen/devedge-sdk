@@ -3,6 +3,8 @@
 package apikey
 
 import (
+	"time"
+
 	"entgo.io/ent/dialect/sql"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/predicate"
 )
@@ -67,6 +69,11 @@ func AccountID(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldAccountID, v))
 }
 
+// DeleteTime applies equality check predicate on the "delete_time" field. It's identical to DeleteTimeEQ.
+func DeleteTime(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldDeleteTime, v))
+}
+
 // Name applies equality check predicate on the "name" field. It's identical to NameEQ.
 func Name(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldName, v))
@@ -85,6 +92,11 @@ func KeyValueCipher(v string) predicate.APIKey {
 // KeyPrefix applies equality check predicate on the "key_prefix" field. It's identical to KeyPrefixEQ.
 func KeyPrefix(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldKeyPrefix, v))
+}
+
+// ExpireTime applies equality check predicate on the "expire_time" field. It's identical to ExpireTimeEQ.
+func ExpireTime(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldExpireTime, v))
 }
 
 // AccountIDEQ applies the EQ predicate on the "account_id" field.
@@ -150,6 +162,56 @@ func AccountIDEqualFold(v string) predicate.APIKey {
 // AccountIDContainsFold applies the ContainsFold predicate on the "account_id" field.
 func AccountIDContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldAccountID, v))
+}
+
+// DeleteTimeEQ applies the EQ predicate on the "delete_time" field.
+func DeleteTimeEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldDeleteTime, v))
+}
+
+// DeleteTimeNEQ applies the NEQ predicate on the "delete_time" field.
+func DeleteTimeNEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldDeleteTime, v))
+}
+
+// DeleteTimeIn applies the In predicate on the "delete_time" field.
+func DeleteTimeIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldDeleteTime, vs...))
+}
+
+// DeleteTimeNotIn applies the NotIn predicate on the "delete_time" field.
+func DeleteTimeNotIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldDeleteTime, vs...))
+}
+
+// DeleteTimeGT applies the GT predicate on the "delete_time" field.
+func DeleteTimeGT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldDeleteTime, v))
+}
+
+// DeleteTimeGTE applies the GTE predicate on the "delete_time" field.
+func DeleteTimeGTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldDeleteTime, v))
+}
+
+// DeleteTimeLT applies the LT predicate on the "delete_time" field.
+func DeleteTimeLT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldDeleteTime, v))
+}
+
+// DeleteTimeLTE applies the LTE predicate on the "delete_time" field.
+func DeleteTimeLTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldDeleteTime, v))
+}
+
+// DeleteTimeIsNil applies the IsNil predicate on the "delete_time" field.
+func DeleteTimeIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldDeleteTime))
+}
+
+// DeleteTimeNotNil applies the NotNil predicate on the "delete_time" field.
+func DeleteTimeNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldDeleteTime))
 }
 
 // NameEQ applies the EQ predicate on the "name" field.
@@ -450,6 +512,131 @@ func KeyPrefixEqualFold(v string) predicate.APIKey {
 // KeyPrefixContainsFold applies the ContainsFold predicate on the "key_prefix" field.
 func KeyPrefixContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldKeyPrefix, v))
+}
+
+// LabelEQ applies the EQ predicate on the "label" field.
+func LabelEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldLabel, v))
+}
+
+// LabelNEQ applies the NEQ predicate on the "label" field.
+func LabelNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldLabel, v))
+}
+
+// LabelIn applies the In predicate on the "label" field.
+func LabelIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldLabel, vs...))
+}
+
+// LabelNotIn applies the NotIn predicate on the "label" field.
+func LabelNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldLabel, vs...))
+}
+
+// LabelGT applies the GT predicate on the "label" field.
+func LabelGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldLabel, v))
+}
+
+// LabelGTE applies the GTE predicate on the "label" field.
+func LabelGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldLabel, v))
+}
+
+// LabelLT applies the LT predicate on the "label" field.
+func LabelLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldLabel, v))
+}
+
+// LabelLTE applies the LTE predicate on the "label" field.
+func LabelLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldLabel, v))
+}
+
+// LabelContains applies the Contains predicate on the "label" field.
+func LabelContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldLabel, v))
+}
+
+// LabelHasPrefix applies the HasPrefix predicate on the "label" field.
+func LabelHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldLabel, v))
+}
+
+// LabelHasSuffix applies the HasSuffix predicate on the "label" field.
+func LabelHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldLabel, v))
+}
+
+// LabelIsNil applies the IsNil predicate on the "label" field.
+func LabelIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldLabel))
+}
+
+// LabelNotNil applies the NotNil predicate on the "label" field.
+func LabelNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldLabel))
+}
+
+// LabelEqualFold applies the EqualFold predicate on the "label" field.
+func LabelEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldLabel, v))
+}
+
+// LabelContainsFold applies the ContainsFold predicate on the "label" field.
+func LabelContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldLabel, v))
+}
+
+// ExpireTimeEQ applies the EQ predicate on the "expire_time" field.
+func ExpireTimeEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldExpireTime, v))
+}
+
+// ExpireTimeNEQ applies the NEQ predicate on the "expire_time" field.
+func ExpireTimeNEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldExpireTime, v))
+}
+
+// ExpireTimeIn applies the In predicate on the "expire_time" field.
+func ExpireTimeIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldExpireTime, vs...))
+}
+
+// ExpireTimeNotIn applies the NotIn predicate on the "expire_time" field.
+func ExpireTimeNotIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldExpireTime, vs...))
+}
+
+// ExpireTimeGT applies the GT predicate on the "expire_time" field.
+func ExpireTimeGT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldExpireTime, v))
+}
+
+// ExpireTimeGTE applies the GTE predicate on the "expire_time" field.
+func ExpireTimeGTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldExpireTime, v))
+}
+
+// ExpireTimeLT applies the LT predicate on the "expire_time" field.
+func ExpireTimeLT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldExpireTime, v))
+}
+
+// ExpireTimeLTE applies the LTE predicate on the "expire_time" field.
+func ExpireTimeLTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldExpireTime, v))
+}
+
+// ExpireTimeIsNil applies the IsNil predicate on the "expire_time" field.
+func ExpireTimeIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldExpireTime))
+}
+
+// ExpireTimeNotNil applies the NotNil predicate on the "expire_time" field.
+func ExpireTimeNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldExpireTime))
 }
 
 // And groups predicates with the AND operator between them.

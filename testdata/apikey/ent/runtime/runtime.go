@@ -13,7 +13,9 @@ import (
 func init() {
 	apikeyMixin := schema.APIKey{}.Mixin()
 	apikeyMixinInters0 := apikeyMixin[0].Interceptors()
+	apikeyMixinInters1 := apikeyMixin[1].Interceptors()
 	apikey.Interceptors[0] = apikeyMixinInters0[0]
+	apikey.Interceptors[1] = apikeyMixinInters1[0]
 	apikeyMixinFields0 := apikeyMixin[0].Fields()
 	_ = apikeyMixinFields0
 	apikeyFields := schema.APIKey{}.Fields()
