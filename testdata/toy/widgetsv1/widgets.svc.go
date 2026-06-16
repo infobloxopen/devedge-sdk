@@ -23,6 +23,9 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 		WidgetService_ListWidgets_FullMethodName,
 		WidgetService_UpdateWidget_FullMethodName,
 		WidgetService_DeleteWidget_FullMethodName,
+		WidgetService_ArchiveWidget_FullMethodName,
+		WidgetService_BatchGetWidgets_FullMethodName,
+		WidgetService_BatchDeleteWidgets_FullMethodName,
 	}
 	if err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {
 		return err

@@ -15,7 +15,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -86,6 +88,37 @@ func (h *toyHandler) DeleteWidget(ctx context.Context, req *widgetsv1.DeleteWidg
 		return nil, err
 	}
 	return &widgetsv1.DeleteWidgetResponse{}, nil
+}
+
+// ArchiveWidget is an AIP-136 custom method: stamps archived_time on the widget.
+func (h *toyHandler) ArchiveWidget(ctx context.Context, req *widgetsv1.ArchiveWidgetRequest) (*widgetsv1.ArchiveWidgetResponse, error) {
+	w, err := h.repo.Get(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	w.ArchivedTime = timestamppb.Now()
+	w, err = h.repo.Update(ctx, req.Id, w)
+	if err != nil {
+		return nil, err
+	}
+	return &widgetsv1.ArchiveWidgetResponse{Widget: w}, nil
+}
+
+// BatchGetWidgets is an AIP-137 batch read method.
+func (h *toyHandler) BatchGetWidgets(ctx context.Context, req *widgetsv1.BatchGetWidgetsRequest) (*widgetsv1.BatchGetWidgetsResponse, error) {
+	widgets, err := h.repo.BatchGet(ctx, req.Ids)
+	if err != nil {
+		return nil, err
+	}
+	return &widgetsv1.BatchGetWidgetsResponse{Widgets: widgets}, nil
+}
+
+// BatchDeleteWidgets is an AIP-137 batch delete method (atomic soft-delete).
+func (h *toyHandler) BatchDeleteWidgets(ctx context.Context, req *widgetsv1.BatchDeleteWidgetsRequest) (*emptypb.Empty, error) {
+	if err := h.repo.BatchDelete(ctx, req.Ids); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
 }
 
 // newTestServer boots a real server with port :0 (kernel-assigned), registers
@@ -519,6 +552,203 @@ func TestIntegration_HTTPGateway(t *testing.T) {
 		}
 		t.Logf("list page1: %d items, next_page_token=%v", len(items), result["nextPageToken"])
 	})
+}
+
+// -----------------------------------------------------------------------
+// TestArchiveWidget: AIP-136 custom method stamps archived_time
+// -----------------------------------------------------------------------
+
+func TestArchiveWidget(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	w, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget: &widgetsv1.Widget{Id: "arc-1", DisplayName: "archive-me"},
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget: %v", err)
+	}
+
+	resp, err := client.ArchiveWidget(ctx, &widgetsv1.ArchiveWidgetRequest{Id: w.Id})
+	if err != nil {
+		t.Fatalf("ArchiveWidget: %v", err)
+	}
+	if resp.Widget == nil {
+		t.Fatal("ArchiveWidget: response widget is nil")
+	}
+	if resp.Widget.ArchivedTime == nil {
+		t.Fatal("ArchiveWidget: expected ArchivedTime to be set, got nil")
+	}
+	if resp.Widget.Id != w.Id {
+		t.Errorf("ArchiveWidget: want Id=%q, got %q", w.Id, resp.Widget.Id)
+	}
+	t.Logf("ArchiveWidget: archived_time=%v", resp.Widget.ArchivedTime.AsTime())
+}
+
+func TestArchiveWidget_NotFound(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	_, err := client.ArchiveWidget(ctx, &widgetsv1.ArchiveWidgetRequest{Id: "nonexistent"})
+	if err == nil {
+		t.Fatal("ArchiveWidget nonexistent: want error, got nil")
+	}
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("ArchiveWidget nonexistent: want NotFound, got %v", code)
+	}
+}
+
+// -----------------------------------------------------------------------
+// TestBatchGetWidgets: AIP-137 batch read
+// -----------------------------------------------------------------------
+
+func TestBatchGetWidgets(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	for _, id := range []string{"bg-1", "bg-2"} {
+		if _, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+			Widget: &widgetsv1.Widget{Id: id, DisplayName: "widget-" + id},
+		}); err != nil {
+			t.Fatalf("CreateWidget %q: %v", id, err)
+		}
+	}
+
+	resp, err := client.BatchGetWidgets(ctx, &widgetsv1.BatchGetWidgetsRequest{Ids: []string{"bg-1", "bg-2"}})
+	if err != nil {
+		t.Fatalf("BatchGetWidgets: %v", err)
+	}
+	if len(resp.Widgets) != 2 {
+		t.Fatalf("BatchGetWidgets: want 2 widgets, got %d", len(resp.Widgets))
+	}
+	if resp.Widgets[0].Id != "bg-1" || resp.Widgets[1].Id != "bg-2" {
+		t.Errorf("BatchGetWidgets: wrong IDs: %v, %v", resp.Widgets[0].Id, resp.Widgets[1].Id)
+	}
+}
+
+func TestBatchGetWidgets_MissingId(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	if _, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget: &widgetsv1.Widget{Id: "bgm-1"},
+	}); err != nil {
+		t.Fatalf("CreateWidget: %v", err)
+	}
+
+	_, err := client.BatchGetWidgets(ctx, &widgetsv1.BatchGetWidgetsRequest{Ids: []string{"bgm-1", "missing"}})
+	if err == nil {
+		t.Fatal("BatchGetWidgets missing: want error, got nil")
+	}
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("BatchGetWidgets missing: want NotFound, got %v", code)
+	}
+}
+
+// -----------------------------------------------------------------------
+// TestBatchDeleteWidgets: AIP-137 atomic batch soft-delete
+// -----------------------------------------------------------------------
+
+func TestBatchDeleteWidgets(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	for _, id := range []string{"bd-1", "bd-2"} {
+		if _, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+			Widget: &widgetsv1.Widget{Id: id},
+		}); err != nil {
+			t.Fatalf("CreateWidget %q: %v", id, err)
+		}
+	}
+
+	if _, err := client.BatchDeleteWidgets(ctx, &widgetsv1.BatchDeleteWidgetsRequest{Ids: []string{"bd-1", "bd-2"}}); err != nil {
+		t.Fatalf("BatchDeleteWidgets: %v", err)
+	}
+
+	for _, id := range []string{"bd-1", "bd-2"} {
+		_, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: id})
+		if code := status.Code(err); code != codes.NotFound {
+			t.Errorf("GetWidget %q after BatchDelete: want NotFound, got %v", id, code)
+		}
+	}
+}
+
+func TestBatchDeleteWidgets_MissingId_IsAtomic(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	if _, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget: &widgetsv1.Widget{Id: "bda-1"},
+	}); err != nil {
+		t.Fatalf("CreateWidget: %v", err)
+	}
+
+	_, err := client.BatchDeleteWidgets(ctx, &widgetsv1.BatchDeleteWidgetsRequest{Ids: []string{"bda-1", "missing"}})
+	if err == nil {
+		t.Fatal("BatchDeleteWidgets missing: want error, got nil")
+	}
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("BatchDeleteWidgets missing: want NotFound, got %v", code)
+	}
+
+	// bda-1 must NOT have been deleted (atomic failure).
+	if _, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "bda-1"}); err != nil {
+		t.Errorf("GetWidget bda-1 after failed BatchDelete: want success, got %v", err)
+	}
 }
 
 // -----------------------------------------------------------------------
