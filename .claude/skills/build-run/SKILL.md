@@ -1,18 +1,37 @@
 ---
 name: build-run
-description: Build the devedge-sdk module. It is a library (no app binary to run) — "running" means exercising it from tests or a consumer.
+description: Build devedge-sdk. It is a library (no app binary) — "running" means exercising it from the toy integration tests.
 ---
 
 # Build
 
-    make build         # go build ./...
+```
+make build             # go build ./... (root module)
+make generate          # rebuild generated files after any .proto change
+```
 
-devedge-sdk is a **library** imported by services, not an executable — there is
-no server or CLI to start. To smoke-test a seam (the gRPC authz interceptor, the
-persistence repository), write or extend a test rather than launching a process:
+devedge-sdk is a **library** — there is no long-running server to start. The toy
+`WidgetService` is the closest thing to a runnable target; the integration tests
+start and stop it inline:
 
-    make test
+```
+cd testdata/toy && go test ./... -v -run TestIntegration
+```
 
-Tidy modules after changing imports:
+## After proto changes
 
-    make tidy          # go mod tidy
+Always regenerate and rebuild in order:
+
+```
+make generate          # runs buf + all protoc-gen-* plugins + go mod tidy
+make build             # verify generated code compiles
+cd testdata/toy && go test ./...   # verify integration tests still pass
+```
+
+## Module tidy
+
+```
+make tidy              # go mod tidy (root)
+cd testdata/toy && go mod tidy
+cd testdata/apikey && go mod tidy
+```
