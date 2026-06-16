@@ -1,7 +1,7 @@
 # F022 — Custom Method Scaffold + Batch Methods
 
 **AIPs**: AIP-136 (custom methods), AIP-137 (batch methods)  
-**Status**: spec  
+**Status**: done  
 **Branch**: `022-custom-batch-methods`
 
 ---
