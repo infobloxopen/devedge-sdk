@@ -5,22 +5,38 @@ description: Run devedge-sdk's tests. Use when verifying a change or before comm
 
 # Run tests
 
-Unit tests — all packages, fast, no external services:
+## Root module (fast, no external services)
 
-    make test          # go test ./...
+```
+make test              # go test ./...
+make vet               # go vet ./...
+```
 
-Single package / single test:
+Single package or test:
 
-    go test ./authz/...
-    go test ./authz/grpcauthz -run TestUndeclaredMethodDeniedByDefault -v
+```
+go test ./lro/... -run TestManager_Cancel -v
+go test ./middleware/... -v
+```
 
-Vet (part of the gate):
+## Integration tests (separate Go module)
 
-    make vet           # go vet ./...
+```
+cd testdata/toy && go test ./...
+cd testdata/apikey && go test ./...
+```
 
-## Layers
+Always run these after any proto, middleware, or server change — they are the
+integration gate, not covered by `make test`.
 
-- **Unit**: every current test is pure Go — no Docker, no network. Fast.
-- **Integration / e2e**: none yet. The authz DX POC will add an ephemeral-OPA
-  integration test (testcontainers + Docker); until that lands there is no e2e
-  layer to run.
+## Security gate
+
+```
+make security-check    # go test ./testdata/toy -run Security -v
+```
+
+## Docker-gated tests
+
+`authz/opaauthz` (OPA round-trip) and `secret/` (Vault Transit) require
+running daemons. They self-skip when `OPA_URL` / `VAULT_ADDR` are unset.
+Run them in the Docker-enabled CI environment; skip locally and say so.
