@@ -35,7 +35,11 @@ message Widget {
   google.protobuf.Timestamp archived_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
-message CreateWidgetRequest { Widget widget = 1; }
+message CreateWidgetRequest {
+  Widget widget        = 1;
+  string request_id    = 2; // AIP-155: idempotency key; empty = no dedup.
+  bool   validate_only = 3; // AIP-163: dry-run; validate but do not persist.
+}
 message GetWidgetRequest    {
   string id = 1;
   // AIP-157: fields to return; empty means all fields.
