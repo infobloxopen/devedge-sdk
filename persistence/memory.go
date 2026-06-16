@@ -184,6 +184,45 @@ func (r *MemoryRepository[T, K]) Delete(_ context.Context, key K) error {
 	return nil
 }
 
+// BatchGet implements [BatchRepository]. Returns items in the same order as keys.
+// Returns ErrNotFound if any key does not exist or is soft-deleted. An empty
+// keys slice returns an empty slice with no error.
+func (r *MemoryRepository[T, K]) BatchGet(_ context.Context, keys []K) ([]T, error) {
+	if len(keys) == 0 {
+		return []T{}, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]T, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := r.items[k]; !ok || r.deleted[k] {
+			return nil, ErrNotFound
+		}
+		items = append(items, r.items[k])
+	}
+	return items, nil
+}
+
+// BatchDelete implements [BatchRepository]. Soft-deletes all keys atomically.
+// Pre-checks all keys before mutating: if any key is missing or already
+// soft-deleted, returns ErrNotFound without deleting anything.
+func (r *MemoryRepository[T, K]) BatchDelete(_ context.Context, keys []K) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, k := range keys {
+		if _, ok := r.items[k]; !ok || r.deleted[k] {
+			return ErrNotFound
+		}
+	}
+	for _, k := range keys {
+		r.deleted[k] = true
+	}
+	return nil
+}
+
 // Undelete implements [Repository]: clears the soft-delete mark so the entity
 // reappears in Get and List. Returns ErrNotFound when the key is absent or not
 // currently soft-deleted.
