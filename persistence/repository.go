@@ -56,3 +56,18 @@ type Repository[T any, K comparable] interface {
 	// Implementations backed by hard-delete storage always return ErrNotFound.
 	Undelete(ctx context.Context, key K) (T, error)
 }
+
+// BatchRepository extends Repository with multi-resource batch operations (AIP-137).
+// All batch operations are atomic: if any key is invalid, the entire call fails without
+// modifying any resource.
+type BatchRepository[T any, K comparable] interface {
+	Repository[T, K]
+	// BatchGet retrieves multiple resources by key. Returns items in the same order as
+	// keys. Returns ErrNotFound if any key does not exist or is soft-deleted. An empty
+	// keys slice returns an empty slice with no error.
+	BatchGet(ctx context.Context, keys []K) ([]T, error)
+	// BatchDelete soft-deletes multiple resources. Returns ErrNotFound if any key does
+	// not exist or is already soft-deleted; on error no items are deleted. An empty
+	// keys slice is a no-op.
+	BatchDelete(ctx context.Context, keys []K) error
+}

@@ -85,6 +85,139 @@ func TestMemoryRepository_SoftDelete(t *testing.T) {
 	}
 }
 
+func TestMemoryRepository_BatchGet_Success(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Create(ctx, zone{ID: "b", Name: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := r.BatchGet(ctx, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("BatchGet: unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("BatchGet: want 2 items, got %d", len(got))
+	}
+	if got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("BatchGet: wrong order: %+v", got)
+	}
+}
+
+func TestMemoryRepository_BatchGet_EmptyKeys(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+
+	got, err := r.BatchGet(ctx, []string{})
+	if err != nil {
+		t.Fatalf("BatchGet empty: unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("BatchGet empty: want 0 items, got %d", len(got))
+	}
+}
+
+func TestMemoryRepository_BatchGet_MissingKey(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.BatchGet(ctx, []string{"a", "missing"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("BatchGet missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemoryRepository_BatchGet_SoftDeletedKey(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.BatchGet(ctx, []string{"a"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("BatchGet soft-deleted: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemoryRepository_BatchDelete_Success(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Create(ctx, zone{ID: "b", Name: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.BatchDelete(ctx, []string{"a", "b"}); err != nil {
+		t.Fatalf("BatchDelete: unexpected error: %v", err)
+	}
+	if _, err := r.Get(ctx, "a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get a after BatchDelete: want ErrNotFound, got %v", err)
+	}
+	if _, err := r.Get(ctx, "b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get b after BatchDelete: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemoryRepository_BatchDelete_EmptyKeys(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.BatchDelete(ctx, []string{}); err != nil {
+		t.Fatalf("BatchDelete empty: unexpected error: %v", err)
+	}
+	if _, err := r.Get(ctx, "a"); err != nil {
+		t.Fatalf("Get a after BatchDelete empty: want success, got %v", err)
+	}
+}
+
+func TestMemoryRepository_BatchDelete_MissingKey(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := r.BatchDelete(ctx, []string{"a", "missing"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("BatchDelete missing: want ErrNotFound, got %v", err)
+	}
+	// "a" must NOT have been deleted (atomic failure).
+	if _, err := r.Get(ctx, "a"); err != nil {
+		t.Fatalf("Get a after failed BatchDelete: want success, got %v", err)
+	}
+}
+
+func TestMemoryRepository_BatchDelete_AlreadyDeleted(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := r.BatchDelete(ctx, []string{"a"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("BatchDelete already-deleted: want ErrNotFound, got %v", err)
+	}
+}
+
 func TestMemoryRepository(t *testing.T) {
 	ctx := context.Background()
 	r := NewMemoryRepository(func(z zone) string { return z.ID })
