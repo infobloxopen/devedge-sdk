@@ -44,6 +44,8 @@ type Config struct {
 	// Interceptors are additional unary interceptors appended after the
 	// framework chain.
 	Interceptors []grpc.UnaryServerInterceptor
+	// DeduplicationStore is the idempotency store for DeduplicateUnary. Defaults to MemoryDeduplicationStore (10-minute TTL) when nil.
+	DeduplicationStore middleware.DeduplicationStore
 }
 
 // Server is the assembled gRPC server (plus optional HTTP gateway).
@@ -67,6 +69,9 @@ func New(cfg Config) (*Server, error) {
 		// Default to a default-deny dev authorizer (no grants).
 		cfg.Authorizer = authz.NewDevAuthorizer()
 	}
+	if cfg.DeduplicationStore == nil {
+		cfg.DeduplicationStore = middleware.NewMemoryDeduplicationStore(10 * time.Minute)
+	}
 
 	// verbMap feeds FieldMaskUnary: FullMethod -> verb string.
 	verbMap := make(map[string]string, len(cfg.Rules))
@@ -88,6 +93,8 @@ func New(cfg Config) (*Server, error) {
 		middleware.FieldMaskUnary(verbMap),
 		etag.PreconditionUnary(),
 		middleware.ReadMaskUnary(),
+		middleware.ValidateOnlyUnary(),
+		middleware.DeduplicateUnary(cfg.DeduplicationStore),
 	}
 	chain = append(chain, cfg.Interceptors...)
 

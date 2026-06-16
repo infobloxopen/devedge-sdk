@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
@@ -38,6 +39,9 @@ func (h *toyHandler) CreateWidget(ctx context.Context, req *widgetsv1.CreateWidg
 	}
 	if req.Widget.Id == "" {
 		req.Widget.Id = uuid.New().String()
+	}
+	if middleware.ValidateOnlyFromContext(ctx) {
+		return req.Widget, nil
 	}
 	w, err := h.repo.Create(ctx, req.Widget)
 	if err != nil {
@@ -812,4 +816,275 @@ func TestIntegration_ReadMask(t *testing.T) {
 	}
 	t.Logf("read_mask=display_name: got widget with DisplayName=%q, Id=%q, Color=%q, Weight=%d",
 		got.DisplayName, got.Id, got.Color, got.Weight)
+}
+
+// -----------------------------------------------------------------------
+// F023 — validate-only (AIP-163) integration tests
+// -----------------------------------------------------------------------
+
+func TestIntegration_ValidateOnly_NoSideEffects(t *testing.T) {
+	// AC-003: validate_only=true returns a widget but does not persist it.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	resp, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget:       &widgetsv1.Widget{Id: "vo-1", DisplayName: "Dry Run Widget"},
+		ValidateOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget(validate_only=true): %v", err)
+	}
+	if resp == nil || resp.Id != "vo-1" {
+		t.Fatalf("CreateWidget(validate_only=true): want widget with id=vo-1, got %v", resp)
+	}
+
+	// Widget must NOT have been persisted.
+	_, err = client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "vo-1"})
+	if err == nil {
+		t.Fatal("GetWidget after validate_only create: want NotFound, got nil error")
+	}
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("GetWidget after validate_only create: want NotFound, got %v", code)
+	}
+}
+
+// -----------------------------------------------------------------------
+// F023 — request deduplication (AIP-155) integration tests
+// -----------------------------------------------------------------------
+
+func newTestServerWithDedup(t *testing.T, authorizer authz.Authorizer, store middleware.DeduplicationStore) (*server.Server, string, string) {
+	t.Helper()
+	s, err := server.New(server.Config{
+		GRPCAddr:           ":0",
+		HTTPAddr:           ":0",
+		Rules:              widgetsv1.WidgetServiceAuthzRules,
+		Authorizer:         authorizer,
+		DeduplicationStore: store,
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	handler := &toyHandler{
+		repo: persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
+	}
+	if err := widgetsv1.RegisterWidgetService(s, handler); err != nil {
+		t.Fatalf("RegisterWidgetService: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = s.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if addr := s.GRPCAddr(); addr != "" && addr != ":0" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if addr := s.GRPCAddr(); addr == "" || addr == ":0" {
+		t.Fatal("server did not bind gRPC address within 2s")
+	}
+	for time.Now().Before(deadline) {
+		if addr := s.HTTPAddr(); addr != "" && addr != ":0" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return s, s.GRPCAddr(), s.HTTPAddr()
+}
+
+func TestIntegration_Dedup_SameRequestIdReturnsCache(t *testing.T) {
+	// AC-006: two CreateWidget calls with the same request_id return identical
+	// responses and only one widget is stored.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	store := middleware.NewMemoryDeduplicationStore(10 * time.Minute)
+	_, grpcAddr, _ := newTestServerWithDedup(t, permissive, store)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	req := &widgetsv1.CreateWidgetRequest{
+		Widget:    &widgetsv1.Widget{Id: "dedup-1", DisplayName: "Original"},
+		RequestId: "req-abc",
+	}
+
+	first, err := client.CreateWidget(ctx, req)
+	if err != nil {
+		t.Fatalf("first CreateWidget: %v", err)
+	}
+	second, err := client.CreateWidget(ctx, req)
+	if err != nil {
+		t.Fatalf("second CreateWidget (dedup): %v", err)
+	}
+
+	if first.Id != second.Id || first.DisplayName != second.DisplayName {
+		t.Errorf("dedup: responses differ: first=%v, second=%v", first, second)
+	}
+
+	// Only one widget should exist — list and count.
+	list, err := client.ListWidgets(ctx, &widgetsv1.ListWidgetsRequest{PageSize: 100})
+	if err != nil {
+		t.Fatalf("ListWidgets: %v", err)
+	}
+	count := 0
+	for _, w := range list.Widgets {
+		if w.Id == "dedup-1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("dedup: want 1 widget with id=dedup-1, got %d", count)
+	}
+}
+
+func TestIntegration_Dedup_DifferentRequestIdsExecuteIndependently(t *testing.T) {
+	// AC-007: different request_id values each create an independent widget.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	store := middleware.NewMemoryDeduplicationStore(10 * time.Minute)
+	_, grpcAddr, _ := newTestServerWithDedup(t, permissive, store)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	_, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget:    &widgetsv1.Widget{Id: "dedup-a", DisplayName: "A"},
+		RequestId: "req-001",
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget A: %v", err)
+	}
+	_, err = client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget:    &widgetsv1.Widget{Id: "dedup-b", DisplayName: "B"},
+		RequestId: "req-002",
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget B: %v", err)
+	}
+
+	if _, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "dedup-a"}); err != nil {
+		t.Errorf("GetWidget dedup-a: %v", err)
+	}
+	if _, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "dedup-b"}); err != nil {
+		t.Errorf("GetWidget dedup-b: %v", err)
+	}
+}
+
+func TestIntegration_Dedup_EmptyRequestIdNoDedup(t *testing.T) {
+	// AC-008: empty request_id means every call executes (no deduplication).
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	store := middleware.NewMemoryDeduplicationStore(10 * time.Minute)
+	_, grpcAddr, _ := newTestServerWithDedup(t, permissive, store)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	for i, id := range []string{"nodup-1", "nodup-2", "nodup-3"} {
+		_, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+			Widget:    &widgetsv1.Widget{Id: id},
+			RequestId: "", // no dedup key
+		})
+		if err != nil {
+			t.Fatalf("CreateWidget %d: %v", i, err)
+		}
+	}
+
+	list, err := client.ListWidgets(ctx, &widgetsv1.ListWidgetsRequest{PageSize: 100})
+	if err != nil {
+		t.Fatalf("ListWidgets: %v", err)
+	}
+	if len(list.Widgets) != 3 {
+		t.Errorf("want 3 widgets, got %d", len(list.Widgets))
+	}
+}
+
+func TestIntegration_Dedup_ValidateOnlyDoesNotPopulateCache(t *testing.T) {
+	// AC-009: validate_only=true with a request_id does not cache the dry-run
+	// response; a subsequent real call with the same request_id executes normally.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	store := middleware.NewMemoryDeduplicationStore(10 * time.Minute)
+	_, grpcAddr, _ := newTestServerWithDedup(t, permissive, store)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	// Dry-run call — must not populate cache.
+	_, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget:       &widgetsv1.Widget{Id: "vo-dedup-1"},
+		RequestId:    "req-dry",
+		ValidateOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget(validate_only=true): %v", err)
+	}
+
+	// Real call with the same request_id — must execute and persist.
+	_, err = client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget:       &widgetsv1.Widget{Id: "vo-dedup-1"},
+		RequestId:    "req-dry",
+		ValidateOnly: false,
+	})
+	if err != nil {
+		t.Fatalf("CreateWidget(real): %v", err)
+	}
+
+	if _, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "vo-dedup-1"}); err != nil {
+		t.Errorf("GetWidget after real create: %v", err)
+	}
+}
+
+func TestIntegration_Dedup_ChainIncludesBothInterceptors(t *testing.T) {
+	// AC-011: server.New auto-wires ValidateOnlyUnary and DeduplicateUnary.
+	// Verified implicitly by the above tests passing — but also confirm server
+	// boots with nil DeduplicationStore (auto-init path).
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	// nil DeduplicationStore — must auto-initialize without error.
+	s, err := server.New(server.Config{
+		GRPCAddr:   ":0",
+		Rules:      widgetsv1.WidgetServiceAuthzRules,
+		Authorizer: permissive,
+	})
+	if err != nil {
+		t.Fatalf("server.New with nil DeduplicationStore: %v", err)
+	}
+	if s == nil {
+		t.Fatal("server.New returned nil")
+	}
 }
