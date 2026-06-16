@@ -11,6 +11,9 @@ type Store interface {
 	Create(ctx context.Context, op *Operation) error
 	Get(ctx context.Context, name string) (*Operation, error)
 	Update(ctx context.Context, op *Operation) error
+	// Cancel atomically marks the named operation as done with [ErrCancelled].
+	// Returns [ErrNotFound] if name is unknown, [ErrAlreadyDone] if Done=true.
+	Cancel(ctx context.Context, name string) error
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]*Operation, error)
 }
@@ -73,6 +76,28 @@ func (s *MemoryStore) Update(ctx context.Context, op *Operation) error {
 	if op.Done {
 		e.expiresAt = time.Now().Add(s.ttl)
 	}
+	return nil
+}
+
+// Cancel atomically marks the operation as done with [ErrCancelled].
+// The check-and-set is under the same lock so it is race-free.
+func (s *MemoryStore) Cancel(ctx context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.m[name]
+	if !ok {
+		return ErrNotFound
+	}
+	if e.op.Done {
+		return ErrAlreadyDone
+	}
+	now := time.Now()
+	cancelled := *e.op
+	cancelled.Done = true
+	cancelled.Err = ErrCancelled
+	cancelled.UpdateTime = now
+	e.op = &cancelled
+	e.expiresAt = now.Add(s.ttl)
 	return nil
 }
 

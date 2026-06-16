@@ -13,6 +13,14 @@ import (
 // ErrNotFound is returned when an operation name does not exist in the store.
 var ErrNotFound = errors.New("lro: operation not found")
 
+// ErrAlreadyDone is returned by [Manager.Cancel] when the operation has already
+// completed (successfully or with an error) and therefore cannot be cancelled.
+var ErrAlreadyDone = errors.New("lro: operation already done")
+
+// ErrCancelled is set as [Operation.Err] when a caller cancels the operation
+// before it completes.
+var ErrCancelled = errors.New("lro: operation cancelled")
+
 // Operation is an AIP-151 long-running operation resource.
 // Name is always "operations/{uuid}". Done is true when the operation
 // has completed, whether successfully (Response set) or with an error (Err set).

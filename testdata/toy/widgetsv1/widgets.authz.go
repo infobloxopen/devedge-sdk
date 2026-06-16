@@ -59,4 +59,9 @@ var WidgetServiceAuthzRules = []authz.MethodRule{
 		Verb:     authz.Verb("read"),
 		Resource: "widgets",
 	},
+	{
+		Method:   "/toy.v1.WidgetService/CancelWidgetOperation",
+		Verb:     authz.Verb("write"),
+		Resource: "widgets",
+	},
 }

@@ -3,6 +3,7 @@ package widgetsv1_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -138,6 +139,24 @@ func (h *toyHandler) ProcessWidget(ctx context.Context, req *widgetsv1.ProcessWi
 		}
 		return fmt.Sprintf("processed:%s", id), nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &widgetsv1.OperationStatus{Name: op.Name, Done: op.Done}, nil
+}
+
+// CancelWidgetOperation cancels a running ProcessWidget operation (AIP-152).
+func (h *toyHandler) CancelWidgetOperation(ctx context.Context, req *widgetsv1.CancelWidgetOperationRequest) (*widgetsv1.OperationStatus, error) {
+	if err := h.lroMgr.Cancel(ctx, req.Name); err != nil {
+		if errors.Is(err, lro.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "operation %q not found", req.Name)
+		}
+		if errors.Is(err, lro.ErrAlreadyDone) {
+			return nil, status.Errorf(codes.FailedPrecondition, "operation %q already completed", req.Name)
+		}
+		return nil, err
+	}
+	op, err := h.lroMgr.Store().Get(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -1183,6 +1202,121 @@ func TestIntegration_LRO_ProcessWidget(t *testing.T) {
 	want := "processed:lro-widget-1"
 	if final.Result != want {
 		t.Errorf("Result = %q, want %q", final.Result, want)
+	}
+}
+
+// -----------------------------------------------------------------------
+// F025 — LRO cancellation (AIP-152)
+
+func TestIntegration_LRO_Cancel_Pending(t *testing.T) {
+	// Submit a long-running op, immediately cancel it, confirm Done=true.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	// ProcessWidget blocks for 50ms — cancel it before it finishes.
+	pending, err := client.ProcessWidget(ctx, &widgetsv1.ProcessWidgetRequest{Id: "cancel-widget-1"})
+	if err != nil {
+		t.Fatalf("ProcessWidget: %v", err)
+	}
+	if pending.Done {
+		t.Skip("operation already done before cancel (timing); skipping")
+	}
+
+	cancelled, err := client.CancelWidgetOperation(ctx, &widgetsv1.CancelWidgetOperationRequest{Name: pending.Name})
+	if err != nil {
+		t.Fatalf("CancelWidgetOperation: %v", err)
+	}
+	if !cancelled.Done {
+		t.Error("CancelWidgetOperation: want Done=true in response")
+	}
+	if cancelled.Name != pending.Name {
+		t.Errorf("CancelWidgetOperation: response name = %q, want %q", cancelled.Name, pending.Name)
+	}
+
+	// Subsequent GetOperationStatus must also return Done=true.
+	op, err := client.GetOperationStatus(ctx, &widgetsv1.GetOperationStatusRequest{Name: pending.Name})
+	if err != nil {
+		t.Fatalf("GetOperationStatus after cancel: %v", err)
+	}
+	if !op.Done {
+		t.Error("GetOperationStatus after cancel: want Done=true")
+	}
+}
+
+func TestIntegration_LRO_Cancel_AlreadyDone(t *testing.T) {
+	// Submit, wait for completion, then try to cancel → FailedPrecondition.
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	pending, err := client.ProcessWidget(ctx, &widgetsv1.ProcessWidgetRequest{Id: "cancel-widget-2"})
+	if err != nil {
+		t.Fatalf("ProcessWidget: %v", err)
+	}
+
+	// Poll until the operation completes.
+	pollCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	for {
+		op, err := client.GetOperationStatus(pollCtx, &widgetsv1.GetOperationStatusRequest{Name: pending.Name})
+		if err != nil {
+			t.Fatalf("GetOperationStatus: %v", err)
+		}
+		if op.Done {
+			break
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatal("operation did not complete within 500ms")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	_, err = client.CancelWidgetOperation(ctx, &widgetsv1.CancelWidgetOperationRequest{Name: pending.Name})
+	if err == nil {
+		t.Fatal("CancelWidgetOperation on done op: want error, got nil")
+	}
+	if code := status.Code(err); code != codes.FailedPrecondition {
+		t.Fatalf("CancelWidgetOperation on done op: want FailedPrecondition, got %v", code)
+	}
+}
+
+func TestIntegration_LRO_Cancel_NotFound(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	_, err := client.CancelWidgetOperation(ctx, &widgetsv1.CancelWidgetOperationRequest{Name: "operations/does-not-exist"})
+	if err == nil {
+		t.Fatal("CancelWidgetOperation unknown name: want error, got nil")
+	}
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("CancelWidgetOperation unknown name: want NotFound, got %v", code)
 	}
 }
 
