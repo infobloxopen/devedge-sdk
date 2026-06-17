@@ -1,6 +1,6 @@
 ---
 title: Storage Shapes
-weight: 2
+weight: 3
 ---
 
 The SDK is **resource-oriented and AIP-aligned**: the API contract (resources, standard methods,

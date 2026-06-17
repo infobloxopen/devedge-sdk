@@ -94,5 +94,5 @@ database credentials reload without a restart — see [Storage shapes](../storag
 ## Local development
 
 You do **not** need Vault for local dev or tests — use `secret.NewDev(key)` (AES-256-GCM) instead.
-See [Secret fields](../secret-fields/). Switch to `NewVaultTransit` only where a real Vault is
+See [Secret fields](../model-a-resource/#secret-fields). Switch to `NewVaultTransit` only where a real Vault is
 available; nothing else in the service changes.

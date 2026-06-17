@@ -177,5 +177,5 @@ go test ./...
 ## Next steps
 
 - [Define a service](../../guides/define-a-service/) — the full proto → generate → scaffold loop.
-- [Secret fields](../../guides/secret-fields/) — encrypt sensitive fields at rest.
+- [Secret fields](../../guides/model-a-resource/#secret-fields) — encrypt sensitive fields at rest.
 - [API Key Manager tutorial](../../tutorial/api-key-manager/) — build a complete service.

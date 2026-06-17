@@ -94,4 +94,4 @@ c, _ := enc.Encrypt(ctx, entity.KeyValue) // → KeyValueCipher (recoverable)
 ```
 
 The `Repository` constructor takes the `Encryptor` when the message has secret fields. See
-[Secret fields](../../guides/secret-fields/).
+[Secret fields](../../guides/model-a-resource/#secret-fields).
