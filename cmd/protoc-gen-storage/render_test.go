@@ -496,6 +496,10 @@ func TestRenderStorageFile_expireTime(t *testing.T) {
 	mustContain(t, out, "expire_time IS NOT NULL AND expire_time <= ?")
 	mustContain(t, out, "res.RowsAffected")
 
+	// #34: the cutoff is normalized to UTC so a seam-stamped (UTC) expire_time is
+	// reaped even when the caller passes a local-zone time on SQLite.
+	mustContain(t, out, "expire_time <= ?\", before.UTC()")
+
 	// database/sql import present.
 	mustContain(t, out, `"database/sql"`)
 
@@ -503,6 +507,47 @@ func TestRenderStorageFile_expireTime(t *testing.T) {
 	// OUTPUT_ONLY TTL actually persists it (otherwise PurgeExpired reaps nothing).
 	mustContain(t, out, "if p.ExpireTime != nil {")
 	mustContain(t, out, "m.ExpireTime = sql.NullTime{Time: p.ExpireTime.AsTime(), Valid: true}")
+}
+
+// Regression for issue #33: a message with an `etag` field must bridge the model
+// ETag column in fromModel and stamp a fresh token on every write — otherwise the
+// proto ETag is always empty and the documented If-Match/412 flow is inert.
+func TestRenderStorageFile_etagBridgedAndStamped(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Doc",
+		HasETag:     true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "title", GoType: "string", SnakeName: "title"},
+		},
+	}
+	out := renderStorageFile("docv1storage", []messageInfo{msg})
+
+	// fromModel surfaces the stored ETag.
+	mustContain(t, out, "p.Etag = m.ETag")
+	// Create and Update stamp a fresh token.
+	mustContain(t, out, "m.ETag = etag.New()")
+	// A no-mask update writes the etag column via the updates map.
+	mustContain(t, out, `updates["etag"] = m.ETag`)
+	// A masked update still bumps the etag column.
+	mustContain(t, out, `dbCols = append(dbCols, "etag")`)
+	// The etag package is imported.
+	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware/etag"`)
+}
+
+// A message WITHOUT an etag field must not stamp or import etag (no behavior change).
+func TestRenderStorageFile_noETagNoStamp(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Plain",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	mustNotContain(t, out, "etag.New()")
+	mustNotContain(t, out, "p.Etag = m.ETag")
+	mustNotContain(t, out, "middleware/etag")
 }
 
 func TestRenderStorageFile_softDeleteWithTenant(t *testing.T) {

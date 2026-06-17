@@ -121,7 +121,9 @@ opts into the relevant feature:
   field, hard-deletes **any** row whose `expire_time` is at or before the cutoff (regardless of
   soft-delete state), tenant-scoped; returns the count removed. `expire_time` is OUTPUT_ONLY and
   stamped by your Create handler (see *codegen → TTL*); the generated `toModel` carries it to the
-  column, so a row created through the seam has a real expiry for `PurgeExpired` to reap.
+  column, so a row created through the seam has a real expiry for `PurgeExpired` to reap. The cutoff
+  is normalized to UTC internally (stored values are UTC), so `PurgeExpired(time.Now())` reaps
+  correctly on SQLite regardless of the caller's local time zone.
 
 ## BatchRepository[T,K]
 

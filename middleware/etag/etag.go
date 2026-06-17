@@ -5,10 +5,29 @@ package etag
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"strconv"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
+
+// New returns a fresh, opaque ETag token. The generated storage layer stamps a
+// new token on every Create and Update, so a resource's ETag changes whenever
+// the resource changes; a client that echoes a stale token as If-Match then
+// gets a 412 (optimistic concurrency). The value is opaque — AIP-154 permits any
+// server-chosen token — so callers must not parse it.
+func New() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand should never fail; fall back to a time-based token so the
+		// ETag is never empty (an empty ETag makes If-Match a silent no-op).
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(b[:])
+}
 
 type ifMatchKey struct{}
 type newETagKey struct{}

@@ -35,7 +35,7 @@ func TestRenderEntSchema_basicNoTenantNoSecret(t *testing.T) {
 			{Name: "active", SnakeName: "active", EntType: "Bool"},
 		},
 	}
-	out := renderEntSchema(msg)
+	out := renderEntSchema(msg, nil)
 
 	mustContain(t, out, "DO NOT EDIT")
 	mustContain(t, out, "package schema")
@@ -70,7 +70,7 @@ func TestRenderEntSchema_accountIDAddsTenantMixin(t *testing.T) {
 			{Name: "value", SnakeName: "value", EntType: "String"},
 		},
 	}
-	out := renderEntSchema(msg)
+	out := renderEntSchema(msg, nil)
 
 	// TenantMixin in Mixin() + entrepo import.
 	mustContain(t, out, "func (Record) Mixin() []ent.Mixin {")
@@ -86,7 +86,7 @@ func TestRenderEntSchema_accountIDAddsTenantMixin(t *testing.T) {
 }
 
 func TestRenderEntSchema_secretFieldHashAndCipher(t *testing.T) {
-	out := renderEntSchema(apiKeyMessage())
+	out := renderEntSchema(apiKeyMessage(), nil)
 
 	// Secret field split into _hash + _cipher; raw field NOT emitted.
 	mustContain(t, out, `field.String("key_value_hash").Optional().Comment("HMAC-SHA256 of key_value for lookup")`)
@@ -117,7 +117,7 @@ func TestRenderEntSchema_repeatedAndMessageSkipped(t *testing.T) {
 			{Name: "meta", SnakeName: "meta", EntType: "String", IsMessage: true},
 		},
 	}
-	out := renderEntSchema(msg)
+	out := renderEntSchema(msg, nil)
 
 	mustContain(t, out, "// TODO: repeated field tags skipped")
 	mustContain(t, out, "// TODO: nested message meta skipped")
@@ -127,7 +127,7 @@ func TestRenderEntSchema_repeatedAndMessageSkipped(t *testing.T) {
 }
 
 func TestRenderEntSchema_emptyMessage(t *testing.T) {
-	out := renderEntSchema(entMessageInfo{MessageName: "Empty"})
+	out := renderEntSchema(entMessageInfo{MessageName: "Empty"}, nil)
 	if out != "" {
 		t.Fatalf("expected empty output for a message with no fields, got:\n%s", out)
 	}
@@ -150,7 +150,7 @@ func TestRenderEntSchema_uniqueField(t *testing.T) {
 			{Name: "email", SnakeName: "email", EntType: "String", Unique: true},
 		},
 	}
-	out := renderEntSchema(msg)
+	out := renderEntSchema(msg, nil)
 	mustContain(t, out, `.Unique()`)
 	mustContain(t, out, `field.String("email")`)
 }
@@ -164,7 +164,7 @@ func TestRenderEntSchema_hasOneEdge(t *testing.T) {
 				IsMessage: true, HasOne: &fieldv1.HasOne{ForeignKey: "order_id"}},
 		},
 	}
-	out := renderEntSchema(msg)
+	out := renderEntSchema(msg, nil)
 	// Should emit Edges() method with edge.To.
 	mustContain(t, out, "func (Order) Edges() []ent.Edge {")
 	mustContain(t, out, `edge.To("address",`)
@@ -176,24 +176,114 @@ func TestRenderEntSchema_hasOneEdge(t *testing.T) {
 	mustNotContain(t, out, "TODO: nested message address skipped")
 }
 
-// Regression for issue #26: a belongs_to must emit a self-contained forward edge
+// Regression for issue #26: a belongs_to with no reciprocal has_many on the
+// parent (no siblings) must emit a self-contained forward edge
 // (edge.To(...).Unique()), NOT an inverse edge.From(...).Ref(...) — the latter
-// requires a matching edge.To on the parent type that is never generated, so ent
-// codegen aborts with "edge <x> is missing for inverse edge".
+// requires a matching edge.To on the parent type that is absent, so ent codegen
+// aborts with "edge <x> is missing for inverse edge". (When the parent DOES
+// declare the has_many, the inverse IS emitted — see the pairing test below.)
 func TestRenderEntSchema_belongsToEdge(t *testing.T) {
 	msg := entMessageInfo{
 		MessageName: "Booking",
 		Fields: []entFieldInfo{
 			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
 			{Name: "venue", SnakeName: "venue", EntType: "String",
-				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "venue_id"}},
+				IsMessage: true, RelatedType: "Venue", BelongsTo: &fieldv1.BelongsTo{ForeignKey: "venue_id"}},
 		},
 	}
-	out := renderEntSchema(msg)
+	out := renderEntSchema(msg, nil)
 	mustContain(t, out, "func (Booking) Edges() []ent.Edge {")
 	mustContain(t, out, `edge.To("venue", Venue.Type).Unique()`)
 	// Must NOT emit the inverse edge that needs an absent counterpart.
 	mustNotContain(t, out, ".Ref(")
+	// No scalar venue_id field present → no .Field() binding.
+	mustNotContain(t, out, ".Field(")
+}
+
+// Regression for issue #30: a has_many edge must reference the related message's
+// singular ent type (Vehicle.Type, captured in RelatedType) — NOT a name derived
+// from the pluralized field name, which produced the undefined Vehicles.Type and
+// broke `go generate ./ent`.
+func TestRenderEntSchema_hasManyUsesSingularRelatedType(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Fleet",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "vehicles", SnakeName: "vehicles", IsRepeated: true, IsMessage: true,
+				RelatedType: "Vehicle", HasMany: &fieldv1.HasMany{ForeignKey: "fleet_id"}},
+		},
+	}
+	out := renderEntSchema(msg, nil)
+	mustContain(t, out, `edge.To("vehicles", Vehicle.Type)`)
+	mustNotContain(t, out, "Vehicles.Type") // the pluralized, undefined type
+}
+
+// Regression for issues #30 (inverse pairing) and #31 (scalar-FK/edge collision):
+// when a belongs_to's parent declares the reciprocal has_many, the belongs_to is
+// emitted as the inverse edge.From(...).Ref(...), and the scalar FK is bound via
+// .Field() so ent generates a single SetFleetID rather than colliding setters.
+func TestRenderEntSchema_belongsToPairsWithHasManyAndBindsFK(t *testing.T) {
+	parent := entMessageInfo{
+		MessageName: "Fleet",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "vehicles", SnakeName: "vehicles", IsRepeated: true, IsMessage: true,
+				RelatedType: "Vehicle", HasMany: &fieldv1.HasMany{ForeignKey: "fleet_id"}},
+		},
+	}
+	child := entMessageInfo{
+		MessageName: "Vehicle",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "fleet_id", SnakeName: "fleet_id", EntType: "String"},
+			{Name: "fleet", SnakeName: "fleet", IsMessage: true, RelatedType: "Fleet",
+				BelongsTo: &fieldv1.BelongsTo{ForeignKey: "fleet_id"}},
+		},
+	}
+	siblings := []entMessageInfo{parent, child}
+
+	out := renderEntSchema(child, siblings)
+	mustContain(t, out, `edge.From("fleet", Fleet.Type).Ref("vehicles").Unique().Field("fleet_id")`)
+	mustNotContain(t, out, `edge.To("fleet"`)
+
+	pout := renderEntSchema(parent, siblings)
+	mustContain(t, pout, `edge.To("vehicles", Vehicle.Type)`)
+}
+
+// A standalone belongs_to (no reciprocal has_many) with a scalar FK present still
+// binds the FK via .Field() to avoid the duplicate SetFleetID collision (#31),
+// while staying a self-contained forward edge.
+func TestRenderEntSchema_belongsToStandaloneBindsScalarFK(t *testing.T) {
+	child := entMessageInfo{
+		MessageName: "Vehicle",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "fleet_id", SnakeName: "fleet_id", EntType: "String"},
+			{Name: "fleet", SnakeName: "fleet", IsMessage: true, RelatedType: "Fleet",
+				BelongsTo: &fieldv1.BelongsTo{ForeignKey: "fleet_id"}},
+		},
+	}
+	out := renderEntSchema(child, nil) // no siblings → standalone
+	mustContain(t, out, `edge.To("fleet", Fleet.Type).Unique().Field("fleet_id")`)
+	mustNotContain(t, out, ".Ref(")
+}
+
+// entSetterGoName must match ent's setter naming (applies Go initialisms), so the
+// batch wrapper calls the methods ent actually generates (issue surfaced by the
+// fleet_id FK: ent emits SetFleetID, not SetFleetId).
+func TestEntSetterGoName(t *testing.T) {
+	cases := map[string]string{
+		"fleet_id":     "FleetID",
+		"display_name": "DisplayName",
+		"vin":          "Vin",
+		"key_prefix":   "KeyPrefix",
+		"api_url":      "APIURL",
+	}
+	for in, want := range cases {
+		if got := entSetterGoName(in); got != want {
+			t.Errorf("entSetterGoName(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // TestRenderEntRepository covers the F026 batch wrapper: tenant + secret +

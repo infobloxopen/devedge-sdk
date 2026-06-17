@@ -1,0 +1,17 @@
+version: v2
+# Two-resource ent relationship fixture: generates the message bindings, the
+# GORM storage layer, and the ent schema/client wiring for
+# testdata/fleet/fleet.proto (a Fleet has_many Vehicle / Vehicle belongs_to
+# Fleet pair). Output goes into testdata/fleet/, which has its own go.mod
+# (gorm + ent), keeping those deps out of devedge-sdk's go.mod (SC-003).
+inputs:
+  - directory: testdata/fleet
+plugins:
+  - local: protoc-gen-go
+    out: testdata/fleet
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/fleet
+  - local: protoc-gen-storage
+    out: testdata/fleet
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/fleet
+  - local: protoc-gen-ent
+    out: testdata/fleet

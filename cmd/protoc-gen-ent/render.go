@@ -30,6 +30,11 @@ type entFieldInfo struct {
 	NotNull bool
 	Unique  bool
 	Index   bool
+	// RelatedType is the Go type name of the message a relationship field points
+	// to (e.g. "Vehicle" for a `repeated Vehicle vehicles` has_many). The ent
+	// edge target must reference this schema struct, not a name derived from the
+	// proto field name (which may be pluralized).
+	RelatedType string
 	// ORM relationship opts.
 	HasOne     *fieldv1.HasOne
 	HasMany    *fieldv1.HasMany
@@ -90,9 +95,73 @@ func entTypeName(goType string) string {
 	return strings.TrimPrefix(goType, "*")
 }
 
+// edgeTargetType returns the ent schema struct name an edge points to. It
+// prefers the related message's actual Go type (captured by main.go) and falls
+// back to the capitalized field name only when that is unavailable (e.g. unit
+// tests that construct fields directly). Using the field name is unsafe for
+// has_many, where the field is pluralized (vehicles → "Vehicles") but the
+// schema struct is singular (Vehicle).
+func edgeTargetType(f entFieldInfo) string {
+	if f.RelatedType != "" {
+		return f.RelatedType
+	}
+	return strings.Title(entTypeName(f.SnakeName))
+}
+
+// msgHasScalarField reports whether the message declares snake as an ordinary
+// scalar column (not id, not a relationship, not secret). Used to decide
+// whether a belongs_to edge must bind its FK to that field via .Field(), so
+// ent emits a single Set<FK> setter instead of one for the field and one for
+// the edge.
+func msgHasScalarField(msg entMessageInfo, snake string) bool {
+	for _, f := range msg.Fields {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret {
+			continue
+		}
+		if f.SnakeName == snake || f.Name == snake {
+			return true
+		}
+	}
+	return false
+}
+
+// belongsToInverseRef finds, among siblings, the parent message's has_many edge
+// that this belongs_to is the inverse of, returning that edge's name for use as
+// .Ref(...). Pairing requires a sibling message named parentType with a
+// has_many pointing back to this child; when both annotations name a
+// foreign_key, the two must agree. Returns ("", false) when there is no
+// matching has_many — the belongs_to then stays a standalone forward edge.
+func belongsToInverseRef(child entMessageInfo, bt entFieldInfo, parentType string, siblings []entMessageInfo) (string, bool) {
+	if bt.BelongsTo == nil {
+		return "", false
+	}
+	fk := bt.BelongsTo.GetForeignKey()
+	for _, sib := range siblings {
+		if sib.MessageName != parentType {
+			continue
+		}
+		for _, pf := range sib.Fields {
+			if pf.HasMany == nil {
+				continue
+			}
+			if edgeTargetType(pf) != child.MessageName {
+				continue
+			}
+			if fk != "" && pf.HasMany.GetForeignKey() != "" && pf.HasMany.GetForeignKey() != fk {
+				continue
+			}
+			return edgeName(pf.Name), true
+		}
+	}
+	return "", false
+}
+
 // renderEntSchema generates the ent/schema/<snake>.go content for a single
-// resource message. Returns an empty string when the message has no fields.
-func renderEntSchema(msg entMessageInfo) string {
+// resource message. siblings is the full set of resource messages in the proto
+// file, used to pair a belongs_to with its parent's has_many as a proper ent
+// inverse edge; pass nil to render edges standalone. Returns an empty string
+// when the message has no fields.
+func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	if len(msg.Fields) == 0 {
 		return ""
 	}
@@ -210,27 +279,40 @@ func renderEntSchema(msg entMessageInfo) string {
 		b.WriteString("\treturn []ent.Edge{\n")
 		for _, f := range msg.Fields {
 			ename := edgeName(f.Name)
+			target := edgeTargetType(f)
 			switch {
 			case f.HasOne != nil:
-				typeName := entTypeName(f.SnakeName)
-				// Use the capitalized snake form as ent type ref placeholder.
-				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Unique().Required(),\n", ename, strings.Title(typeName))
+				// One-to-one, FK on the associated table: a required unique edge.
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Unique().Required(),\n", ename, target)
 			case f.HasMany != nil:
-				typeName := entTypeName(f.SnakeName)
-				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type),\n", ename, strings.Title(typeName))
+				// The "one" side of one-to-many owns the assoc edge; the child's
+				// belongs_to is its inverse (edge.From below).
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type),\n", ename, target)
 			case f.BelongsTo != nil:
-				typeName := entTypeName(f.SnakeName)
-				// A self-contained forward edge: belongs_to means "this resource has
-				// one parent", with the FK on this side. An inverse edge.From(...).Ref(...)
-				// would require a matching edge.To on the parent type — but the parent is
-				// generated from a separate message and no back-edge is emitted there, so
-				// ent codegen aborts ("edge <x> is missing for inverse edge"). A unique
-				// edge.To needs no counterpart and compiles standalone.
-				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Unique(),\n", ename, strings.Title(typeName))
+				fk := f.BelongsTo.GetForeignKey()
+				if ref, ok := belongsToInverseRef(msg, f, target, siblings); ok {
+					// Inverse of the parent's has_many. .Field binds the edge's FK to
+					// the scalar FK column the proto exposes, so ent emits a single
+					// Set<FK> setter (declaring both a scalar field and the edge would
+					// otherwise collide on the by-ID setter name).
+					line := fmt.Sprintf("edge.From(\"%s\", %s.Type).Ref(\"%s\").Unique()", ename, target, ref)
+					if fk != "" && msgHasScalarField(msg, fk) {
+						line += fmt.Sprintf(".Field(\"%s\")", fk)
+					}
+					fmt.Fprintf(&b, "\t\t%s,\n", line)
+				} else {
+					// No matching has_many on the parent: a self-contained forward
+					// edge that needs no counterpart and compiles standalone. Bind
+					// the scalar FK when present so the by-ID setter does not collide.
+					line := fmt.Sprintf("edge.To(\"%s\", %s.Type).Unique()", ename, target)
+					if fk != "" && msgHasScalarField(msg, fk) {
+						line += fmt.Sprintf(".Field(\"%s\")", fk)
+					}
+					fmt.Fprintf(&b, "\t\t%s,\n", line)
+				}
 			case f.ManyToMany != nil:
-				typeName := entTypeName(f.SnakeName)
 				joinType := strings.Title(f.ManyToMany.GetJoinTable())
-				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Through(\"%s\", %s.Type),\n", ename, strings.Title(typeName), f.ManyToMany.GetJoinTable(), joinType)
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Through(\"%s\", %s.Type),\n", ename, target, f.ManyToMany.GetJoinTable(), joinType)
 			}
 		}
 		b.WriteString("\t}\n")
@@ -269,9 +351,10 @@ func renderGenerateFile() string {
 }
 
 // entGoName converts a snake_case proto field name to the CamelCase identifier
-// used by the generated proto getters and ent setters (e.g. "key_prefix" ->
-// "KeyPrefix"). The writable/secret fields it is applied to never contain the
-// id/ID acronym ambiguity, so a plain word-boundary upcase is sufficient.
+// used by the generated protoc-gen-go getters (e.g. "key_prefix" ->
+// "KeyPrefix", "fleet_id" -> "FleetId"). protoc-gen-go does NOT apply Go
+// initialisms, so "fleet_id" stays "FleetId" — use entSetterGoName for the ent
+// side, which does.
 func entGoName(snake string) string {
 	var b strings.Builder
 	upNext := true
@@ -286,6 +369,41 @@ func entGoName(snake string) string {
 			b.WriteRune(r)
 		}
 		upNext = false
+	}
+	return b.String()
+}
+
+// entInitialisms mirrors the acronyms entgo.io/ent registers on its inflection
+// ruleset (entc/gen/func.go). ent upper-cases these whole words when it names
+// generated setters/fields, so e.g. a "fleet_id" field becomes SetFleetID (not
+// SetFleetId). The batch wrapper must spell ent calls the same way or it will
+// not compile against the generated client.
+var entInitialisms = map[string]string{
+	"acl": "ACL", "api": "API", "ascii": "ASCII", "cpu": "CPU", "css": "CSS",
+	"dns": "DNS", "eof": "EOF", "guid": "GUID", "html": "HTML", "http": "HTTP",
+	"https": "HTTPS", "id": "ID", "ip": "IP", "json": "JSON", "lhs": "LHS",
+	"qps": "QPS", "ram": "RAM", "rhs": "RHS", "rpc": "RPC", "sla": "SLA",
+	"smtp": "SMTP", "sql": "SQL", "ssh": "SSH", "tcp": "TCP", "tls": "TLS",
+	"ttl": "TTL", "udp": "UDP", "ui": "UI", "uid": "UID", "uuid": "UUID",
+	"uri": "URI", "url": "URL", "utf8": "UTF8", "vm": "VM", "xml": "XML",
+	"xmpp": "XMPP", "xsrf": "XSRF", "xss": "XSS",
+}
+
+// entSetterGoName converts a snake_case field name to the CamelCase identifier
+// ent uses for its generated Set<Field> methods, applying ent's acronym rules
+// (e.g. "fleet_id" -> "FleetID", "display_name" -> "DisplayName"). Use this for
+// the ent client calls in the batch wrapper; use entGoName for the proto getter.
+func entSetterGoName(snake string) string {
+	var b strings.Builder
+	for _, part := range strings.Split(snake, "_") {
+		if part == "" {
+			continue
+		}
+		if up, ok := entInitialisms[strings.ToLower(part)]; ok {
+			b.WriteString(up)
+		} else {
+			b.WriteString(strings.Title(part))
+		}
 	}
 	return b.String()
 }
@@ -408,17 +526,19 @@ func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) strin
 		fmt.Fprintf(&b, "\t\tu = u.Where(ent%s.DeleteTimeIsNil())\n", lower)
 	}
 	for _, f := range writable {
-		gfn := entGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) {\n\t\t\tu = u.Set%s(it.Entity.Get%s())\n\t\t}\n", lower, f.SnakeName, gfn, gfn)
+		getName := entGoName(f.SnakeName)       // protoc-gen-go getter (no initialisms)
+		setName := entSetterGoName(f.SnakeName) // ent setter (applies initialisms)
+		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) {\n\t\t\tu = u.Set%s(it.Entity.Get%s())\n\t\t}\n", lower, f.SnakeName, setName, getName)
 	}
 	for _, f := range secrets {
-		gfn := entGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) && it.Entity.Get%s() != \"\" {\n", lower, f.SnakeName, gfn)
-		fmt.Fprintf(&b, "\t\t\th, herr := r.enc.Hash(ctx, it.Entity.Get%s())\n", gfn)
+		getName := entGoName(f.SnakeName)
+		setName := entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) && it.Entity.Get%s() != \"\" {\n", lower, f.SnakeName, getName)
+		fmt.Fprintf(&b, "\t\t\th, herr := r.enc.Hash(ctx, it.Entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\tif herr != nil {\n\t\t\t\t_ = tx.Rollback()\n\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t}\n", f.SnakeName)
-		fmt.Fprintf(&b, "\t\t\tc, cerr := r.enc.Encrypt(ctx, it.Entity.Get%s())\n", gfn)
+		fmt.Fprintf(&b, "\t\t\tc, cerr := r.enc.Encrypt(ctx, it.Entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\tif cerr != nil {\n\t\t\t\t_ = tx.Rollback()\n\t\t\t\treturn nil, fmt.Errorf(\"encrypt %s: %%w\", cerr)\n\t\t\t}\n", f.SnakeName)
-		fmt.Fprintf(&b, "\t\t\tu = u.Set%sHash(h).Set%sCipher(c)\n", gfn, gfn)
+		fmt.Fprintf(&b, "\t\t\tu = u.Set%sHash(h).Set%sCipher(c)\n", setName, setName)
 		b.WriteString("\t\t}\n")
 	}
 	b.WriteString("\t\tsaved, serr := u.Save(ctx)\n")

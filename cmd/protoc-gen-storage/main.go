@@ -125,6 +125,14 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					continue // handled by renderer; not an ordinary column
 				}
 			}
+			// AIP-154 ETag: a string `etag` field is framework-managed. The model
+			// already carries an `etag` column unconditionally; the renderer stamps
+			// it on every write and surfaces it on read. Skip it as an ordinary
+			// column (emitting it would duplicate the `etag` column).
+			if fieldName == "etag" && field.Desc.Kind() == protoreflect.StringKind {
+				msg.HasETag = true
+				continue
+			}
 			// For message-kind fields (relationships), capture the related message's
 			// Go type name so the renderer can emit a concrete GORM association
 			// (*<Related>Model) instead of an unusable interface{}.

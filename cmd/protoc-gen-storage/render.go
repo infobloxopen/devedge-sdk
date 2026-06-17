@@ -49,6 +49,15 @@ func hasExpireTimeMsg(messages []messageInfo) bool {
 	return false
 }
 
+func hasETagMsg(messages []messageInfo) bool {
+	for _, msg := range messages {
+		if msg.HasETag {
+			return true
+		}
+	}
+	return false
+}
+
 // messageInfo describes a proto message for storage code generation.
 type messageInfo struct {
 	MessageName     string
@@ -60,6 +69,9 @@ type messageInfo struct {
 	SoftDelete bool
 	// AIP-148 TTL: set when the message has an expire_time OUTPUT_ONLY Timestamp field.
 	HasExpireTime bool
+	// AIP-154 ETag: set when the message has a string `etag` field. The storage
+	// layer stamps a fresh token on every write and surfaces it on read.
+	HasETag bool
 }
 
 // fieldInfo describes a single proto message field.
@@ -105,6 +117,7 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	withSecrets := hasSecretFields(messages)
 	withSoftDelete := hasSoftDeleteMsg(messages)
 	withExpireTime := hasExpireTimeMsg(messages)
+	withETag := hasETagMsg(messages)
 
 	// Determine if any message needs the middleware import (tenant or secret lookup).
 	withMiddleware := false
@@ -157,6 +170,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	}
 	if withMiddleware {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
+	}
+	if withETag {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware/etag\"\n")
 	}
 	if withSecrets {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
@@ -390,6 +406,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\t\tp.ExpireTime = timestamppb.New(m.ExpireTime.Time)\n")
 		b.WriteString("\t}\n")
 	}
+	// AIP-154: surface the stored ETag so a Get/Create/Update response carries a
+	// value a client can echo as If-Match.
+	if msg.HasETag {
+		b.WriteString("\tp.Etag = m.ETag\n")
+	}
 	b.WriteString("\treturn p\n}\n\n")
 
 	// Column map for safe filter/order_by parsing (AIP-160/132).
@@ -538,6 +559,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			b.WriteString("\t}\n")
 		}
 	}
+	if msg.HasETag {
+		b.WriteString("\tm.ETag = etag.New() // AIP-154: fresh ETag on create\n")
+	}
 	b.WriteString("\tif err := r.db.WithContext(ctx).Create(m).Error; err != nil {\n")
 	b.WriteString("\t\t// Map driver constraint violations to clean sentinels so callers see\n")
 	b.WriteString("\t\t// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.\n")
@@ -550,6 +574,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "func (r *%sRepository) Update(ctx context.Context, key string, entity %s, fieldMask ...string) (%s, error) {\n", msg.MessageName, pbType, pbType)
 	fmt.Fprintf(b, "\tm := toModel_%s(entity)\n", msg.MessageName)
 	b.WriteString("\tm.ID = key\n")
+	if msg.HasETag {
+		b.WriteString("\tm.ETag = etag.New() // AIP-154: bump the ETag on every update\n")
+	}
 	if msgHasSecrets {
 		for _, f := range msg.Fields {
 			if !f.IsSecret {
@@ -605,6 +632,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 	fmt.Fprintf(b, "\t\t\tdbCols = append(dbCols, col)\n")
 	fmt.Fprintf(b, "\t\t}\n")
+	if msg.HasETag {
+		b.WriteString("\t\tdbCols = append(dbCols, \"etag\") // a masked update still changes the resource\n")
+	}
 	fmt.Fprintf(b, "\t\t// Select makes GORM write the named columns even when their value is\n")
 	fmt.Fprintf(b, "\t\t// the zero value (false, 0, \"\"); a bare struct Updates would skip them.\n")
 	fmt.Fprintf(b, "\t\tif err := q.Select(dbCols).Updates(m).Error; err != nil {\n")
@@ -638,6 +668,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 				fmt.Fprintf(b, "\t\t\tupdates[%q] = m.%sCipher\n", f.SnakeName+"_cipher", gfn)
 				fmt.Fprintf(b, "\t\t}\n")
 			}
+		}
+		if msg.HasETag {
+			b.WriteString("\t\tupdates[\"etag\"] = m.ETag\n")
 		}
 		fmt.Fprintf(b, "\t\tif err := q.Updates(updates).Error; err != nil {\n")
 		b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
@@ -705,16 +738,20 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 
 	// PurgeExpired — emitted only when HasExpireTime (AIP-148 TTL hook).
+	// The cutoff is normalized to UTC: toModel stores expire_time in UTC (via
+	// timestamppb.AsTime), and on SQLite time columns are TZ-suffixed TEXT whose
+	// comparison is format-sensitive — a local-time cutoff would not match a
+	// UTC-stored value, so PurgeExpired(time.Now()) could silently reap nothing.
 	if msg.HasExpireTime {
 		fmt.Fprintf(b, "func (r *%sRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {\n", msg.MessageName)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-			b.WriteString("\tq := r.db.WithContext(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before)\n")
+			b.WriteString("\tq := r.db.WithContext(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC())\n")
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", msg.MessageName)
 		} else {
 			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Unscoped().\n")
-			b.WriteString("\t\tWhere(\"expire_time IS NOT NULL AND expire_time <= ?\", before).\n")
+			b.WriteString("\t\tWhere(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC()).\n")
 			fmt.Fprintf(b, "\t\tDelete(&%sModel{})\n", msg.MessageName)
 		}
 		b.WriteString("\tif res.Error != nil {\n")

@@ -18,6 +18,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/secret"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -79,6 +80,7 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 	if m.ExpireTime.Valid {
 		p.ExpireTime = timestamppb.New(m.ExpireTime.Time)
 	}
+	p.Etag = m.ETag
 	return p
 }
 
@@ -198,6 +200,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 		m.KeyValueHash = h
 		m.KeyValueCipher = c
 	}
+	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -212,6 +215,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKey, fieldMask ...string) (*APIKey, error) {
 	m := toModel_APIKey(entity)
 	m.ID = key
+	m.ETag = etag.New() // AIP-154: bump the ETag on every update
 	if entity.KeyValue != "" {
 		h, err := r.enc.Hash(ctx, entity.KeyValue)
 		if err != nil {
@@ -241,6 +245,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 			}
 			dbCols = append(dbCols, col)
 		}
+		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
 		if err := q.Select(dbCols).Updates(m).Error; err != nil {
@@ -261,6 +266,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 			updates["key_value_hash"] = m.KeyValueHash
 			updates["key_value_cipher"] = m.KeyValueCipher
 		}
+		updates["etag"] = m.ETag
 		if err := q.Updates(updates).Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
@@ -306,7 +312,7 @@ func (r *APIKeyRepository) Undelete(ctx context.Context, key string) (*APIKey, e
 
 func (r *APIKeyRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before)
+	q := r.db.WithContext(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before.UTC())
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}

@@ -169,6 +169,14 @@ generated model carries the scalar FK column once (reused by the association) an
 `*UserModel` association; it does not duplicate the FK. If you annotate `belongs_to` *without* a
 sibling scalar FK field, the generator emits the FK column for you.
 
+**On the ent backend**, the same annotations become ent edges. A `has_many` on the parent and a
+`belongs_to` on the child are emitted as one inverse pair — `edge.To("line_items", LineItem.Type)`
+on `Order` and `edge.From("user", User.Type).Ref(...).Unique().Field("user_id")` on the child — and
+the scalar FK is bound to the edge with `.Field(...)` so ent generates a single `SetUserID` setter
+(the scalar column and the association share one column, mirroring the GORM behavior). See
+[Codegen → Relationships in ent](../../reference/codegen/#relationships-in-ent) for the generated
+shape and `testdata/fleet/` for a complete worked example.
+
 `has_one`/`has_many`/`belongs_to` accept `foreign_key` and `association_foreign_key`; `has_many`
 also accepts `position_field` for an ordered association; `many_to_many` takes `join_table`,
 `foreign_key`, and `association_foreign_key`. A scalar repeated field with no relationship option is
