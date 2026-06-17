@@ -26,6 +26,7 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 		WidgetService_ArchiveWidget_FullMethodName,
 		WidgetService_BatchGetWidgets_FullMethodName,
 		WidgetService_BatchDeleteWidgets_FullMethodName,
+		WidgetService_BatchUpdateWidgets_FullMethodName,
 		WidgetService_ProcessWidget_FullMethodName,
 		WidgetService_GetOperationStatus_FullMethodName,
 		WidgetService_CancelWidgetOperation_FullMethodName,

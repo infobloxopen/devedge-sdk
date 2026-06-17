@@ -176,6 +176,47 @@ func TestRenderEntSchema_hasOneEdge(t *testing.T) {
 	mustNotContain(t, out, "TODO: nested message address skipped")
 }
 
+// TestRenderEntRepository covers the F026 batch wrapper: tenant + secret +
+// soft-delete + an OUTPUT_ONLY field (which must NOT be writable).
+func TestRenderEntRepository(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "APIKey",
+		SoftDelete:  true,
+		Fields: []entFieldInfo{
+			{Name: "name", SnakeName: "name", EntType: "String", OutputOnly: true},
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "key_value", SnakeName: "key_value", EntType: "String", IsSecret: true},
+			{Name: "key_prefix", SnakeName: "key_prefix", EntType: "String"},
+			{Name: "label", SnakeName: "label", EntType: "String"},
+		},
+	}
+	out := renderEntRepository(msg, "apikeyv1", "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1")
+
+	mustContain(t, out, "package apikeyv1")
+	mustContain(t, out, `ent "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent"`)
+	mustContain(t, out, `entapikey "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/apikey"`)
+	mustContain(t, out, "type APIKeyEntRepository struct")
+	mustContain(t, out, "func NewAPIKeyEntBatchRepository(client *ent.Client, enc secret.Encryptor) *APIKeyEntRepository")
+	mustContain(t, out, "func (r *APIKeyEntRepository) BatchGet(ctx context.Context, keys []string) ([]*APIKey, error)")
+	mustContain(t, out, "func (r *APIKeyEntRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*APIKey, string])")
+	mustContain(t, out, "func (r *APIKeyEntRepository) BatchDelete(ctx context.Context, keys []string) error")
+	mustContain(t, out, "r.client.Tx(ctx)")
+	// Mutations carry explicit tenant + soft-delete predicates (interceptors are query-only).
+	mustContain(t, out, "entapikey.AccountID(tenantID)")
+	mustContain(t, out, "entapikey.DeleteTimeIsNil()")
+	// Writable scalar + secret re-encryption.
+	mustContain(t, out, "u.SetKeyPrefix(it.Entity.GetKeyPrefix())")
+	mustContain(t, out, "u.SetLabel(it.Entity.GetLabel())")
+	mustContain(t, out, "r.enc.Hash(ctx, it.Entity.GetKeyValue())")
+	mustContain(t, out, "u.SetKeyValueHash(h).SetKeyValueCipher(c)")
+	mustContain(t, out, "var _ persistence.BatchRepository[*APIKey, string]")
+	// OUTPUT_ONLY field must never be written by batch update.
+	if strings.Contains(out, "SetName(") {
+		t.Errorf("OUTPUT_ONLY field 'name' must not be settable in BatchUpdate\n--- output ---\n%s", out)
+	}
+}
+
 func TestToSnake(t *testing.T) {
 	cases := map[string]string{
 		"APIKey":     "api_key",

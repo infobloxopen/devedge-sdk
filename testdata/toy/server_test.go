@@ -128,6 +128,24 @@ func (h *toyHandler) BatchDeleteWidgets(ctx context.Context, req *widgetsv1.Batc
 	return &emptypb.Empty{}, nil
 }
 
+// BatchUpdateWidgets is an AIP-137 batch update method: each request carries its
+// own widget + update_mask; the whole batch is atomic.
+func (h *toyHandler) BatchUpdateWidgets(ctx context.Context, req *widgetsv1.BatchUpdateWidgetsRequest) (*widgetsv1.BatchUpdateWidgetsResponse, error) {
+	items := make([]persistence.BatchUpdateItem[*widgetsv1.Widget, string], 0, len(req.Requests))
+	for _, r := range req.Requests {
+		items = append(items, persistence.BatchUpdateItem[*widgetsv1.Widget, string]{
+			Key:       r.GetWidget().GetId(),
+			Entity:    r.GetWidget(),
+			FieldMask: r.GetUpdateMask(),
+		})
+	}
+	widgets, err := h.repo.BatchUpdate(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+	return &widgetsv1.BatchUpdateWidgetsResponse{Widgets: widgets}, nil
+}
+
 // ProcessWidget starts an async job and returns a pending OperationStatus (AIP-151).
 func (h *toyHandler) ProcessWidget(ctx context.Context, req *widgetsv1.ProcessWidgetRequest) (*widgetsv1.OperationStatus, error) {
 	id := req.Id
@@ -808,6 +826,92 @@ func TestBatchDeleteWidgets_MissingId_IsAtomic(t *testing.T) {
 	// bda-1 must NOT have been deleted (atomic failure).
 	if _, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "bda-1"}); err != nil {
 		t.Errorf("GetWidget bda-1 after failed BatchDelete: want success, got %v", err)
+	}
+}
+
+// -----------------------------------------------------------------------
+// TestBatchUpdateWidgets: AIP-137 atomic batch update (POST :batchUpdate)
+// -----------------------------------------------------------------------
+
+func TestBatchUpdateWidgets(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	for _, id := range []string{"bu-1", "bu-2"} {
+		if _, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+			Widget: &widgetsv1.Widget{Id: id, DisplayName: "orig"},
+		}); err != nil {
+			t.Fatalf("CreateWidget %q: %v", id, err)
+		}
+	}
+
+	resp, err := client.BatchUpdateWidgets(ctx, &widgetsv1.BatchUpdateWidgetsRequest{
+		Requests: []*widgetsv1.UpdateWidgetRequest{
+			{Widget: &widgetsv1.Widget{Id: "bu-1", DisplayName: "new-1"}, UpdateMask: []string{"display_name"}},
+			{Widget: &widgetsv1.Widget{Id: "bu-2", DisplayName: "new-2"}, UpdateMask: []string{"display_name"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BatchUpdateWidgets: %v", err)
+	}
+	if len(resp.Widgets) != 2 || resp.Widgets[0].Id != "bu-1" || resp.Widgets[1].Id != "bu-2" {
+		t.Fatalf("BatchUpdateWidgets response order/content: %+v", resp.Widgets)
+	}
+
+	got, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "bu-1"})
+	if err != nil {
+		t.Fatalf("GetWidget bu-1: %v", err)
+	}
+	if got.DisplayName != "new-1" {
+		t.Errorf("GetWidget bu-1 after BatchUpdate: want new-1, got %q", got.DisplayName)
+	}
+}
+
+func TestBatchUpdateWidgets_MissingId_IsAtomic(t *testing.T) {
+	permissive := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	_, grpcAddr, _ := newTestServer(t, permissive)
+
+	conn := dialGRPC(t, grpcAddr)
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	ctx := ctxWithMD("account-id", "tenant1")
+
+	if _, err := client.CreateWidget(ctx, &widgetsv1.CreateWidgetRequest{
+		Widget: &widgetsv1.Widget{Id: "bua-1", DisplayName: "orig"},
+	}); err != nil {
+		t.Fatalf("CreateWidget: %v", err)
+	}
+
+	_, err := client.BatchUpdateWidgets(ctx, &widgetsv1.BatchUpdateWidgetsRequest{
+		Requests: []*widgetsv1.UpdateWidgetRequest{
+			{Widget: &widgetsv1.Widget{Id: "bua-1", DisplayName: "changed"}, UpdateMask: []string{"display_name"}},
+			{Widget: &widgetsv1.Widget{Id: "missing", DisplayName: "x"}, UpdateMask: []string{"display_name"}},
+		},
+	})
+	if code := status.Code(err); code != codes.NotFound {
+		t.Fatalf("BatchUpdateWidgets missing: want NotFound, got %v (err=%v)", code, err)
+	}
+
+	// bua-1 must NOT have been updated (atomic failure).
+	got, err := client.GetWidget(ctx, &widgetsv1.GetWidgetRequest{Id: "bua-1"})
+	if err != nil {
+		t.Fatalf("GetWidget bua-1: %v", err)
+	}
+	if got.DisplayName != "orig" {
+		t.Errorf("BatchUpdate not atomic: bua-1 DisplayName = %q, want orig", got.DisplayName)
 	}
 }
 

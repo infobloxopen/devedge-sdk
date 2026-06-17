@@ -728,9 +728,89 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\treturn fromModel_%s(&m), nil\n}\n\n", resource)
 	}
 
+	// Batch methods (AIP-137): atomic BatchGet/BatchUpdate/BatchDelete.
+	// BatchGet: single IN query reassembled into key order; a missing or
+	// soft-deleted key (excluded by the default scope) yields ErrNotFound.
+	fmt.Fprintf(b, "func (r *%sRepository) BatchGet(ctx context.Context, keys []string) ([]%s, error) {\n", msg.MessageName, pbType)
+	fmt.Fprintf(b, "\tif len(keys) == 0 {\n\t\treturn []%s{}, nil\n\t}\n", pbType)
+	fmt.Fprintf(b, "\tvar models []%sModel\n", msg.MessageName)
+	b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id IN ?\", keys)\n")
+	if hasTenant {
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+	}
+	b.WriteString("\tif err := q.Find(&models).Error; err != nil {\n")
+	fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"batch get %s: %%w\", err)\n", msg.MessageName)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tbyID := make(map[string]%s, len(models))\n", pbType)
+	b.WriteString("\tfor i := range models {\n")
+	fmt.Fprintf(b, "\t\tbyID[models[i].ID] = fromModel_%s(&models[i])\n", msg.MessageName)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tout := make([]%s, 0, len(keys))\n", pbType)
+	b.WriteString("\tfor _, k := range keys {\n")
+	b.WriteString("\t\tp, ok := byID[k]\n")
+	b.WriteString("\t\tif !ok {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n")
+	b.WriteString("\t\tout = append(out, p)\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn out, nil\n}\n\n")
+
+	// BatchUpdate: one transaction reusing the single Update per item (which
+	// already applies the field mask, tenant scope, and returns ErrNotFound for a
+	// missing/soft-deleted key); any item error rolls back the whole batch.
+	fmt.Fprintf(b, "func (r *%sRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[%s, string]) ([]%s, error) {\n", msg.MessageName, pbType, pbType)
+	fmt.Fprintf(b, "\tif len(items) == 0 {\n\t\treturn []%s{}, nil\n\t}\n", pbType)
+	fmt.Fprintf(b, "\tout := make([]%s, 0, len(items))\n", pbType)
+	b.WriteString("\terr := r.db.Transaction(func(tx *gorm.DB) error {\n")
+	if msgHasSecrets {
+		fmt.Fprintf(b, "\t\ttxRepo := &%sRepository{db: tx, enc: r.enc}\n", msg.MessageName)
+	} else {
+		fmt.Fprintf(b, "\t\ttxRepo := &%sRepository{db: tx}\n", msg.MessageName)
+	}
+	b.WriteString("\t\tfor _, it := range items {\n")
+	b.WriteString("\t\t\tupdated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)\n")
+	b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
+	b.WriteString("\t\t\tout = append(out, updated)\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t})\n")
+	b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+	b.WriteString("\treturn out, nil\n}\n\n")
+
+	// BatchDelete: one transactional bulk delete; RowsAffected != len(uniq) ⇒
+	// ErrNotFound (rollback). Keys are de-duplicated so the count check is exact;
+	// already-soft-deleted rows are excluded by the default scope and so count short.
+	fmt.Fprintf(b, "func (r *%sRepository) BatchDelete(ctx context.Context, keys []string) error {\n", msg.MessageName)
+	b.WriteString("\tif len(keys) == 0 {\n\t\treturn nil\n\t}\n")
+	b.WriteString("\tseen := make(map[string]struct{}, len(keys))\n")
+	b.WriteString("\tuniq := make([]string, 0, len(keys))\n")
+	b.WriteString("\tfor _, k := range keys {\n")
+	b.WriteString("\t\tif _, ok := seen[k]; ok {\n\t\t\tcontinue\n\t\t}\n")
+	b.WriteString("\t\tseen[k] = struct{}{}\n")
+	b.WriteString("\t\tuniq = append(uniq, k)\n")
+	b.WriteString("\t}\n")
+	if hasTenant {
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+	}
+	b.WriteString("\treturn r.db.Transaction(func(tx *gorm.DB) error {\n")
+	b.WriteString("\t\tq := tx.WithContext(ctx).Where(\"id IN ?\", uniq)\n")
+	if hasTenant {
+		b.WriteString("\t\tif tenantID != \"\" {\n\t\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t\t}\n")
+	}
+	if msg.SoftDelete {
+		fmt.Fprintf(b, "\t\tres := q.Delete(&%sModel{})\n", msg.MessageName)
+	} else {
+		fmt.Fprintf(b, "\t\tres := q.Unscoped().Delete(&%sModel{})\n", msg.MessageName)
+	}
+	b.WriteString("\t\tif res.Error != nil {\n")
+	fmt.Fprintf(b, "\t\t\treturn fmt.Errorf(\"batch delete %s: %%w\", res.Error)\n", msg.MessageName)
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\tif res.RowsAffected != int64(len(uniq)) {\n\t\t\treturn persistence.ErrNotFound\n\t\t}\n")
+	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t})\n}\n\n")
+
 	// Compile-time interface check.
 	fmt.Fprintf(b, "// compile-time check.\n")
-	fmt.Fprintf(b, "var _ persistence.Repository[%s, string] = (*%sRepository)(nil)\n\n", pbType, msg.MessageName)
+	fmt.Fprintf(b, "var _ persistence.BatchRepository[%s, string] = (*%sRepository)(nil)\n\n", pbType, msg.MessageName)
 }
 
 // assocModelType returns the GORM model type name a relationship field points at

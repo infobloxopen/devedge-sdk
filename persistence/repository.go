@@ -66,8 +66,23 @@ type BatchRepository[T any, K comparable] interface {
 	// keys. Returns ErrNotFound if any key does not exist or is soft-deleted. An empty
 	// keys slice returns an empty slice with no error.
 	BatchGet(ctx context.Context, keys []K) ([]T, error)
+	// BatchUpdate updates multiple resources atomically. Each item carries its key, the
+	// new entity value, and an optional field mask (empty mask = full update, matching
+	// Update). Returns the updated entities in the same order as items. Returns
+	// ErrNotFound if any key does not exist or is soft-deleted; on error no items are
+	// modified. An empty items slice returns an empty slice with no error.
+	BatchUpdate(ctx context.Context, items []BatchUpdateItem[T, K]) ([]T, error)
 	// BatchDelete soft-deletes multiple resources. Returns ErrNotFound if any key does
 	// not exist or is already soft-deleted; on error no items are deleted. An empty
 	// keys slice is a no-op.
 	BatchDelete(ctx context.Context, keys []K) error
+}
+
+// BatchUpdateItem is a single update within a BatchUpdate call: the target key, the
+// new entity value, and an optional field mask selecting which fields to write. An
+// empty FieldMask is a full update, matching Repository.Update.
+type BatchUpdateItem[T any, K comparable] struct {
+	Key       K
+	Entity    T
+	FieldMask []string
 }
