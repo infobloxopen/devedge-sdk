@@ -43,3 +43,23 @@ func TestEntRepository_CrossTenantMutationDenied(t *testing.T) {
 		t.Errorf("alice's key_prefix must be unchanged by bob: got=%+v err=%v", got, err)
 	}
 }
+
+// TestEntRepository_DeleteAlreadyDeleted verifies that soft-deleting a row that is
+// already soft-deleted returns ErrNotFound, consistent with MemoryRepository, the
+// GORM shape, and the batch methods (not a silent re-stamp of delete_time).
+func TestEntRepository_DeleteAlreadyDeleted(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:del_already?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+	repo := apikeyv1.NewAPIKeyEntRepository(client, secret.NewDev(make([]byte, 32)))
+	ctx := tenantCtx("alice")
+
+	if _, err := repo.Create(ctx, &apikeyv1.APIKey{Id: "d1", Name: "d", AccountId: "alice", KeyValue: "sk_d1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := repo.Delete(ctx, "d1"); err != nil {
+		t.Fatalf("first Delete: %v", err)
+	}
+	if err := repo.Delete(ctx, "d1"); err != persistence.ErrNotFound {
+		t.Errorf("second Delete on already-deleted row: want ErrNotFound, got %v", err)
+	}
+}

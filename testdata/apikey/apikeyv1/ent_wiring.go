@@ -119,6 +119,10 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				q = q.Where(entapikey.AccountID(tenantID))
 			}
+			// Only live rows are deletable: an already soft-deleted row must yield
+			// ErrNotFound (consistent with MemoryRepository, the GORM shape, and the
+			// batch methods), not silently re-stamp delete_time.
+			q = q.Where(entapikey.DeleteTimeIsNil())
 			err := q.SetDeleteTime(time.Now()).Exec(ctx)
 			if ent.IsNotFound(err) {
 				return persistence.ErrNotFound
