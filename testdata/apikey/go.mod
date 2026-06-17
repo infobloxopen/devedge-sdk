@@ -45,8 +45,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace (
-	github.com/infobloxopen/apis/proto/infoblox/authz => ../../../apis/proto/infoblox/authz
-	github.com/infobloxopen/apis/proto/infoblox/field => ../../../apis/proto/infoblox/field
-	github.com/infobloxopen/devedge-sdk => ../..
-)
+replace github.com/infobloxopen/devedge-sdk => ../..
