@@ -10,7 +10,9 @@ an authz rule table. The proto is the single source of truth.
 
 Declare your resource, the RPCs, the HTTP mappings, and the authz rule per method. This is the
 [apikey fixture](https://github.com/infobloxopen/devedge-sdk/tree/main/testdata/apikey) shipped
-with the SDK:
+with the SDK. For the resource message itself — which field types persist, the framework-managed
+fields (`etag`, `delete_time`, `account_id`, …), constraints, and relationships — see
+[Model a Resource](../model-a-resource/).
 
 ```proto {filename="apikey.proto"}
 syntax = "proto3";
@@ -213,7 +215,7 @@ The generated rules feed both the authz interceptor and the field-mask validator
 
 `key_value` is annotated `secret`, so the generated `APIKeyRepository` needs an `Encryptor`. Its
 constructor is `NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor)`. See
-[Secret fields](../secret-fields/).
+[Secret fields](../model-a-resource/#secret-fields).
 
 ## Next
 

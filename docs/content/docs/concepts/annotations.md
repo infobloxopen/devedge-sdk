@@ -93,7 +93,7 @@ A `secret` field drives behavior across three packages:
 
 - **Storage** (`protoc-gen-storage` / `protoc-gen-ent`) emits `<field>_hash` and
   `<field>_cipher` columns instead of a plaintext column, and calls the `Encryptor` on
-  create/update. See [Secret fields](../../guides/secret-fields/).
+  create/update. See [Secret fields](../../guides/model-a-resource/#secret-fields).
 - **Logging** (`middleware/redact`) replaces the value with `[REDACTED]` before logging.
 - **Security** (`seccheck.AssertNoSecretFieldsLeaked`) walks every response proto and fails if a
   secret field is non-empty (other than the literal `[REDACTED]`).
