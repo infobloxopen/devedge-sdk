@@ -73,6 +73,10 @@ field is the only switch — there is no separate annotation or option.
 
 A sibling marker, `google.protobuf.Timestamp expire_time = N [(google.api.field_behavior) = OUTPUT_ONLY]`,
 additionally emits a `PurgeExpired(ctx, before)` method that hard-deletes rows past their TTL.
+`expire_time` is OUTPUT_ONLY, so your **Create handler stamps it** (e.g.
+`b.ExpireTime = timestamppb.New(time.Now().Add(ttl))` before `repo.Create`); the generated `toModel`
+carries it to the `expire_time` column, and `PurgeExpired(ctx, time.Now())` reaps the rows whose stamp
+has passed.
 
 ### Secret fields
 
@@ -116,12 +120,31 @@ dependency — never the SDK's own module. The SDK keeps gorm out of its `go.mod
 Generates an ent schema for each message. Run `go generate ./ent` to produce the type-safe client
 from the schema. The ent shape enforces tenant scoping and secret-field handling through ent's
 **privacy layer** and **hooks** (applied by a generated mixin), so the invariants hold even for
-ad-hoc graph traversals — not just CRUD. The SDK wiring exposes a constructor that satisfies the
-neutral seam:
+ad-hoc graph traversals — not just CRUD.
+
+`protoc-gen-ent` generates the ent **schema** (under `ent/schema/`) and a batch wrapper; it does
+**not** generate the adapter that satisfies the neutral `persistence.Repository` seam. You write a
+thin one using the SDK's generic `entrepo.EntRepository[T, K]`, supplying closures for
+Get/List/Create/Update/Delete/Undelete over the ent client, behind this constructor:
 
 ```go
 func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*APIKey, string]
 ```
+
+A complete, copy-able adapter (tenant guards on mutations, secret hash/cipher on create, soft-delete
+via `delete_time`) lives in the apikey example at `testdata/apikey/apikeyv1/ent_wiring.go`.
+
+{{< callout type="warning" >}}
+**Standing up the ent client — gotchas:**
+- In a **consumer module**, give `protoc-gen-ent` a bare `out: .` (it writes `ent/schema/...`). Do
+  **not** add the `opt: module=...` used for the other plugins — ent rejects it
+  (`generated file does not match prefix`).
+- **Bootstrap order:** `buf generate` writes the schema *and* a `*.batch.ent.go` wrapper that imports
+  the ent *client* packages (`<module>/ent/<resource>`). Those don't exist until `go generate ./ent`
+  runs, so generate the client first — the wrapper won't compile until it does.
+- `go generate ./ent` pulls the ent **codegen toolchain** (`ariga.io/atlas`, `golang.org/x/tools`,
+  `github.com/spf13/cobra`, …); run `go mod tidy` afterward or pin them in a `tools.go`.
+{{< /callout >}}
 
 ## Putting them in `buf.gen.yaml`
 

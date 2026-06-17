@@ -176,6 +176,26 @@ func TestRenderEntSchema_hasOneEdge(t *testing.T) {
 	mustNotContain(t, out, "TODO: nested message address skipped")
 }
 
+// Regression for issue #26: a belongs_to must emit a self-contained forward edge
+// (edge.To(...).Unique()), NOT an inverse edge.From(...).Ref(...) — the latter
+// requires a matching edge.To on the parent type that is never generated, so ent
+// codegen aborts with "edge <x> is missing for inverse edge".
+func TestRenderEntSchema_belongsToEdge(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Booking",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "venue", SnakeName: "venue", EntType: "String",
+				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "venue_id"}},
+		},
+	}
+	out := renderEntSchema(msg)
+	mustContain(t, out, "func (Booking) Edges() []ent.Edge {")
+	mustContain(t, out, `edge.To("venue", Venue.Type).Unique()`)
+	// Must NOT emit the inverse edge that needs an absent counterpart.
+	mustNotContain(t, out, ".Ref(")
+}
+
 // TestRenderEntRepository covers the F026 batch wrapper: tenant + secret +
 // soft-delete + an OUTPUT_ONLY field (which must NOT be writable).
 func TestRenderEntRepository(t *testing.T) {

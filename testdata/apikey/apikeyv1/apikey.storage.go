@@ -58,6 +58,9 @@ func toModel_APIKey(p *APIKey) *APIKeyModel {
 	m.AccountId = p.AccountId
 	m.KeyPrefix = p.KeyPrefix
 	m.Label = p.Label
+	if p.ExpireTime != nil {
+		m.ExpireTime = sql.NullTime{Time: p.ExpireTime.AsTime(), Valid: true}
+	}
 	return m
 }
 

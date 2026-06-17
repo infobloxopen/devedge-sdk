@@ -118,8 +118,10 @@ opts into the relevant feature:
   lookup by stored hash (the secret is never compared in plaintext). Returns `ErrNotFound` when no
   row matches.
 - **`PurgeExpired(ctx, before time.Time) (int64, error)`** — for resources with an `expire_time`
-  field, hard-deletes soft-deleted rows whose `expire_time` is before the cutoff; returns the count
-  removed.
+  field, hard-deletes **any** row whose `expire_time` is at or before the cutoff (regardless of
+  soft-delete state), tenant-scoped; returns the count removed. `expire_time` is OUTPUT_ONLY and
+  stamped by your Create handler (see *codegen → TTL*); the generated `toModel` carries it to the
+  column, so a row created through the seam has a real expiry for `PurgeExpired` to reap.
 
 ## BatchRepository[T,K]
 
