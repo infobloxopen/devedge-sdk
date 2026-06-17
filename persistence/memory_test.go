@@ -218,6 +218,94 @@ func TestMemoryRepository_BatchDelete_AlreadyDeleted(t *testing.T) {
 	}
 }
 
+func TestMemoryRepository_BatchUpdate_Success(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Create(ctx, zone{ID: "b", Name: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := r.BatchUpdate(ctx, []BatchUpdateItem[zone, string]{
+		{Key: "a", Entity: zone{ID: "a", Name: "alpha2"}},
+		{Key: "b", Entity: zone{ID: "b", Name: "beta2"}},
+	})
+	if err != nil {
+		t.Fatalf("BatchUpdate: unexpected error: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "a" || got[0].Name != "alpha2" || got[1].ID != "b" || got[1].Name != "beta2" {
+		t.Fatalf("BatchUpdate: wrong result/order: %+v", got)
+	}
+	// Subsequent Get reflects the new values.
+	a, _ := r.Get(ctx, "a")
+	if a.Name != "alpha2" {
+		t.Fatalf("Get after BatchUpdate: want alpha2, got %q", a.Name)
+	}
+}
+
+func TestMemoryRepository_BatchUpdate_EmptyItems(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+
+	got, err := r.BatchUpdate(ctx, []BatchUpdateItem[zone, string]{})
+	if err != nil {
+		t.Fatalf("BatchUpdate empty: unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("BatchUpdate empty: want 0 items, got %d", len(got))
+	}
+}
+
+func TestMemoryRepository_BatchUpdate_MissingKey(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.BatchUpdate(ctx, []BatchUpdateItem[zone, string]{
+		{Key: "a", Entity: zone{ID: "a", Name: "alpha2"}},
+		{Key: "missing", Entity: zone{ID: "missing", Name: "x"}},
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("BatchUpdate missing: want ErrNotFound, got %v", err)
+	}
+	// Atomic: "a" must be unchanged.
+	a, _ := r.Get(ctx, "a")
+	if a.Name != "alpha" {
+		t.Fatalf("BatchUpdate missing not atomic: a.Name = %q, want alpha", a.Name)
+	}
+}
+
+func TestMemoryRepository_BatchUpdate_SoftDeletedKey(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(z zone) string { return z.ID })
+	if _, err := r.Create(ctx, zone{ID: "a", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Create(ctx, zone{ID: "b", Name: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, "b"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.BatchUpdate(ctx, []BatchUpdateItem[zone, string]{
+		{Key: "a", Entity: zone{ID: "a", Name: "alpha2"}},
+		{Key: "b", Entity: zone{ID: "b", Name: "beta2"}},
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("BatchUpdate soft-deleted: want ErrNotFound, got %v", err)
+	}
+	// Atomic: "a" must be unchanged.
+	a, _ := r.Get(ctx, "a")
+	if a.Name != "alpha" {
+		t.Fatalf("BatchUpdate soft-deleted not atomic: a.Name = %q, want alpha", a.Name)
+	}
+}
+
 func TestMemoryRepository(t *testing.T) {
 	ctx := context.Background()
 	r := NewMemoryRepository(func(z zone) string { return z.ID })

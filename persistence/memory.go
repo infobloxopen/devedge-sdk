@@ -203,6 +203,33 @@ func (r *MemoryRepository[T, K]) BatchGet(_ context.Context, keys []K) ([]T, err
 	return items, nil
 }
 
+// BatchUpdate implements [BatchRepository]. Updates all items atomically: it
+// pre-checks every key before mutating, so if any key is missing or soft-deleted
+// it returns ErrNotFound without modifying anything. Each entity is replaced in
+// full (the per-item field mask is accepted for interface compatibility but
+// ignored, matching Update) and gets a fresh ETag. ETag preconditions are not
+// applied to batch updates. Returns updated entities in the same order as items;
+// an empty items slice returns an empty slice with no error.
+func (r *MemoryRepository[T, K]) BatchUpdate(_ context.Context, items []BatchUpdateItem[T, K]) ([]T, error) {
+	if len(items) == 0 {
+		return []T{}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, it := range items {
+		if _, ok := r.items[it.Key]; !ok || r.deleted[it.Key] {
+			return nil, ErrNotFound
+		}
+	}
+	out := make([]T, 0, len(items))
+	for _, it := range items {
+		r.items[it.Key] = it.Entity
+		r.etags[it.Key] = uuid.New().String()
+		out = append(out, it.Entity)
+	}
+	return out, nil
+}
+
 // BatchDelete implements [BatchRepository]. Soft-deletes all keys atomically.
 // Pre-checks all keys before mutating: if any key is missing or already
 // soft-deleted, returns ErrNotFound without deleting anything.
