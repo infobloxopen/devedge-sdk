@@ -283,9 +283,20 @@ curl -s -X POST localhost:8080/v1/apikeys \
 # Read it back — key_value is now empty.
 curl -s localhost:8080/v1/apikeys/$ID -H 'account-id: alice' -H 'groups: admins'
 
-# bob cannot see alice's key → 404.
+# bob cannot see alice's key. With the default single-tenant dev grant
+# (Tenant: "alice"), authz denies bob BEFORE the repository runs → 403.
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/v1/apikeys/$ID -H 'account-id: bob' -H 'groups: admins'
 ```
+
+{{< callout type="info" >}}
+**403 vs 404 here.** Authz runs before the tenant-scoped repository (see
+[Tenant isolation](../../concepts/tenant-isolation/#two-layers-which-status-a-caller-actually-sees)).
+With a single-tenant grant, `bob` matches no grant and gets **403**. To see the repository's
+existence-hiding **404** instead — `bob` is authorized for `api_keys` but still cannot see `alice`'s
+specific key — grant both tenants, e.g. `authz.Grant{Tenant: "*", Subjects: []string{"group:admins"}, …}`.
+The `seccheck.AssertCrossAccountIsolation` check exercises that repository layer directly, which is
+why it asserts `NotFound`.
+{{< /callout >}}
 
 When you're done:
 

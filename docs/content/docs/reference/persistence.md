@@ -124,8 +124,15 @@ type BatchRepository[T any, K comparable] interface {
 ```
 
 The AIP-137 extension for multi-resource operations. Both methods are atomic: if any key is invalid
-the whole call fails without modifying any resource. `MemoryRepository` implements it; the
-generated GORM repository implements it when the service declares batch methods.
+the whole call fails without modifying any resource. **`MemoryRepository` implements it.**
+
+{{< callout type="warning" >}}
+`protoc-gen-storage` does **not** yet generate `BatchGet`/`BatchDelete` from proto — declaring
+`BatchGet*`/`BatchDelete*` RPCs produces only the standard CRUDL repository, so the generated GORM
+repo satisfies `Repository[T,K]` but not `BatchRepository[T,K]`. To offer batch operations on a
+GORM-backed service today, implement the two methods by hand on top of the generated repository (or
+use `MemoryRepository`). Codegen support for batch methods is not implemented.
+{{< /callout >}}
 
 ## Errors
 
@@ -143,6 +150,26 @@ cross-tenant reads look like "does not exist", which is exactly what
 [tenant isolation](../../concepts/tenant-isolation/) requires. `ErrConflict` and
 `ErrPreconditionFailed` map to `codes.AlreadyExists` and `codes.FailedPrecondition` (e.g. an ETag
 mismatch).
+
+The generated GORM `Create`/`Update` produce these sentinels from raw driver errors: a
+**unique-constraint violation** (e.g. a duplicate `unique` field within a tenant) becomes
+`ErrConflict`, and a **foreign-key / not-null violation** becomes `ErrPreconditionFailed`. They do
+this via `persistence.ConstraintError`, which classifies a driver error and returns the matching
+clean sentinel — never the raw SQL — so the client sees `AlreadyExists`/`FailedPrecondition` rather
+than a 500 leaking the table and column names. The [`ErrorMapper`](../middleware/) interceptor then
+turns the sentinel into the gRPC status; you do not write that mapping by hand.
+
+```go
+// ConstraintError returns ErrConflict / ErrPreconditionFailed for a recognized
+// driver constraint violation (SQLite, PostgreSQL, MySQL), or nil otherwise.
+func ConstraintError(err error) error
+```
+
+{{< callout type="info" >}}
+Defense in depth: `seccheck.AssertErrorMessagesClean` also fails on raw constraint text
+(`constraint failed`, `duplicate key`, `SQLSTATE`, a generated `<resource>_models.` table name),
+so an *unmapped* constraint leak is caught by the security gate rather than shipping silently.
+{{< /callout >}}
 
 ## MemoryRepository
 

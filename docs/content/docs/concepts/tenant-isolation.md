@@ -48,6 +48,26 @@ The same scoping is applied in `List`, `Update`, `Delete`, and the generated
 resource simply does not exist *for that tenant* — rather than a permission error that would leak
 its existence.
 
+## Two layers: which status a caller actually sees
+
+The NotFound behavior above is the **repository** layer. End to end, two layers act in order, and
+**authz runs first**:
+
+1. **Authz (per-tenant grant).** `grpcauthz` checks the request's principal — derived from the same
+   `account-id` metadata — against the authorizer's grants. A tenant with **no grant** for the
+   resource type is denied with `PermissionDenied` (**HTTP 403**) *before* the handler or repository
+   runs. With the single-tenant dev grant most examples use (`{Tenant: "alice", …}`), a request as
+   `account-id: bob` matches no grant and is **403**, regardless of who owns the resource.
+2. **Repository (tenant scoping).** Only once a request *is* authorized for the resource type does it
+   reach the tenant-scoped query, where reading another tenant's specific resource returns
+   `NotFound` (**HTTP 404**) — the existence-hiding behavior above.
+
+So the "→ NotFound" guarantee is what a caller sees when it is **authorized for the resource type
+but does not own the specific resource** (e.g. two tenants both granted `read api_keys`). A caller
+with no grant at all sees **403**, not 404. To observe the 404 isolation path end to end, grant both
+tenants the verb/resource and let the repository hide the row; `seccheck.AssertCrossAccountIsolation`
+exercises the repository layer directly, which is why it asserts NotFound.
+
 ## ent shape — the privacy layer
 
 The ent shape enforces the same invariant through ent's **privacy** rules and **hooks**, applied

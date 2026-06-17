@@ -117,6 +117,81 @@ func (s *server) GetWidget(ctx context.Context, req *pb.GetWidgetRequest) (*pb.W
 }
 ```
 
+## ReadMaskUnary — partial responses (AIP-157)
+
+```go
+func ReadMaskUnary() grpc.UnaryServerInterceptor
+```
+**Trigger:** a `google.protobuf.FieldMask read_mask = N;` field on the **request** message. When the
+mask has non-empty paths, the interceptor applies it to the response after the handler returns,
+clearing every field not named in the mask. Requests with no `read_mask` field, a nil mask, or an
+empty path list pass through unchanged.
+
+```proto
+message GetWidgetRequest {
+  string id = 1;
+  google.protobuf.FieldMask read_mask = 2; // client asks for a subset of fields
+}
+```
+```bash
+# Over the gateway, read_mask is a repeated query param of field paths:
+curl 'localhost:8080/v1/widgets/w1?read_mask=name,create_time'
+```
+
+## ValidateOnlyUnary — dry-run (AIP-163)
+
+```go
+func ValidateOnlyUnary() grpc.UnaryServerInterceptor
+func ValidateOnlyFromContext(ctx context.Context) bool
+```
+**Trigger:** a `bool validate_only = N;` field on the **request** message. When it is true the
+interceptor records the flag on `ctx`; **the handler still runs**, so the handler is responsible for
+validating and then returning *without persisting*. Read the flag with `ValidateOnlyFromContext`:
+
+```go
+func (s *server) CreateWidget(ctx context.Context, req *pb.CreateWidgetRequest) (*pb.Widget, error) {
+    if err := validate(req.Widget); err != nil {
+        return nil, err
+    }
+    if middleware.ValidateOnlyFromContext(ctx) {
+        return req.Widget, nil // dry run: validated, not written
+    }
+    return s.repo.Create(ctx, req.Widget)
+}
+```
+
+## DeduplicateUnary — idempotent retries (AIP-155)
+
+```go
+func DeduplicateUnary(store DeduplicationStore) grpc.UnaryServerInterceptor
+
+type DeduplicationStore interface {
+    Load(requestID string) (any, bool)
+    Store(requestID string, response any)
+}
+func NewMemoryDeduplicationStore(ttl time.Duration) *MemoryDeduplicationStore // server.New default: 10m
+```
+**Trigger:** a `string request_id = N;` field on the **request** message (the idempotency key). The
+first successful call for a given `request_id` is cached; a retry with the same `request_id` replays
+the cached response without re-running the handler. Requests with an empty `request_id`, or with
+`validate_only=true`, bypass the cache; **handler errors are not cached** (so a failed call can be
+retried). Override the store with `Config.DeduplicationStore`.
+
+## Custom methods
+
+A custom verb (AIP-136, e.g. `:publish`) is an ordinary RPC with a custom-verb HTTP mapping and its
+own authz rule — no special interceptor:
+
+```proto
+rpc PublishWidget(PublishWidgetRequest) returns (Widget) {
+  option (google.api.http)        = {post: "/v1/widgets/{id}:publish", body: "*"};
+  option (infoblox.authz.v1.rule) = {verb: "publish", resource: "widgets"};
+}
+```
+The `verb` you choose flows into the authz rule table and the boot-time completeness gate like any
+standard verb. The gateway maps the `:publish` suffix; the storage plugin generates no extra method
+(custom business logic lives in your handler).
+
 ## redact — log redaction for secret fields
 
 ```go
