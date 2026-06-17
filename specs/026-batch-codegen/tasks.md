@@ -25,10 +25,10 @@ Gate: each phase's tests green before the next.
 - [X] T305 `[S]` Regenerated apikey ent wrapper; `go build` + `go test ./cmd/protoc-gen-ent/` green.
 - [X] T306 `[C]` ent-sqlite tests (`batch_ent_sqlite_test.go`): happy path, atomic-missing, soft-delete, tenant isolation. AC-011/014/015/020
 
-## Phase 4 — Toy fixture (BatchUpdate end-to-end)
-- [ ] T401 `[S]` Proto: add `BatchUpdateWidgets` (+messages), keep BatchGet/Delete; regenerate pb/gw/svc. FR-030
-- [ ] T402 `[S]` Handler: implement `BatchUpdateWidgets`. FR-031
-- [ ] T403 `[S]` Integration tests: `TestBatchUpdateWidgets` happy + atomic-missing. AC-021/022
+## Phase 4 — Toy fixture (BatchUpdate end-to-end) ✅ done
+- [X] T401 `[S]` Proto: added `BatchUpdateWidgets` (+messages), kept BatchGet/Delete; regenerated pb/gw/svc/authz (boot-gate + `/v1/widgets:batchUpdate` route). FR-030
+- [X] T402 `[S]` Handler: `BatchUpdateWidgets` maps requests→BatchUpdateItem→repo.BatchUpdate. FR-031
+- [X] T403 `[S]` Integration tests: `TestBatchUpdateWidgets` happy + `_MissingId_IsAtomic`. AC-021/022
 
 ## Phase 5 — Cross-backend conformance
 - [ ] T501 `[C]` Shared batch behavior suite run against Memory + GORM-sqlite + ent-sqlite. FR-040, AC-020

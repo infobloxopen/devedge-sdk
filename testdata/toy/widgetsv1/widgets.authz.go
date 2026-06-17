@@ -50,6 +50,11 @@ var WidgetServiceAuthzRules = []authz.MethodRule{
 		Resource: "widgets",
 	},
 	{
+		Method:   "/toy.v1.WidgetService/BatchUpdateWidgets",
+		Verb:     authz.Verb("update"),
+		Resource: "widgets",
+	},
+	{
 		Method:   "/toy.v1.WidgetService/ProcessWidget",
 		Verb:     authz.Verb("write"),
 		Resource: "widgets",

@@ -32,6 +32,7 @@ const (
 	WidgetService_ArchiveWidget_FullMethodName         = "/toy.v1.WidgetService/ArchiveWidget"
 	WidgetService_BatchGetWidgets_FullMethodName       = "/toy.v1.WidgetService/BatchGetWidgets"
 	WidgetService_BatchDeleteWidgets_FullMethodName    = "/toy.v1.WidgetService/BatchDeleteWidgets"
+	WidgetService_BatchUpdateWidgets_FullMethodName    = "/toy.v1.WidgetService/BatchUpdateWidgets"
 	WidgetService_ProcessWidget_FullMethodName         = "/toy.v1.WidgetService/ProcessWidget"
 	WidgetService_GetOperationStatus_FullMethodName    = "/toy.v1.WidgetService/GetOperationStatus"
 	WidgetService_CancelWidgetOperation_FullMethodName = "/toy.v1.WidgetService/CancelWidgetOperation"
@@ -52,6 +53,8 @@ type WidgetServiceClient interface {
 	BatchGetWidgets(ctx context.Context, in *BatchGetWidgetsRequest, opts ...grpc.CallOption) (*BatchGetWidgetsResponse, error)
 	// AIP-137: soft-delete multiple widgets atomically.
 	BatchDeleteWidgets(ctx context.Context, in *BatchDeleteWidgetsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// AIP-137: update multiple widgets atomically (each request carries its own update_mask).
+	BatchUpdateWidgets(ctx context.Context, in *BatchUpdateWidgetsRequest, opts ...grpc.CallOption) (*BatchUpdateWidgetsResponse, error)
 	// AIP-151: start async processing; returns a pending OperationStatus immediately.
 	ProcessWidget(ctx context.Context, in *ProcessWidgetRequest, opts ...grpc.CallOption) (*OperationStatus, error)
 	// AIP-151: poll the status of a previously submitted ProcessWidget operation.
@@ -148,6 +151,16 @@ func (c *widgetServiceClient) BatchDeleteWidgets(ctx context.Context, in *BatchD
 	return out, nil
 }
 
+func (c *widgetServiceClient) BatchUpdateWidgets(ctx context.Context, in *BatchUpdateWidgetsRequest, opts ...grpc.CallOption) (*BatchUpdateWidgetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchUpdateWidgetsResponse)
+	err := c.cc.Invoke(ctx, WidgetService_BatchUpdateWidgets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *widgetServiceClient) ProcessWidget(ctx context.Context, in *ProcessWidgetRequest, opts ...grpc.CallOption) (*OperationStatus, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OperationStatus)
@@ -193,6 +206,8 @@ type WidgetServiceServer interface {
 	BatchGetWidgets(context.Context, *BatchGetWidgetsRequest) (*BatchGetWidgetsResponse, error)
 	// AIP-137: soft-delete multiple widgets atomically.
 	BatchDeleteWidgets(context.Context, *BatchDeleteWidgetsRequest) (*emptypb.Empty, error)
+	// AIP-137: update multiple widgets atomically (each request carries its own update_mask).
+	BatchUpdateWidgets(context.Context, *BatchUpdateWidgetsRequest) (*BatchUpdateWidgetsResponse, error)
 	// AIP-151: start async processing; returns a pending OperationStatus immediately.
 	ProcessWidget(context.Context, *ProcessWidgetRequest) (*OperationStatus, error)
 	// AIP-151: poll the status of a previously submitted ProcessWidget operation.
@@ -232,6 +247,9 @@ func (UnimplementedWidgetServiceServer) BatchGetWidgets(context.Context, *BatchG
 }
 func (UnimplementedWidgetServiceServer) BatchDeleteWidgets(context.Context, *BatchDeleteWidgetsRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BatchDeleteWidgets not implemented")
+}
+func (UnimplementedWidgetServiceServer) BatchUpdateWidgets(context.Context, *BatchUpdateWidgetsRequest) (*BatchUpdateWidgetsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BatchUpdateWidgets not implemented")
 }
 func (UnimplementedWidgetServiceServer) ProcessWidget(context.Context, *ProcessWidgetRequest) (*OperationStatus, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessWidget not implemented")
@@ -407,6 +425,24 @@ func _WidgetService_BatchDeleteWidgets_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WidgetService_BatchUpdateWidgets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchUpdateWidgetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WidgetServiceServer).BatchUpdateWidgets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WidgetService_BatchUpdateWidgets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WidgetServiceServer).BatchUpdateWidgets(ctx, req.(*BatchUpdateWidgetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WidgetService_ProcessWidget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ProcessWidgetRequest)
 	if err := dec(in); err != nil {
@@ -499,6 +535,10 @@ var WidgetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BatchDeleteWidgets",
 			Handler:    _WidgetService_BatchDeleteWidgets_Handler,
+		},
+		{
+			MethodName: "BatchUpdateWidgets",
+			Handler:    _WidgetService_BatchUpdateWidgets_Handler,
 		},
 		{
 			MethodName: "ProcessWidget",

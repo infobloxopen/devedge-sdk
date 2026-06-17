@@ -369,6 +369,33 @@ func local_request_WidgetService_BatchDeleteWidgets_0(ctx context.Context, marsh
 	return msg, metadata, err
 }
 
+func request_WidgetService_BatchUpdateWidgets_0(ctx context.Context, marshaler runtime.Marshaler, client WidgetServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq BatchUpdateWidgetsRequest
+		metadata runtime.ServerMetadata
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	msg, err := client.BatchUpdateWidgets(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_WidgetService_BatchUpdateWidgets_0(ctx context.Context, marshaler runtime.Marshaler, server WidgetServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq BatchUpdateWidgetsRequest
+		metadata runtime.ServerMetadata
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	msg, err := server.BatchUpdateWidgets(ctx, &protoReq)
+	return msg, metadata, err
+}
+
 func request_WidgetService_ProcessWidget_0(ctx context.Context, marshaler runtime.Marshaler, client WidgetServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq ProcessWidgetRequest
@@ -664,6 +691,26 @@ func RegisterWidgetServiceHandlerServer(ctx context.Context, mux *runtime.ServeM
 		}
 		forward_WidgetService_BatchDeleteWidgets_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_WidgetService_BatchUpdateWidgets_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/toy.v1.WidgetService/BatchUpdateWidgets", runtime.WithHTTPPathPattern("/v1/widgets:batchUpdate"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_WidgetService_BatchUpdateWidgets_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_WidgetService_BatchUpdateWidgets_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodPost, pattern_WidgetService_ProcessWidget_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -900,6 +947,23 @@ func RegisterWidgetServiceHandlerClient(ctx context.Context, mux *runtime.ServeM
 		}
 		forward_WidgetService_BatchDeleteWidgets_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_WidgetService_BatchUpdateWidgets_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/toy.v1.WidgetService/BatchUpdateWidgets", runtime.WithHTTPPathPattern("/v1/widgets:batchUpdate"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_WidgetService_BatchUpdateWidgets_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_WidgetService_BatchUpdateWidgets_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodPost, pattern_WidgetService_ProcessWidget_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -963,6 +1027,7 @@ var (
 	pattern_WidgetService_ArchiveWidget_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"v1", "widgets", "id"}, "archive"))
 	pattern_WidgetService_BatchGetWidgets_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "widgets"}, "batchGet"))
 	pattern_WidgetService_BatchDeleteWidgets_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "widgets"}, "batchDelete"))
+	pattern_WidgetService_BatchUpdateWidgets_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "widgets"}, "batchUpdate"))
 	pattern_WidgetService_ProcessWidget_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"v1", "widgets", "id"}, "process"))
 	pattern_WidgetService_GetOperationStatus_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 3, 0, 4, 1, 5, 2}, []string{"v1", "operations", "name"}, ""))
 	pattern_WidgetService_CancelWidgetOperation_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 3, 0, 4, 1, 5, 2}, []string{"v1", "operations", "name"}, "cancel"))
@@ -977,6 +1042,7 @@ var (
 	forward_WidgetService_ArchiveWidget_0         = runtime.ForwardResponseMessage
 	forward_WidgetService_BatchGetWidgets_0       = runtime.ForwardResponseMessage
 	forward_WidgetService_BatchDeleteWidgets_0    = runtime.ForwardResponseMessage
+	forward_WidgetService_BatchUpdateWidgets_0    = runtime.ForwardResponseMessage
 	forward_WidgetService_ProcessWidget_0         = runtime.ForwardResponseMessage
 	forward_WidgetService_GetOperationStatus_0    = runtime.ForwardResponseMessage
 	forward_WidgetService_CancelWidgetOperation_0 = runtime.ForwardResponseMessage
