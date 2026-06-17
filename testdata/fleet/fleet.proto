@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+// Two-resource ent relationship fixture (parent/child).
+//
+// A Fleet has_many Vehicles; each Vehicle belongs_to a Fleet via a scalar
+// fleet_id foreign key — the documented "natural AIP shape" for a 1:N
+// relationship. This exercises the protoc-gen-ent has_many/belongs_to edge
+// codegen (singular related type, a proper edge.From(...).Ref(...) inverse,
+// and the scalar-FK/edge de-duplication via .Field(...)) that the
+// single-resource, edge-less apikey fixture never touches.
+package fleet.v1;
+
+option go_package = "github.com/infobloxopen/devedge-sdk/testdata/fleet/fleetv1;fleetv1";
+
+import "infoblox/field/v1/field.proto";
+
+// Fleet is the parent resource: a tenant-scoped collection of Vehicles with a
+// per-tenant unique display_name.
+message Fleet {
+  string id           = 1;
+  string account_id   = 2;
+  string display_name = 3 [(infoblox.field.v1.opts) = {unique: true}];
+  // has_many: the child Vehicles, keyed by the fleet_id FK on the Vehicle side.
+  repeated Vehicle vehicles = 4 [(infoblox.field.v1.opts) = {has_many: {foreign_key: "fleet_id"}}];
+}
+
+// Vehicle is the child resource: it belongs_to a Fleet. fleet_id is exposed as
+// a first-class scalar field (so clients can read/filter it) AND drives the
+// belongs_to association — the combination that previously collided in ent.
+message Vehicle {
+  string id         = 1;
+  string account_id = 2;
+  string vin        = 3 [(infoblox.field.v1.opts) = {unique: true}];
+  // Scalar FK, queryable per AIP; reused by the belongs_to edge below.
+  string fleet_id   = 4;
+  // belongs_to: the parent Fleet; the FK (fleet_id) lives on this table.
+  Fleet fleet       = 5 [(infoblox.field.v1.opts) = {belongs_to: {foreign_key: "fleet_id"}}];
+}

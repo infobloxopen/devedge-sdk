@@ -18,7 +18,7 @@ go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@late
 | `protoc-gen-devedge-authz` | `(infoblox.authz.v1.rule)` | `<Service>AuthzRules []authz.MethodRule` |
 | `protoc-gen-svc` | the service definition | the service scaffold (`*.svc.go`) |
 | `protoc-gen-storage` | messages (+ `field.secret`, `account_id`) | a GORM `Repository` (`*.storage.go`) |
-| `protoc-gen-ent` | messages | an ent schema (`ent/schema/*.go`) |
+| `protoc-gen-ent` | resource messages (those with an `id`) | an ent schema (`ent/schema/*.go`) |
 
 ## protoc-gen-devedge-authz
 
@@ -41,7 +41,8 @@ Generates a GORM-backed `Repository` for each message. For a message named `APIK
 
 - **`APIKeyModel`** — the GORM model. Standard columns plus `ETag`, `CreatedAt`, `UpdatedAt` — and,
   **only for resources that opt into soft-delete** (see below), a `DeletedAt` column of type
-  `gorm.DeletedAt`. (The `APIKey` example opts in, so its model has `DeletedAt`.)
+  `gorm.DeletedAt`. (The `APIKey` example opts in, so its model has `DeletedAt`.) The `ETag` column
+  is populated only when the resource declares an `etag` field (see *ETag* below).
 - **`toModel_APIKey` / `fromModel_APIKey`** — converters. They **skip** repeated fields (TODO:
   JSONB), nested messages (TODO: serialization), and secret fields.
 - **`APIKeyRepository`** + **`NewAPIKeyRepository`** — `Get`, `List`, `Create`, `Update`,
@@ -77,6 +78,29 @@ additionally emits a `PurgeExpired(ctx, before)` method that hard-deletes rows p
 `b.ExpireTime = timestamppb.New(time.Now().Add(ttl))` before `repo.Create`); the generated `toModel`
 carries it to the `expire_time` column, and `PurgeExpired(ctx, time.Now())` reaps the rows whose stamp
 has passed.
+
+{{< callout type="info" >}}
+**SQLite + time zones:** `toModel` stores `expire_time` in UTC, and the generated `PurgeExpired`
+normalizes its cutoff to UTC (`before.UTC()`). On SQLite, time columns are stored as TZ-suffixed
+TEXT and compared textually, so a UTC-stored value would not match a local-zone cutoff — without
+this normalization `PurgeExpired(time.Now())` could silently reap nothing. You may still pass a UTC
+cutoff explicitly; both work.
+{{< /callout >}}
+
+### ETag (AIP-154 / optimistic concurrency)
+
+Declare a server-managed ETag field on the resource:
+
+```protobuf
+string etag = N [(google.api.field_behavior) = OUTPUT_ONLY];
+```
+
+`protoc-gen-storage` then **stamps a fresh opaque token on every Create and Update** and **surfaces
+it on every read** (`fromModel` copies the stored `etag` column onto the proto). A `Get` therefore
+returns a stable token a client echoes as `If-Match`; the token changes on the next write, so a
+stale `If-Match` is rejected with a 412 (see [middleware → etag](../middleware/#etag--412-preconditions)
+for the handler pattern). The token is opaque — clients must not parse it. On the **ent** backend the
+`etag` field is not auto-stamped (compute it in your ent wiring if needed).
 
 ### Secret fields
 
@@ -117,10 +141,15 @@ dependency — never the SDK's own module. The SDK keeps gorm out of its `go.mod
 
 ## protoc-gen-ent
 
-Generates an ent schema for each message. Run `go generate ./ent` to produce the type-safe client
-from the schema. The ent shape enforces tenant scoping and secret-field handling through ent's
-**privacy layer** and **hooks** (applied by a generated mixin), so the invariants hold even for
-ad-hoc graph traversals — not just CRUD.
+Generates an ent schema for each **resource** message. Run `go generate ./ent` to produce the
+type-safe client from the schema. The ent shape enforces tenant scoping and secret-field handling
+through ent's **privacy layer** and **hooks** (applied by a generated mixin), so the invariants hold
+even for ad-hoc graph traversals — not just CRUD.
+
+A message is a **resource** (and gets a schema) when it declares an `id` field — the same rule
+`protoc-gen-storage` uses. Request/response wrappers and other transport types without an `id`
+(for example a consumer-declared LRO `Operation`) are **skipped**, so they get no ent schema or
+batch wrapper.
 
 `protoc-gen-ent` generates the ent **schema** (under `ent/schema/`) and a batch wrapper; it does
 **not** generate the adapter that satisfies the neutral `persistence.Repository` seam. You write a
@@ -134,16 +163,68 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 A complete, copy-able adapter (tenant guards on mutations, secret hash/cipher on create, soft-delete
 via `delete_time`) lives in the apikey example at `testdata/apikey/apikeyv1/ent_wiring.go`.
 
+### Relationships in ent
+
+For a parent/child pair — a `has_many` on the parent and a `belongs_to` on the child (the
+[natural AIP shape](../../concepts/annotations/#relationships)) — the plugin emits a single ent
+edge as a proper **inverse pair**, referencing each related schema by its **singular** type:
+
+```go
+// parent: Fleet has_many Vehicle
+func (Fleet) Edges() []ent.Edge {
+    return []ent.Edge{
+        edge.To("vehicles", Vehicle.Type),
+    }
+}
+
+// child: Vehicle belongs_to Fleet, with a scalar fleet_id FK
+func (Vehicle) Fields() []ent.Field {
+    return []ent.Field{
+        field.String("id").StorageKey("id").Immutable(),
+        field.String("fleet_id").Optional(),
+    }
+}
+func (Vehicle) Edges() []ent.Edge {
+    return []ent.Edge{
+        edge.From("fleet", Fleet.Type).Ref("vehicles").Unique().Field("fleet_id"),
+    }
+}
+```
+
+The child's `.Field("fleet_id")` **binds the edge's foreign key to the scalar `fleet_id` column**,
+so ent generates a single `SetFleetID` setter — the scalar field and the association share one
+column rather than colliding. The FK stays a first-class, queryable scalar. A `belongs_to` whose
+parent does **not** declare a reciprocal `has_many` is emitted as a self-contained
+`edge.To(...).Unique()` (also binding the scalar FK when present).
+
+A complete, buildable two-resource example (schema, ent client, wiring, and an edge-traversal test)
+lives in `testdata/fleet/`.
+
 {{< callout type="warning" >}}
 **Standing up the ent client — gotchas:**
 - In a **consumer module**, give `protoc-gen-ent` a bare `out: .` (it writes `ent/schema/...`). Do
   **not** add the `opt: module=...` used for the other plugins — ent rejects it
   (`generated file does not match prefix`).
-- **Bootstrap order:** `buf generate` writes the schema *and* a `*.batch.ent.go` wrapper that imports
-  the ent *client* packages (`<module>/ent/<resource>`). Those don't exist until `go generate ./ent`
-  runs, so generate the client first — the wrapper won't compile until it does.
-- `go generate ./ent` pulls the ent **codegen toolchain** (`ariga.io/atlas`, `golang.org/x/tools`,
-  `github.com/spf13/cobra`, …); run `go mod tidy` afterward or pin them in a `tools.go`.
+- **Cold-start order matters.** `buf generate` writes the schema *and* a `*.batch.ent.go` wrapper
+  that imports the not-yet-generated ent *client* packages (`<module>/ent/<resource>`), so a plain
+  `go mod tidy` can't resolve the module before the client exists, and `go generate ./ent` can't run
+  without the ent codegen toolchain in `go.sum`. Break the deadlock once, in this order:
+
+  1. Pin the ent codegen tool so its deps survive `go mod tidy` — add a `tools.go`:
+     ```go
+     //go:build tools
+
+     package tools
+
+     import _ "entgo.io/ent/cmd/ent"
+     ```
+  2. `go mod tidy` (the schema + storage + pb packages now resolve; the wrapper is excluded only if
+     the client is missing — see step 3).
+  3. `go generate ./ent` to produce the client, then `go mod tidy` again. The `*.batch.ent.go`
+     wrapper now compiles.
+
+  After this, regenerating is just `buf generate` → `go generate ./ent`. `testdata/fleet/tools.go`
+  shows the pin.
 {{< /callout >}}
 
 ## Putting them in `buf.gen.yaml`

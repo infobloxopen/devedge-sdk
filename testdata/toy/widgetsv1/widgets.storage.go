@@ -16,6 +16,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,7 +38,6 @@ type WidgetModel struct {
 	DisplayName string `gorm:"column:display_name"`
 	Color       string `gorm:"column:color"`
 	Weight      int32  `gorm:"column:weight"`
-	Etag        string `gorm:"column:etag"`
 	ETag        string `gorm:"column:etag"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -52,7 +52,6 @@ func toModel_Widget(p *Widget) *WidgetModel {
 	m.DisplayName = p.DisplayName
 	m.Color = p.Color
 	m.Weight = p.Weight
-	m.Etag = p.Etag
 	return m
 }
 
@@ -65,10 +64,10 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 	p.DisplayName = m.DisplayName
 	p.Color = m.Color
 	p.Weight = m.Weight
-	p.Etag = m.Etag
 	if m.DeletedAt.Valid {
 		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
 	}
+	p.Etag = m.ETag
 	return p
 }
 
@@ -78,7 +77,6 @@ var WidgetColumns = map[string]string{
 	"display_name": "display_name",
 	"color":        "color",
 	"weight":       "weight",
-	"etag":         "etag",
 	"delete_time":  "deleted_at",
 }
 
@@ -164,6 +162,7 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 
 func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget, error) {
 	m := toModel_Widget(entity)
+	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -178,6 +177,7 @@ func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget,
 func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widget, fieldMask ...string) (*Widget, error) {
 	m := toModel_Widget(entity)
 	m.ID = key
+	m.ETag = etag.New() // AIP-154: bump the ETag on every update
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
@@ -188,6 +188,7 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 			}
 			dbCols = append(dbCols, col)
 		}
+		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
 		if err := q.Select(dbCols).Updates(m).Error; err != nil {
@@ -204,8 +205,8 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 			"display_name": m.DisplayName,
 			"color":        m.Color,
 			"weight":       m.Weight,
-			"etag":         m.Etag,
 		}
+		updates["etag"] = m.ETag
 		if err := q.Updates(updates).Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce

@@ -101,21 +101,30 @@ func SetIfMatch(ctx context.Context, val string) context.Context // testing
 ```
 Implements HTTP ETag / conditional-request semantics over gRPC. It reads the `if-match`
 precondition from incoming metadata into `ctx` (`IfMatchFromContext`), and writes the response
-ETag as a gRPC `etag` trailer when the handler signals one via `SetNewETag`:
+ETag as a gRPC `etag` trailer when the handler signals one via `SetNewETag`.
+
+The ETag value comes from the resource itself. Declare a `string etag = N
+[(google.api.field_behavior) = OUTPUT_ONLY];` field on the resource: `protoc-gen-storage` then
+**stamps a fresh token on every Create and Update and surfaces it on read**, so `w.GetEtag()` is a
+real, changing value a client can echo as `If-Match` (a stale token then yields a 412):
 
 ```go
 func (s *server) GetWidget(ctx context.Context, req *pb.GetWidgetRequest) (*pb.Widget, error) {
-    w := s.repo.Get(ctx, req.Id)
+    w := s.repo.Get(ctx, req.Id) // w.GetEtag() is populated by the storage layer
 
     // 412 precondition: reject if the client's If-Match doesn't match current state.
-    if im := etag.IfMatchFromContext(ctx); im != "" && im != w.ETag {
+    if im := etag.IfMatchFromContext(ctx); im != "" && im != w.GetEtag() {
         return nil, status.Error(codes.FailedPrecondition, "etag mismatch")
     }
 
-    etag.SetNewETag(ctx, w.ETag) // written as the response 'etag' trailer
+    etag.SetNewETag(ctx, w.GetEtag()) // written as the response 'etag' trailer
     return w, nil
 }
 ```
+
+The token is opaque (AIP-154) — clients must not parse it. On the **ent** backend the `etag` field
+is not auto-stamped; compute it in your ent wiring if you need it. `etag.New()` is the helper the
+generated GORM storage uses, available for hand-written code.
 
 ## ReadMaskUnary — partial responses (AIP-157)
 

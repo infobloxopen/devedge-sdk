@@ -47,6 +47,21 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		if strings.HasSuffix(name, "Request") || strings.HasSuffix(name, "Response") {
 			continue
 		}
+		// Only messages that have an "id" primary key are stored resources.
+		// Transport types without an id — request/response payloads not caught
+		// by the suffix check, and consumer-declared LRO Operation messages —
+		// must NOT get an ent schema (a PK-less ent entity is invalid). This
+		// mirrors protoc-gen-storage's resource-detection rule exactly.
+		hasID := false
+		for _, field := range m.Fields {
+			if string(field.Desc.Name()) == "id" {
+				hasID = true
+				break
+			}
+		}
+		if !hasID {
+			continue
+		}
 		msg := entMessageInfo{MessageName: name}
 		for _, field := range m.Fields {
 			var (
@@ -82,6 +97,14 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					}
 				}
 			}
+			// For message-kind fields (relationships), capture the related
+			// message's Go type name so the edge target references the actual
+			// ent schema struct (e.g. Vehicle) rather than a name derived from
+			// the — possibly pluralized — proto field name (e.g. "vehicles").
+			relatedType := ""
+			if field.Message != nil {
+				relatedType = string(field.Message.GoIdent.GoName)
+			}
 			// AIP-148: detect soft-delete and TTL markers.
 			fieldName := string(field.Desc.Name())
 			isTimestamp := field.Desc.Kind() == protoreflect.MessageKind &&
@@ -97,22 +120,29 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					continue // emitted as a direct Time field in renderEntSchema
 				}
 			}
+			// AIP-154 ETag is framework-managed and not auto-stamped on the ent
+			// backend (the GORM storage layer computes it). Skip the `etag` field
+			// so it does not become a stray, never-populated ent column.
+			if fieldName == "etag" && field.Desc.Kind() == protoreflect.StringKind {
+				continue
+			}
 			msg.Fields = append(msg.Fields, entFieldInfo{
-				Name:       string(field.Desc.Name()),
-				SnakeName:  toSnake(string(field.Desc.Name())),
-				EntType:    protoKindToEntType(field.Desc.Kind()),
-				IsID:       string(field.Desc.Name()) == "id",
-				IsRepeated: field.Desc.IsList(),
-				IsMessage:  field.Desc.Kind() == protoreflect.MessageKind,
-				IsSecret:   isSecret,
-				OutputOnly: isOutputOnly,
-				NotNull:    notNull,
-				Unique:     unique,
-				Index:      index,
-				HasOne:     hasOne,
-				HasMany:    hasMany,
-				BelongsTo:  belongsTo,
-				ManyToMany: manyToMany,
+				Name:        string(field.Desc.Name()),
+				SnakeName:   toSnake(string(field.Desc.Name())),
+				EntType:     protoKindToEntType(field.Desc.Kind()),
+				IsID:        string(field.Desc.Name()) == "id",
+				IsRepeated:  field.Desc.IsList(),
+				IsMessage:   field.Desc.Kind() == protoreflect.MessageKind,
+				IsSecret:    isSecret,
+				OutputOnly:  isOutputOnly,
+				NotNull:     notNull,
+				Unique:      unique,
+				Index:       index,
+				RelatedType: relatedType,
+				HasOne:      hasOne,
+				HasMany:     hasMany,
+				BelongsTo:   belongsTo,
+				ManyToMany:  manyToMany,
 			})
 		}
 		messages = append(messages, msg)
@@ -123,8 +153,10 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	}
 
 	// One schema file per resource message: ent/schema/<snake_resource>.go.
+	// Pass the full message set so a belongs_to can be paired with its parent's
+	// has_many as a proper ent inverse edge (edge.From(...).Ref(...)).
 	for _, msg := range messages {
-		content := renderEntSchema(msg)
+		content := renderEntSchema(msg, messages)
 		if content == "" {
 			continue
 		}

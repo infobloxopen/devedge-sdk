@@ -20,6 +20,7 @@ jobs:
             go.sum
             testdata/toy/go.sum
             testdata/apikey/go.sum
+            testdata/fleet/go.sum
 
       - name: Build
         run: make build
@@ -35,6 +36,9 @@ jobs:
 
       - name: Integration tests (apikey fixture)
         run: cd testdata/apikey && go test ./...
+
+      - name: Integration tests (fleet fixture — ent has_many/belongs_to edge)
+        run: cd testdata/fleet && go test ./...
 
   security-check:
     name: Security Check

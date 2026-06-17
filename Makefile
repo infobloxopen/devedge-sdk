@@ -7,12 +7,19 @@ generate:
 	go build -o bin/protoc-gen-devedge-authz ./cmd/protoc-gen-devedge-authz
 	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
+	go build -o bin/protoc-gen-ent           ./cmd/protoc-gen-ent
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.toy.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.apikey.yaml
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.fleet.yaml
 	cd testdata/toy && go mod tidy
 	cd testdata/apikey && go mod tidy
+	cd testdata/fleet && go mod tidy
 	go mod tidy
+	@echo "NOTE: protoc-gen-ent regenerates ent SCHEMAS only. If a relationship/"
+	@echo "      resource shape changed, regenerate the ent CLIENT too:"
+	@echo "        cd testdata/apikey && go generate ./ent"
+	@echo "        cd testdata/fleet  && go generate ./ent"
 
 build:
 	go build ./...
