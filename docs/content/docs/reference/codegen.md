@@ -39,13 +39,40 @@ the `<Service>Server` methods over a `persistence.Repository`. (The `*.storage.g
 
 Generates a GORM-backed `Repository` for each message. For a message named `APIKey` it emits:
 
-- **`APIKeyModel`** — the GORM model. Standard columns plus `ETag`, `CreatedAt`, `UpdatedAt`, and
-  a soft-delete `DeletedAt`.
+- **`APIKeyModel`** — the GORM model. Standard columns plus `ETag`, `CreatedAt`, `UpdatedAt` — and,
+  **only for resources that opt into soft-delete** (see below), a `DeletedAt` column of type
+  `gorm.DeletedAt`. (The `APIKey` example opts in, so its model has `DeletedAt`.)
 - **`toModel_APIKey` / `fromModel_APIKey`** — converters. They **skip** repeated fields (TODO:
   JSONB), nested messages (TODO: serialization), and secret fields.
 - **`APIKeyRepository`** + **`NewAPIKeyRepository`** — `Get`, `List`, `Create`, `Update`,
   `Delete`, satisfying `persistence.Repository[*APIKey, string]` (a compile-time `var _` check is
   emitted).
+
+### Soft-delete (opt-in, AIP-148/149)
+
+Soft-delete is **opt-in per resource**. A message becomes soft-deletable when it declares a
+server-managed `delete_time` timestamp:
+
+```protobuf
+google.protobuf.Timestamp delete_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+```
+
+The field name must be `delete_time`, the type `google.protobuf.Timestamp`, and it must be
+`OUTPUT_ONLY` (it is set by the framework, never written by the client). When present,
+`protoc-gen-storage` emits the full soft-delete shape:
+
+- a `DeletedAt` column (`gorm.DeletedAt`, indexed) on the model;
+- `Delete` performs a **soft** delete (stamps `deleted_at`) instead of a physical row delete;
+- `List` excludes soft-deleted rows unless `ListOptions.ShowDeleted` is set;
+- `Undelete` (AIP-149) clears `deleted_at` and restores the row.
+
+**Without a `delete_time` field a resource is hard-delete by default:** `Delete` physically removes
+the row, `List` has no deleted-row filter, and `Undelete` is a stub that always returns
+`persistence.ErrNotFound` (so the `Repository` interface stays uniform). Adding the `delete_time`
+field is the only switch — there is no separate annotation or option.
+
+A sibling marker, `google.protobuf.Timestamp expire_time = N [(google.api.field_behavior) = OUTPUT_ONLY]`,
+additionally emits a `PurgeExpired(ctx, before)` method that hard-deletes rows past their TTL.
 
 ### Secret fields
 

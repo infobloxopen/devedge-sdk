@@ -41,6 +41,10 @@ type APIKeyModel struct {
 }
 ```
 
+> The `DeletedAt` column is present only because `APIKey` **opts into soft-delete** by declaring a
+> `delete_time` (OUTPUT_ONLY) field; a resource without that field is hard-delete and has no
+> `DeletedAt` column. See *Soft-delete (opt-in)* in the codegen reference.
+
 The `toModel` / `fromModel` helpers **skip** secret fields, so the plaintext can never round-trip
 through the model. Encryption happens explicitly in `Create` and `Update`:
 
