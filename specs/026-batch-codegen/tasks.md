@@ -30,8 +30,8 @@ Gate: each phase's tests green before the next.
 - [X] T402 `[S]` Handler: `BatchUpdateWidgets` maps requests→BatchUpdateItem→repo.BatchUpdate. FR-031
 - [X] T403 `[S]` Integration tests: `TestBatchUpdateWidgets` happy + `_MissingId_IsAtomic`. AC-021/022
 
-## Phase 5 — Cross-backend conformance
-- [ ] T501 `[C]` Shared batch behavior suite run against Memory + GORM-sqlite + ent-sqlite. FR-040, AC-020
+## Phase 5 — Cross-backend conformance ✅ done
+- [X] T501 `[C]` `batch_conformance_test.go`: one table-driven suite runs the same matrix against Memory + GORM-sqlite + ent-sqlite (folds in the per-backend files). FR-040, AC-020
 
 ## Phase 6 — Docs + tracker
 - [ ] T601 `[S]` `persistence.md`: document all three batch methods; remove "codegen not implemented" warning; cover ent. FR-050
