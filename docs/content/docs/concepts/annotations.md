@@ -106,7 +106,7 @@ constraints and column overrides the codegen plugins translate into the generate
 | Field | Number | Generates (GORM / ent) |
 |---|---|---|
 | `not_null` | 2 | `NOT NULL` constraint on the column (GORM tag `not null`). |
-| `unique` | 3 | `UNIQUE` index (GORM tag `uniqueIndex`). |
+| `unique` | 3 | `UNIQUE` index. **Tenant-aware:** in a message with an `account_id` field it generates a *composite* unique index over `(account_id, <field>)`; otherwise a global one. |
 | `index` | 4 | non-unique index (GORM tag `index`). |
 | `column_name` | 5 | overrides the default snake_case column name (GORM tag `column:<name>`). |
 | `column_type` | 6 | overrides the DB column type, e.g. `varchar(255)` (GORM tag `type:<type>`). |
@@ -124,18 +124,31 @@ are applied by `db.AutoMigrate`; for production schemas drive DDL through
 [`infobloxopen/migrate`](../../reference/persistence/#migrations) rather than relying on
 AutoMigrate.
 
+{{< callout type="info" >}}
+**`unique` is per-tenant by default.** When the message has an `account_id` field (the multi-tenant
+case), `unique` does **not** generate a global index on the column alone — that would let one tenant
+deny another the use of a common name (e.g. `primary`) and leak that the name exists. Instead the
+field joins `account_id` in a composite unique index named `ux_<message>_account_<field>`, with
+`account_id` as the leading column. So the example `Widget.slug` above is unique *within each
+account*. A message with no `account_id` field keeps a plain global unique index.
+{{< /callout >}}
+
 ## `(infoblox.field.v1.opts)` — relationships
 
 `FieldOptions` also declares ORM relationships on a message-typed (or repeated message-typed)
 field. `protoc-gen-storage` emits the corresponding GORM association tag (and `protoc-gen-ent` the
 equivalent edge):
 
+The generated association is typed against the related message's **GORM model** —
+`*<Related>Model` (or `[]*<Related>Model`) — so `Preload`, FK constraints, and joins all work; the
+`foreign_key` you give in snake_case is emitted as the related model's Go field name.
+
 | Option | Number | Declare on | Generates (GORM) |
 |---|---|---|---|
-| `has_one` | 20 | a message field (1:1, FK on the *other* table) | `gorm:"foreignKey:<foreign_key>"` |
-| `has_many` | 21 | a repeated message field (1:N, FK on the *other* table) | `[]T gorm:"foreignKey:<foreign_key>"` |
-| `belongs_to` | 22 | a message field (the inverse — FK on *this* table) | `gorm:"foreignKey:<foreign_key>"` **plus** the FK column field |
-| `many_to_many` | 23 | a repeated message field (N:N via a join table) | `[]T gorm:"many2many:<join_table>"` |
+| `has_one` | 20 | a message field (1:1, FK on the *other* table) | `*<Related>Model gorm:"foreignKey:<Fk>"` |
+| `has_many` | 21 | a repeated message field (1:N, FK on the *other* table) | `[]*<Related>Model gorm:"foreignKey:<Fk>"` |
+| `belongs_to` | 22 | a message field (the inverse — FK on *this* table) | `*<Related>Model gorm:"foreignKey:<Fk>"` + the FK column field |
+| `many_to_many` | 23 | a repeated message field (N:N via a join table) | `[]*<Related>Model gorm:"many2many:<join_table>"` |
 
 ```proto
 import "infoblox/field/v1/field.proto";
@@ -150,11 +163,18 @@ message Order {
 }
 ```
 
+For `belongs_to`, the natural AIP shape is to expose the FK as a scalar field **and** annotate the
+association — exactly the `Order` above, which has both `user_id` and `belongs_to user`. The
+generated model carries the scalar FK column once (reused by the association) and a
+`*UserModel` association; it does not duplicate the FK. If you annotate `belongs_to` *without* a
+sibling scalar FK field, the generator emits the FK column for you.
+
 `has_one`/`has_many`/`belongs_to` accept `foreign_key` and `association_foreign_key`; `has_many`
 also accepts `position_field` for an ordered association; `many_to_many` takes `join_table`,
 `foreign_key`, and `association_foreign_key`. A scalar repeated field with no relationship option is
 skipped in the GORM model (it needs JSONB serialization), so reach for these options whenever a
-field references another resource.
+field references another resource. The related message must itself be a stored resource (it has an
+`id` field, so `<Related>Model` is generated).
 
 ## Extension numbers
 

@@ -294,7 +294,50 @@ func TestRenderStorageFile_uniqueField(t *testing.T) {
 		},
 	}
 	out := renderStorageFile("uniqv1storage", []messageInfo{msg})
+	// No tenant column → a plain global unique index is correct.
 	mustContain(t, out, "uniqueIndex")
+	mustNotContain(t, out, "priority:")
+}
+
+// Issue 014: in a tenant-scoped message, `unique` must produce a composite
+// unique index over (account_id, <field>), not a global one — otherwise one
+// tenant can deny another the use of a name and probe its existence.
+func TestRenderStorageFile_uniqueFieldIsPerTenant(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Destination",
+		PbPkgName:   "destv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "name", GoFieldName: "Name", GoType: "string", SnakeName: "name", Unique: true, NotNull: true},
+		},
+	}
+	out := renderStorageFile("destv1", []messageInfo{msg})
+	// The unique field and account_id share one composite index name, with
+	// account_id as the leading column.
+	mustContain(t, out, "uniqueIndex:ux_destination_account_name,priority:2")
+	mustContain(t, out, "uniqueIndex:ux_destination_account_name,priority:1")
+	// Never a bare/global unique index on the tenant-scoped field.
+	mustNotContain(t, out, "column:name;not null;uniqueIndex\"")
+}
+
+// Issue 017: generated Create/Update must translate driver constraint errors
+// to clean persistence sentinels (so a unique violation becomes AlreadyExists,
+// not a 500 leaking raw SQL).
+func TestRenderStorageFile_mapsConstraintErrors(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Destination",
+		PbPkgName:   "destv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoFieldName: "Name", GoType: "string", SnakeName: "name", Unique: true},
+		},
+	}
+	out := renderStorageFile("destv1", []messageInfo{msg})
+	// At least the Create and the field-mask + no-mask Update paths are guarded.
+	if n := strings.Count(out, "persistence.ConstraintError(err)"); n < 3 {
+		t.Errorf("expected ConstraintError check on Create + both Update paths (>=3), got %d", n)
+	}
 }
 
 func TestRenderStorageFile_hasOneMessageField(t *testing.T) {
@@ -303,15 +346,17 @@ func TestRenderStorageFile_hasOneMessageField(t *testing.T) {
 		PbPkgName:   "orderv1",
 		Fields: []fieldInfo{
 			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
-			{Name: "address", GoFieldName: "Address", GoType: "*Address", SnakeName: "address",
+			{Name: "address", GoFieldName: "Address", RelatedGoType: "Address", SnakeName: "address",
 				IsMessage: true, HasOne: &fieldv1.HasOne{ForeignKey: "order_id"}},
 		},
 	}
 	out := renderStorageFile("orderv1storage", []messageInfo{msg})
-	// Should emit a real struct field, not a TODO.
+	// Should emit a concrete pointer association to the related GORM model
+	// (issue 013: never interface{}), with a Go-name foreign key.
 	mustNotContain(t, out, "TODO: nested message address skipped")
-	mustContain(t, out, `Address Address`)
-	mustContain(t, out, `foreignKey:order_id`)
+	mustContain(t, out, `Address *AddressModel`)
+	mustContain(t, out, `foreignKey:OrderId`)
+	mustNotContain(t, out, "Address interface{}")
 }
 
 func TestRenderStorageFile_hasManyRepeatedField(t *testing.T) {
@@ -320,15 +365,58 @@ func TestRenderStorageFile_hasManyRepeatedField(t *testing.T) {
 		PbPkgName:   "postv1",
 		Fields: []fieldInfo{
 			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
-			{Name: "comments", GoFieldName: "Comments", GoType: "*Comment", SnakeName: "comments",
+			{Name: "comments", GoFieldName: "Comments", RelatedGoType: "Comment", SnakeName: "comments",
 				IsRepeated: true, HasMany: &fieldv1.HasMany{ForeignKey: "post_id"}},
 		},
 	}
 	out := renderStorageFile("postv1storage", []messageInfo{msg})
-	// Should emit a slice struct field, not a TODO.
+	// Should emit a slice of the concrete related model, not []interface{}.
 	mustNotContain(t, out, "TODO: repeated field comments skipped")
-	mustContain(t, out, `Comments []Comment`)
-	mustContain(t, out, `foreignKey:post_id`)
+	mustContain(t, out, `Comments []*CommentModel`)
+	mustContain(t, out, `foreignKey:PostId`)
+	mustNotContain(t, out, "Comments []interface{}")
+}
+
+// Issue 013: a belongs_to whose proto ALSO exposes the FK as a scalar field
+// (the docs' own Order shape) must not emit a duplicate FK field — that fails
+// to compile. The scalar field provides the column; the association reuses it.
+func TestRenderStorageFile_belongsToDedupesScalarFK(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Export",
+		PbPkgName:   "exportsv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "destination_id", GoFieldName: "DestinationId", GoType: "string", SnakeName: "destination_id"},
+			{Name: "destination", GoFieldName: "Destination", RelatedGoType: "Destination", SnakeName: "destination",
+				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "destination_id"}},
+		},
+	}
+	out := renderStorageFile("exportsv1", []messageInfo{msg})
+	// Concrete association, keyed by the existing scalar FK's Go field name.
+	mustContain(t, out, `Destination *DestinationModel`)
+	mustContain(t, out, `foreignKey:DestinationId`)
+	// The scalar FK column appears exactly once (no auto-emitted duplicate).
+	if n := strings.Count(out, "\tDestinationId "); n != 1 {
+		t.Errorf("expected exactly one DestinationId field, got %d\n--- output ---\n%s", n, out)
+	}
+	mustNotContain(t, out, "Destination interface{}")
+}
+
+// Issue 013: a belongs_to WITHOUT a sibling scalar FK still emits the FK column
+// (with a gorm column tag) so GORM can resolve the association.
+func TestRenderStorageFile_belongsToEmitsFKWhenNoScalar(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Export",
+		PbPkgName:   "exportsv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "destination", GoFieldName: "Destination", RelatedGoType: "Destination", SnakeName: "destination",
+				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "destination_id"}},
+		},
+	}
+	out := renderStorageFile("exportsv1", []messageInfo{msg})
+	mustContain(t, out, `Destination *DestinationModel`)
+	mustContain(t, out, "DestinationId string `gorm:\"column:destination_id\"`")
 }
 
 // F020: soft-delete tests (AC-001 through AC-007).

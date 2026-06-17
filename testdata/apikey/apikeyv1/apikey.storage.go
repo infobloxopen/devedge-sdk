@@ -196,6 +196,11 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 		m.KeyValueCipher = c
 	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+		// Map driver constraint violations to clean sentinels so callers see
+		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
+		if ce := persistence.ConstraintError(err); ce != nil {
+			return nil, ce
+		}
 		return nil, fmt.Errorf("create APIKey: %w", err)
 	}
 	return fromModel_APIKey(m), nil
@@ -233,6 +238,9 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
 		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
 			return nil, fmt.Errorf("update APIKey: %w", err)
 		}
 	} else {
@@ -249,6 +257,9 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 			updates["key_value_cipher"] = m.KeyValueCipher
 		}
 		if err := q.Updates(updates).Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
 			return nil, fmt.Errorf("update APIKey: %w", err)
 		}
 	}

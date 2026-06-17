@@ -158,6 +158,13 @@ type ErrorTrigger struct {
 var forbiddenSubstrings = []string{
 	"persistence:", "SELECT ", "INSERT ", "UPDATE ", "WHERE ", "ERROR:",
 	"/home/", "/Users/", "/app/", "goroutine ", ".go:",
+	// DB constraint leakage: a raw driver constraint error (e.g. SQLite's
+	// "UNIQUE constraint failed: foo_models.name", PostgreSQL's "duplicate key
+	// value violates unique constraint", a SQLSTATE code, or a generated
+	// "<resource>_models." table name) carries none of the SQL keywords above,
+	// so without these the gate would mark a schema-leaking error "clean".
+	"constraint failed", "duplicate key", "Duplicate entry",
+	"violates ", "SQLSTATE", "_models.",
 }
 
 // AssertErrorMessagesClean verifies that error responses do not leak internal details.

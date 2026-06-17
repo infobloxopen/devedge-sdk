@@ -165,6 +165,11 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget, error) {
 	m := toModel_Widget(entity)
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+		// Map driver constraint violations to clean sentinels so callers see
+		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
+		if ce := persistence.ConstraintError(err); ce != nil {
+			return nil, ce
+		}
 		return nil, fmt.Errorf("create Widget: %w", err)
 	}
 	return fromModel_Widget(m), nil
@@ -186,6 +191,9 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
 		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
 			return nil, fmt.Errorf("update Widget: %w", err)
 		}
 	} else {
@@ -199,6 +207,9 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 			"etag":         m.Etag,
 		}
 		if err := q.Updates(updates).Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
 			return nil, fmt.Errorf("update Widget: %w", err)
 		}
 	}

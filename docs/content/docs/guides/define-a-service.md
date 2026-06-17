@@ -102,10 +102,25 @@ The `buf.gen.yaml` above is the SDK's **in-repo** setup. In **your own** service
 need a `buf.yaml` that resolves the non-local imports — `google/api/annotations.proto` and the two
 `infoblox/...` annotation protos — none of which live in your repo by default:
 
-1. **Vendor the annotation protos.** They come from the canonical
-   [`infobloxopen/apis`](https://github.com/infobloxopen/apis) module. Copy them into a `proto/`
-   tree (or `buf export`), preserving import paths, in a directory **separate** from your own protos
-   (buf v2 module roots must not overlap):
+1. **Vendor the annotation protos.** The `infoblox/authz/v1/authz.proto` and
+   `infoblox/field/v1/field.proto` schemas are released via `apx` in the canonical
+   [`infobloxopen/apis`](https://github.com/infobloxopen/apis) module, but that module ships only
+   the **generated Go bindings** (which you pull in step 4) — it does not publish the `.proto`
+   source for `buf export`, and there is no public BSR module to export from. The SDK therefore
+   ships a byte-identical **mirror** of both files under its module at `proto/infoblox/`; vendor
+   from there. Because you copy from the SDK version your `go.mod` already pins, the protos stay in
+   lock-step with the bindings you compile against:
+
+   ```bash
+   # Pin the SDK, then copy its mirrored annotation protos out of the module cache.
+   go get github.com/infobloxopen/devedge-sdk@latest
+   SDK=$(go list -m -f '{{.Dir}}' github.com/infobloxopen/devedge-sdk)
+   mkdir -p proto/infoblox
+   cp -R "$SDK/proto/infoblox/." proto/infoblox/
+   ```
+
+   Keep the vendored imports in a directory **separate** from your own protos (buf v2 module roots
+   must not overlap):
 
    ```text
    your-service/
