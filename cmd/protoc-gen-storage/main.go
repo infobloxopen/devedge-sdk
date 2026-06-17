@@ -125,14 +125,22 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					continue // handled by renderer; not an ordinary column
 				}
 			}
+			// For message-kind fields (relationships), capture the related message's
+			// Go type name so the renderer can emit a concrete GORM association
+			// (*<Related>Model) instead of an unusable interface{}.
+			relatedGoType := ""
+			if field.Message != nil {
+				relatedGoType = string(field.Message.GoIdent.GoName)
+			}
 			msg.Fields = append(msg.Fields, fieldInfo{
-				Name:         string(field.Desc.Name()),
-				GoFieldName:  string(field.GoName),
-				SnakeName:    toSnake(string(field.Desc.Name())),
-				IsRepeated:   field.Desc.IsList(),
-				IsMessage:    field.Desc.Kind() == protoreflect.MessageKind,
-				IsID:         string(field.Desc.Name()) == "id",
-				GoType:       protoKindToGoType(field.Desc.Kind()),
+				Name:          string(field.Desc.Name()),
+				GoFieldName:   string(field.GoName),
+				SnakeName:     toSnake(string(field.Desc.Name())),
+				IsRepeated:    field.Desc.IsList(),
+				IsMessage:     field.Desc.Kind() == protoreflect.MessageKind,
+				IsID:          string(field.Desc.Name()) == "id",
+				GoType:        protoKindToGoType(field.Desc.Kind()),
+				RelatedGoType: relatedGoType,
 				IsSecret:     isSecret,
 				IsOutputOnly: isOutputOnly,
 				NotNull:      notNull,

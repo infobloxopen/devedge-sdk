@@ -129,6 +129,29 @@ func TestAssertErrorMessagesClean_LeaksSQLKeyword(t *testing.T) {
 	}
 }
 
+// Issue 017: a raw DB constraint violation carries none of the SQL keywords
+// (SELECT/INSERT/WHERE/…) but still leaks the table/column schema. The gate must
+// flag it.
+func TestAssertErrorMessagesClean_LeaksDBConstraint(t *testing.T) {
+	leaks := []string{
+		"UNIQUE constraint failed: destination_models.name",          // SQLite
+		`pq: duplicate key value violates unique constraint "ux_dst"`, // PostgreSQL
+		"create Destination: ERROR ... (SQLSTATE 23505)",              // pg via gorm
+	}
+	for _, msg := range leaks {
+		msg := msg
+		t.Run(msg, func(t *testing.T) {
+			findings := AssertErrorMessagesClean(context.Background(), []ErrorTrigger{{
+				Method: "/svc/Create",
+				Fn:     func(ctx context.Context) error { return status.Error(codes.Internal, msg) },
+			}})
+			if len(findings) == 0 || findings[0].Severity != Error {
+				t.Errorf("expected an Error finding for leaking message %q, got %+v", msg, findings)
+			}
+		})
+	}
+}
+
 func TestAssertErrorMessagesClean_UnexpectedSuccess(t *testing.T) {
 	triggers := []ErrorTrigger{
 		{

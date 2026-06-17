@@ -67,7 +67,11 @@ type fieldInfo struct {
 	Name         string
 	GoFieldName  string // Go struct field name (e.g. "PageSize" for proto "page_size")
 	GoType       string
-	SnakeName    string
+	// RelatedGoType is the Go type name of the message a relationship field points
+	// at (e.g. "Destination" for a belongs_to Destination). The generated GORM
+	// association references the related model type "<RelatedGoType>Model".
+	RelatedGoType string
+	SnakeName     string
 	IsID         bool // this field is the resource primary key
 	IsRepeated   bool // repeated field — skipped in GORM model with a TODO
 	IsMessage    bool // nested message field — skipped with a TODO
@@ -190,6 +194,22 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 
 func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	hasTenant := msgHasTenantField(msg)
+	// Set of Go field names backed by a proto-declared scalar column. Used to
+	// avoid emitting a duplicate belongs_to FK field when the proto already
+	// exposes the FK as a scalar (the natural AIP shape).
+	scalarGoNames := map[string]bool{}
+	for _, f := range msg.Fields {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+			continue
+		}
+		scalarGoNames[goFieldName(f)] = true
+	}
+	// uniqueIndexName returns the composite unique-index name for a tenant-scoped
+	// unique field, so the index spans (account_id, <col>) rather than <col>
+	// alone — preserving per-tenant uniqueness in a multi-tenant framework.
+	uniqueIndexName := func(col string) string {
+		return "ux_" + strings.ToLower(msg.MessageName) + "_account_" + col
+	}
 	// GORM model struct.
 	fmt.Fprintf(b, "// %sModel is the GORM model for %s.\n", msg.MessageName, msg.MessageName)
 	fmt.Fprintf(b, "type %sModel struct {\n", msg.MessageName)
@@ -204,16 +224,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		}
 		if f.IsRepeated {
 			if f.HasMany != nil {
-				// Emit a has_many slice association.
-				assocType := strings.TrimPrefix(f.GoType, "*")
+				// has_many: a slice of the related GORM model. GORM resolves the
+				// association from the concrete element type; foreignKey names the
+				// Go field on the related model that holds this resource's key.
 				gfn := goFieldName(f)
-				fmt.Fprintf(b, "\t%s []%s `gorm:\"foreignKey:%s\"`\n", gfn, assocType, f.HasMany.GetForeignKey())
+				fmt.Fprintf(b, "\t%s []*%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasMany.GetForeignKey()))
 				continue
 			}
 			if f.ManyToMany != nil {
-				assocType := strings.TrimPrefix(f.GoType, "*")
 				gfn := goFieldName(f)
-				fmt.Fprintf(b, "\t%s []%s `gorm:\"many2many:%s\"`\n", gfn, assocType, f.ManyToMany.GetJoinTable())
+				fmt.Fprintf(b, "\t%s []*%s `gorm:\"many2many:%s\"`\n", gfn, assocModelType(f), f.ManyToMany.GetJoinTable())
 				continue
 			}
 			fmt.Fprintf(b, "\t// TODO: repeated field %s skipped — JSONB serialization needed (W5-6)\n", f.Name)
@@ -221,20 +241,24 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		}
 		if f.IsMessage {
 			if f.HasOne != nil {
-				assocType := strings.TrimPrefix(f.GoType, "*")
 				gfn := goFieldName(f)
-				fmt.Fprintf(b, "\t%s %s `gorm:\"foreignKey:%s\"`\n", gfn, assocType, f.HasOne.GetForeignKey())
+				fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasOne.GetForeignKey()))
 				continue
 			}
 			if f.BelongsTo != nil {
-				assocType := strings.TrimPrefix(f.GoType, "*")
+				// belongs_to: the FK lives on THIS table. Emit a concrete pointer
+				// association keyed by the FK's Go field name.
 				gfn := goFieldName(f)
 				fk := f.BelongsTo.GetForeignKey()
-				fmt.Fprintf(b, "\t%s %s `gorm:\"foreignKey:%s\"`\n", gfn, assocType, fk)
-				// Also emit the FK column field.
+				fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(fk))
+				// Emit the FK column field only when the proto does not already
+				// expose it as a scalar field — otherwise the field is duplicated
+				// and the generated package fails to compile.
 				if fk != "" {
 					fkGoName := snakeToCamel(fk)
-					fmt.Fprintf(b, "\t%s string\n", fkGoName)
+					if !scalarGoNames[fkGoName] {
+						fmt.Fprintf(b, "\t%s string `gorm:\"column:%s\"`\n", fkGoName, fk)
+					}
 				}
 				continue
 			}
@@ -261,9 +285,31 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 				tagParts = append(tagParts, "not null")
 			}
 			if f.Unique {
-				tagParts = append(tagParts, "uniqueIndex")
+				if hasTenant {
+					// Tenant-scoped: the unique constraint must be per-account, so
+					// the field joins account_id in a composite unique index
+					// (priority 2 — account_id is the leading column, priority 1).
+					tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(col)+",priority:2")
+				} else {
+					// No tenant column: a plain global unique index is correct.
+					tagParts = append(tagParts, "uniqueIndex")
+				}
 			} else if f.Index {
 				tagParts = append(tagParts, "index")
+			}
+			// account_id is the leading column of every per-tenant composite unique
+			// index, so a name unique within one tenant can be reused by another.
+			if hasTenant && (f.Name == "account_id" || f.SnakeName == "account_id") {
+				for _, uf := range msg.Fields {
+					if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique {
+						continue
+					}
+					ucol := uf.SnakeName
+					if uf.ColumnName != "" {
+						ucol = uf.ColumnName
+					}
+					tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(ucol)+",priority:1")
+				}
 			}
 			tag := strings.Join(tagParts, ";")
 			fmt.Fprintf(b, "\t%s %s `gorm:\"%s\"`\n", gfn, f.GoType, tag)
@@ -484,6 +530,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		}
 	}
 	b.WriteString("\tif err := r.db.WithContext(ctx).Create(m).Error; err != nil {\n")
+	b.WriteString("\t\t// Map driver constraint violations to clean sentinels so callers see\n")
+	b.WriteString("\t\t// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.\n")
+	b.WriteString("\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\treturn nil, ce\n\t\t}\n")
 	fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"create %s: %%w\", err)\n", msg.MessageName)
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn fromModel_%s(m), nil\n}\n\n", msg.MessageName)
@@ -535,6 +584,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "\t\t// Select makes GORM write the named columns even when their value is\n")
 	fmt.Fprintf(b, "\t\t// the zero value (false, 0, \"\"); a bare struct Updates would skip them.\n")
 	fmt.Fprintf(b, "\t\tif err := q.Select(dbCols).Updates(m).Error; err != nil {\n")
+	b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
 	fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\t}\n")
 	if len(regularFields) > 0 {
@@ -566,6 +616,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			}
 		}
 		fmt.Fprintf(b, "\t\tif err := q.Updates(updates).Error; err != nil {\n")
+		b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
 		fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
 		fmt.Fprintf(b, "\t\t}\n")
 		fmt.Fprintf(b, "\t}\n")
@@ -574,6 +625,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		// sufficient — there are no zero-valued scalar columns to lose.
 		fmt.Fprintf(b, "\t} else {\n")
 		fmt.Fprintf(b, "\t\tif err := q.Updates(m).Error; err != nil {\n")
+		b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
 		fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
 		fmt.Fprintf(b, "\t\t}\n")
 		fmt.Fprintf(b, "\t}\n")
@@ -679,6 +731,18 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	// Compile-time interface check.
 	fmt.Fprintf(b, "// compile-time check.\n")
 	fmt.Fprintf(b, "var _ persistence.Repository[%s, string] = (*%sRepository)(nil)\n\n", pbType, msg.MessageName)
+}
+
+// assocModelType returns the GORM model type name a relationship field points at
+// (e.g. "DestinationModel"). It uses the related message's Go type captured by
+// the plugin; the unit-test path may set GoType directly, so it falls back to
+// stripping list/pointer markers off GoType.
+func assocModelType(f fieldInfo) string {
+	t := f.RelatedGoType
+	if t == "" {
+		t = strings.TrimPrefix(strings.TrimPrefix(f.GoType, "[]"), "*")
+	}
+	return t + "Model"
 }
 
 // snakeToCamel converts a snake_case string to CamelCase (e.g. "user_id" → "UserId").
