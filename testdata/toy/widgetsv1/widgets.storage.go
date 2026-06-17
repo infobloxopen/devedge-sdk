@@ -240,5 +240,77 @@ func (r *WidgetRepository) Undelete(ctx context.Context, key string) (*Widget, e
 	return r.Get(ctx, key)
 }
 
+func (r *WidgetRepository) BatchGet(ctx context.Context, keys []string) ([]*Widget, error) {
+	if len(keys) == 0 {
+		return []*Widget{}, nil
+	}
+	var models []WidgetModel
+	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	if err := q.Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("batch get Widget: %w", err)
+	}
+	byID := make(map[string]*Widget, len(models))
+	for i := range models {
+		byID[models[i].ID] = fromModel_Widget(&models[i])
+	}
+	out := make([]*Widget, 0, len(keys))
+	for _, k := range keys {
+		p, ok := byID[k]
+		if !ok {
+			return nil, persistence.ErrNotFound
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *WidgetRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*Widget, string]) ([]*Widget, error) {
+	if len(items) == 0 {
+		return []*Widget{}, nil
+	}
+	out := make([]*Widget, 0, len(items))
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		txRepo := &WidgetRepository{db: tx}
+		for _, it := range items {
+			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
+			if err != nil {
+				return err
+			}
+			out = append(out, updated)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *WidgetRepository) BatchDelete(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	uniq := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+		res := q.Delete(&WidgetModel{})
+		if res.Error != nil {
+			return fmt.Errorf("batch delete Widget: %w", res.Error)
+		}
+		if res.RowsAffected != int64(len(uniq)) {
+			return persistence.ErrNotFound
+		}
+		return nil
+	})
+}
+
 // compile-time check.
-var _ persistence.Repository[*Widget, string] = (*WidgetRepository)(nil)
+var _ persistence.BatchRepository[*Widget, string] = (*WidgetRepository)(nil)

@@ -9,13 +9,13 @@ Gate: each phase's tests green before the next.
 - [X] T103 `[S]` Tests: `BatchUpdate` Success / EmptyItems / MissingKey / SoftDeletedKey (`persistence/memory_test.go`). AC-001..004
 - [X] T104 `[S]` `go test ./persistence/...` green.
 
-## Phase 2 — GORM codegen (`protoc-gen-storage`)
-- [ ] T201 `[C]` Emit `BatchGet` (dedup + `IN` + reorder + count check, tenant-scoped). FR-010
-- [ ] T202 `[C]` Emit `BatchDelete` (`db.Transaction` + bulk `IN` delete + RowsAffected check, tenant-scoped). FR-010/011
-- [ ] T203 `[C]` Emit `BatchUpdate` (`db.Transaction` reusing single `Update` per item). FR-010/011
-- [ ] T204 `[C]` Flip compile-check to `persistence.BatchRepository`; update generator render tests.
-- [ ] T205 `[S]` Regenerate toy + apikey storage; `go build` + `go test ./cmd/protoc-gen-storage/...`.
-- [ ] T206 `[C]` GORM-sqlite tests: atomicity, soft-delete, tenant scoping. AC-010/012/013
+## Phase 2 — GORM codegen (`protoc-gen-storage`) ✅ done
+- [X] T201 `[C]` Emit `BatchGet` (`IN` + reorder by key + missing/soft-deleted → NotFound, tenant-scoped). FR-010
+- [X] T202 `[C]` Emit `BatchDelete` (`db.Transaction` + dedup + bulk `IN` delete + RowsAffected check, tenant-scoped). FR-010/011
+- [X] T203 `[C]` Emit `BatchUpdate` (`db.Transaction` reusing single `Update` per item). FR-010/011
+- [X] T204 `[C]` Flip compile-check to `persistence.BatchRepository`; update generator render tests.
+- [X] T205 `[S]` Regenerated toy + apikey storage; `go build` + `go test ./cmd/protoc-gen-storage/` green.
+- [X] T206 `[C]` GORM-sqlite tests (`batch_sqlite_test.go`): happy path, atomic-missing, soft-delete, tenant scoping. AC-010/012/013/014/015
 
 ## Phase 3 — ent codegen (`protoc-gen-ent`, wrapper)
 - [ ] T301 `[C]` Emit `<Resource>EntRepository` wrapper file (embeds adapter; resource/field metadata).

@@ -46,7 +46,12 @@ func TestRenderStorageFile_basic(t *testing.T) {
 	mustContain(t, out, "func (r *WidgetRepository) Create(")
 	mustContain(t, out, "func (r *WidgetRepository) Update(")
 	mustContain(t, out, "func (r *WidgetRepository) Delete(")
-	mustContain(t, out, "var _ persistence.Repository")
+	// F026: batch methods (AIP-137) generated; repo satisfies BatchRepository.
+	mustContain(t, out, "func (r *WidgetRepository) BatchGet(ctx context.Context, keys []string) ([]*widgetsv1.Widget, error)")
+	mustContain(t, out, "func (r *WidgetRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*widgetsv1.Widget, string])")
+	mustContain(t, out, "func (r *WidgetRepository) BatchDelete(ctx context.Context, keys []string) error")
+	mustContain(t, out, "r.db.Transaction(func(tx *gorm.DB) error")
+	mustContain(t, out, "var _ persistence.BatchRepository")
 	mustContain(t, out, "protoc-gen-storage")
 	// F017: safe filter/order_by — column map and safe parse calls must be present.
 	mustContain(t, out, "WidgetColumns")
