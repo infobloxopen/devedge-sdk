@@ -94,6 +94,13 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 			u := client.APIKey.UpdateOneID(key).
 				SetName(entity.Name).
 				SetKeyPrefix(entity.KeyPrefix)
+			// Tenant guard: ent query interceptors do NOT run for mutations, so the
+			// account_id predicate must be applied explicitly or a caller could
+			// update another tenant's row by ID. Empty tenant = unscoped (matches
+			// the TenantMixin query convention).
+			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+				u = u.Where(entapikey.AccountID(tenantID))
+			}
 			updated, err := u.Save(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
@@ -105,12 +112,14 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 		},
 		// AIP-148 soft delete: stamp delete_time instead of hard-deleting.
 		Delete_: func(ctx context.Context, key string) error {
-			tenantID := middleware.TenantIDFromContext(ctx)
 			q := client.APIKey.UpdateOneID(key)
-			// Tenant guard: UpdateOneID respects interceptors which scope by account_id.
-			_ = tenantID
-			now := time.Now()
-			err := q.SetDeleteTime(now).Exec(ctx)
+			// Tenant guard: ent query interceptors do NOT run for mutations, so the
+			// account_id predicate must be applied explicitly or a caller could
+			// soft-delete another tenant's row by ID.
+			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+				q = q.Where(entapikey.AccountID(tenantID))
+			}
+			err := q.SetDeleteTime(time.Now()).Exec(ctx)
 			if ent.IsNotFound(err) {
 				return persistence.ErrNotFound
 			}
