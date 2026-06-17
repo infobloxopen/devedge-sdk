@@ -17,13 +17,13 @@ Gate: each phase's tests green before the next.
 - [X] T205 `[S]` Regenerated toy + apikey storage; `go build` + `go test ./cmd/protoc-gen-storage/` green.
 - [X] T206 `[C]` GORM-sqlite tests (`batch_sqlite_test.go`): happy path, atomic-missing, soft-delete, tenant scoping. AC-010/012/013/014/015
 
-## Phase 3 — ent codegen (`protoc-gen-ent`, wrapper)
-- [ ] T301 `[C]` Emit `<Resource>EntRepository` wrapper file (embeds adapter; resource/field metadata).
-- [ ] T302 `[C]` `BatchGet`/`BatchDelete` via `client.Tx` + explicit tenant + soft-delete predicates. FR-020, FM-004
-- [ ] T303 `[C]` `BatchUpdate` per-field mask setters + secret re-encryption inside Tx. FR-020, FM-006
-- [ ] T304 `[C]` Compile-check `persistence.BatchRepository`; update render tests.
-- [ ] T305 `[S]` Regenerate apikey ent wrapper; `go build` + `go test ./cmd/protoc-gen-ent/...`.
-- [ ] T306 `[C]` ent-sqlite tests: tenant isolation, soft-delete, atomicity. AC-011/014/015
+## Phase 3 — ent codegen (`protoc-gen-ent`, wrapper) ✅ done
+- [X] T301 `[C]` Emit `<Resource>EntRepository` wrapper file (embeds hand-written adapter; OUTPUT_ONLY propagated to field metadata).
+- [X] T302 `[C]` `BatchGet` rides query interceptors; `BatchDelete` via `client.Tx` + explicit tenant + soft-delete predicates. FR-020, FM-004
+- [X] T303 `[C]` `BatchUpdate` per-field mask setters (output-only excluded) + secret re-encryption inside Tx. FR-020, FM-006
+- [X] T304 `[C]` Compile-check `persistence.BatchRepository`; `TestRenderEntRepository` added.
+- [X] T305 `[S]` Regenerated apikey ent wrapper; `go build` + `go test ./cmd/protoc-gen-ent/` green.
+- [X] T306 `[C]` ent-sqlite tests (`batch_ent_sqlite_test.go`): happy path, atomic-missing, soft-delete, tenant isolation. AC-011/014/015/020
 
 ## Phase 4 — Toy fixture (BatchUpdate end-to-end)
 - [ ] T401 `[S]` Proto: add `BatchUpdateWidgets` (+messages), keep BatchGet/Delete; regenerate pb/gw/svc. FR-030

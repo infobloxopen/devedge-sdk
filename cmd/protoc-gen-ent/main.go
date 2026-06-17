@@ -97,7 +97,6 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					continue // emitted as a direct Time field in renderEntSchema
 				}
 			}
-			_ = isOutputOnly // consumed above; not propagated to entFieldInfo
 			msg.Fields = append(msg.Fields, entFieldInfo{
 				Name:       string(field.Desc.Name()),
 				SnakeName:  toSnake(string(field.Desc.Name())),
@@ -106,6 +105,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				IsRepeated: field.Desc.IsList(),
 				IsMessage:  field.Desc.Kind() == protoreflect.MessageKind,
 				IsSecret:   isSecret,
+				OutputOnly: isOutputOnly,
 				NotNull:    notNull,
 				Unique:     unique,
 				Index:      index,
@@ -136,6 +136,20 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	// ent/generate.go drives entc once for the whole schema package.
 	gg := gen.NewGeneratedFile("ent/generate.go", f.GoImportPath)
 	gg.P(renderGenerateFile())
+
+	// F026: per-resource batch repository wrapper, emitted into the proto's Go
+	// package (alongside the hand-written ent wiring it embeds). Gives the
+	// ent-backed repository atomic AIP-137 BatchGet/BatchUpdate/BatchDelete.
+	pkgName := string(f.GoPackageName)
+	for _, msg := range messages {
+		content := renderEntRepository(msg, pkgName, string(f.GoImportPath))
+		if content == "" {
+			continue
+		}
+		outPath := pkgName + "/" + toSnake(msg.MessageName) + ".batch.ent.go"
+		bg := gen.NewGeneratedFile(outPath, f.GoImportPath)
+		bg.P(content)
+	}
 }
 
 // protoKindToEntType maps a proto field kind to the ent field constructor name
