@@ -33,9 +33,9 @@ Gate: each phase's tests green before the next.
 ## Phase 5 — Cross-backend conformance ✅ done
 - [X] T501 `[C]` `batch_conformance_test.go`: one table-driven suite runs the same matrix against Memory + GORM-sqlite + ent-sqlite (folds in the per-backend files). FR-040, AC-020
 
-## Phase 6 — Docs + tracker
-- [ ] T601 `[S]` `persistence.md`: document all three batch methods; remove "codegen not implemented" warning; cover ent. FR-050
-- [ ] T602 `[S]` Update hub `specs/aip-gap-tracker.md` AIP-137 row + add F026 backlog entry.
+## Phase 6 — Docs + tracker ✅ done
+- [X] T601 `[S]` `persistence.md`: documented all three batch methods + `BatchUpdateItem`; replaced the warning with "both generators emit batch" (covers ent + the per-item mask note). FR-050
+- [X] T602 `[S]` Updated hub `specs/aip-gap-tracker.md` AIP-137 row + added F026 backlog entry.
 
-## Phase 7 — Verification gate
-- [ ] T701 `[C]` `/verify-change`: full build + lint + tests; scope diff vs acceptance criteria.
+## Phase 7 — Verification gate ✅ done
+- [X] T701 `[C]` Full build + `go vet` + tests green across SDK + toy + apikey modules; toy security suite green; scope diff vs acceptance criteria clean (no gold-plating — `OutputOnly` propagation traces to FR-020).

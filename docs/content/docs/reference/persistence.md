@@ -118,20 +118,40 @@ opts into the relevant feature:
 ```go
 type BatchRepository[T any, K comparable] interface {
     Repository[T, K]
-    BatchGet(ctx context.Context, keys []K) ([]T, error)   // AIP-137, atomic
-    BatchDelete(ctx context.Context, keys []K) error        // AIP-137, atomic
+    BatchGet(ctx context.Context, keys []K) ([]T, error)                        // AIP-137, atomic
+    BatchUpdate(ctx context.Context, items []BatchUpdateItem[T, K]) ([]T, error) // AIP-137, atomic
+    BatchDelete(ctx context.Context, keys []K) error                            // AIP-137, atomic
+}
+
+// BatchUpdateItem carries one update: target key, new entity, optional field
+// mask (empty = full update, matching Update).
+type BatchUpdateItem[T any, K comparable] struct {
+    Key       K
+    Entity    T
+    FieldMask []string
 }
 ```
 
-The AIP-137 extension for multi-resource operations. Both methods are atomic: if any key is invalid
-the whole call fails without modifying any resource. **`MemoryRepository` implements it.**
+The AIP-137 extension for multi-resource operations. All three methods are atomic: if any key is
+invalid (missing or soft-deleted) the whole call fails without modifying any resource. Results are
+returned in the same order as the input. `MemoryRepository` implements it, and **both code
+generators emit all three methods**, so generated SQL repositories satisfy `BatchRepository[T,K]`
+out of the box:
 
-{{< callout type="warning" >}}
-`protoc-gen-storage` does **not** yet generate `BatchGet`/`BatchDelete` from proto — declaring
-`BatchGet*`/`BatchDelete*` RPCs produces only the standard CRUDL repository, so the generated GORM
-repo satisfies `Repository[T,K]` but not `BatchRepository[T,K]`. To offer batch operations on a
-GORM-backed service today, implement the two methods by hand on top of the generated repository (or
-use `MemoryRepository`). Codegen support for batch methods is not implemented.
+- **`protoc-gen-storage` (GORM)** generates `BatchGet`/`BatchUpdate`/`BatchDelete` on every
+  repository. `BatchUpdate`/`BatchDelete` run in a `db.Transaction`; `BatchUpdate` reuses the
+  single `Update` per item (field mask + tenant scope inherited).
+- **`protoc-gen-ent` (ent)** generates a per-resource `<Resource>EntRepository` wrapper
+  (`New<Resource>EntBatchRepository`) that embeds the hand-written adapter and adds the three batch
+  methods over an ent transaction. Reads ride the tenant/soft-delete query interceptors;
+  mutations carry **explicit** `account_id` + `delete_time IS NULL` predicates, because ent
+  interceptors do not cover mutations.
+
+{{< callout type="info" >}}
+`BatchUpdate` carries a field mask **per item** (`requests[].update_mask` in AIP-137 wire form),
+not at the top level, so the `FieldMaskUnary` interceptor correctly steps aside for batch methods.
+Batch updates do not apply per-item ETag/`If-Match` preconditions. `BatchCreate` is not yet
+generated.
 {{< /callout >}}
 
 ## Errors

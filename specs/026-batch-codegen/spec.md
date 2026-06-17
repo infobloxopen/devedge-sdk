@@ -1,7 +1,7 @@
 # F026 — Batch Method Codegen (GORM + ent) + BatchUpdate
 
 **AIPs**: AIP-137 (batch methods), AIP-134 (field-mask update)
-**Status**: in-progress
+**Status**: done
 **Branch**: `026-batch-codegen`
 **Extends**: F022 (which added `BatchRepository` + `MemoryRepository.BatchGet/BatchDelete` only)
 
