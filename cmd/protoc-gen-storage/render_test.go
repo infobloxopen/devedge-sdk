@@ -498,6 +498,11 @@ func TestRenderStorageFile_expireTime(t *testing.T) {
 
 	// database/sql import present.
 	mustContain(t, out, `"database/sql"`)
+
+	// #27: toModel carries expire_time so a Create handler that stamps the
+	// OUTPUT_ONLY TTL actually persists it (otherwise PurgeExpired reaps nothing).
+	mustContain(t, out, "if p.ExpireTime != nil {")
+	mustContain(t, out, "m.ExpireTime = sql.NullTime{Time: p.ExpireTime.AsTime(), Valid: true}")
 }
 
 func TestRenderStorageFile_softDeleteWithTenant(t *testing.T) {
