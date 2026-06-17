@@ -47,7 +47,8 @@ The generated constructors differ only by whether the message has secret fields 
 func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor) *APIKeyRepository
 // (without secret fields it would be: func NewWidgetRepository(db *gorm.DB) *WidgetRepository)
 
-// ent — protoc-gen-ent generates the schema; the SDK wiring exposes:
+// ent — protoc-gen-ent generates the schema; you wire it to the seam with a thin
+// entrepo.EntRepository adapter (see the apikey example + the codegen reference):
 func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*APIKey, string]
 ```
 
