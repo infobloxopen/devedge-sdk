@@ -233,6 +233,9 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 			if !ok {
 				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
 			}
+			if col == "account_id" {
+				return nil, status.Errorf(codes.InvalidArgument, "account_id is the tenant key and cannot be updated")
+			}
 			dbCols = append(dbCols, col)
 		}
 		// Select makes GORM write the named columns even when their value is
@@ -248,7 +251,6 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		// zero values (false, 0, "") persist — a struct Updates skips zero fields
 		// and would silently drop "disable this" / "clear that" updates.
 		updates := map[string]interface{}{
-			"account_id": m.AccountId,
 			"key_prefix": m.KeyPrefix,
 			"label":      m.Label,
 		}

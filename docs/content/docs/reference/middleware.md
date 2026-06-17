@@ -160,6 +160,21 @@ func (s *server) CreateWidget(ctx context.Context, req *pb.CreateWidgetRequest) 
 }
 ```
 
+**Over the gateway** the delivery of `validate_only` depends on the method's `google.api.http`
+`body` mapping. With the AIP-standard `body: "<resource>"` mapping (e.g. `{post: "/v1/widgets",
+body: "widget"}`) the JSON body binds **only** to the resource field, so a top-level `validate_only`
+**in the body is silently ignored** and the resource is **persisted** — a "dry run" becomes a real
+write. Pass it as a **query parameter** instead:
+
+```bash
+# body:"widget": validate_only must be a query param; a body field is ignored.
+curl -X POST 'localhost:8080/v1/widgets?validate_only=true' -d '{"name":"dry-run"}'
+```
+
+To accept `validate_only` in the JSON body, map the method with `body: "*"` (then every top-level
+request field binds from the body). Over direct gRPC the request-message field works as-is. The same
+rule applies to `request_id` below and any other top-level control field.
+
 ## DeduplicateUnary — idempotent retries (AIP-155)
 
 ```go
@@ -176,6 +191,11 @@ first successful call for a given `request_id` is cached; a retry with the same 
 the cached response without re-running the handler. Requests with an empty `request_id`, or with
 `validate_only=true`, bypass the cache; **handler errors are not cached** (so a failed call can be
 retried). Override the store with `Config.DeduplicationStore`.
+
+**Over the gateway**, `request_id` is a top-level field like `validate_only`, so with a
+`body: "<resource>"` mapping it must be sent as a query parameter (`?request_id=<uuid>`), not in the
+JSON body; with `body: "*"` it binds from the body. Custom methods (below) typically use `body: "*"`
+and therefore accept `request_id` in the body directly.
 
 ## Custom methods
 

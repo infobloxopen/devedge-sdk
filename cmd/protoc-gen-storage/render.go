@@ -565,9 +565,17 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
 	}
 	// Collect the regular (scalar, persisted) columns that a full update writes.
+	// The tenant scoping key (account_id) is deliberately excluded: it is assigned at
+	// create and is only ever a WHERE predicate, never a writable column. Were it in the
+	// no-mask column map, an update that omits it (the common case — it is sourced from
+	// the request context, not the entity) would write account_id="" and orphan the row
+	// from its tenant, after which the method's own tenant-scoped Get returns NotFound.
 	var regularFields []fieldInfo
 	for _, f := range msg.Fields {
 		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+			continue
+		}
+		if hasTenant && (f.Name == "account_id" || f.SnakeName == "account_id") {
 			continue
 		}
 		regularFields = append(regularFields, f)
@@ -579,6 +587,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "\t\t\tif !ok {\n")
 	fmt.Fprintf(b, "\t\t\t\treturn nil, status.Errorf(codes.InvalidArgument, \"unknown field in update_mask: %%q\", f)\n")
 	fmt.Fprintf(b, "\t\t\t}\n")
+	if hasTenant {
+		// The tenant scoping key is never writable, even when explicitly named in the
+		// field mask — it must stay a WHERE predicate, never a SET column.
+		fmt.Fprintf(b, "\t\t\tif col == \"account_id\" {\n")
+		fmt.Fprintf(b, "\t\t\t\treturn nil, status.Errorf(codes.InvalidArgument, \"account_id is the tenant key and cannot be updated\")\n")
+		fmt.Fprintf(b, "\t\t\t}\n")
+	}
 	fmt.Fprintf(b, "\t\t\tdbCols = append(dbCols, col)\n")
 	fmt.Fprintf(b, "\t\t}\n")
 	fmt.Fprintf(b, "\t\t// Select makes GORM write the named columns even when their value is\n")

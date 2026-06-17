@@ -574,6 +574,36 @@ func TestRenderStorageFile_updateZeroValuesPreservesSecret(t *testing.T) {
 	mustNotContain(t, out, `"token": m.Token,`)
 }
 
+// Regression for issue #24: the tenant scoping key (account_id) must never be a
+// writable column on Update. In the no-field-mask branch it must be absent from the
+// updates map (otherwise an update that omits it writes account_id="" and orphans the
+// row from its tenant); in the field-mask branch it must be rejected even when named
+// explicitly. It must still appear as a WHERE predicate so tenant scoping is intact.
+func TestRenderStorageFile_updateNeverWritesTenantKey(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Campaign",
+		PbPkgName:   "campaignv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "subject", GoFieldName: "Subject", GoType: "string", SnakeName: "subject"},
+		},
+	}
+	out := renderStorageFile("campaignv1storage", []messageInfo{msg})
+
+	// No-field-mask map writes the regular column but NOT the tenant key.
+	mustContain(t, out, "updates := map[string]interface{}{")
+	mustContain(t, out, `"subject": m.Subject,`)
+	mustNotContain(t, out, `"account_id": m.AccountId,`)
+
+	// Field-mask branch rejects account_id even if explicitly named.
+	mustContain(t, out, `if col == "account_id" {`)
+	mustContain(t, out, "account_id is the tenant key and cannot be updated")
+
+	// Tenant scoping is still enforced as a WHERE predicate.
+	mustContain(t, out, `"account_id = ?"`)
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {

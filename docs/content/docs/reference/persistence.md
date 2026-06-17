@@ -31,7 +31,11 @@ The neutral seam. Its method set matches the API verb vocabulary (get/list/creat
 plus AIP-149 `Undelete`), so service code can depend on it and swap the underlying shape (GORM,
 ent, sqlc, hand-written) without changes. The generated GORM and ent repositories both satisfy it
 for their resource type (`Repository[*APIKey, string]`). A resource that does not opt into
-soft-delete still gets an `Undelete` that returns `ErrNotFound`, so the seam stays uniform.
+soft-delete still gets an `Undelete` that returns `ErrNotFound`, so the seam stays uniform. A
+resource **opts into** soft-delete by declaring a server-managed `delete_time` timestamp
+(`google.protobuf.Timestamp delete_time = N [(google.api.field_behavior) = OUTPUT_ONLY]`); without
+that field `Delete` is a hard delete, `ShowDeleted` is inert, and `Undelete` is the `ErrNotFound`
+stub. See *Soft-delete (opt-in)* in the codegen reference for the full generated shape.
 
 ### Update and the field mask
 
@@ -44,6 +48,10 @@ soft-delete still gets an `Undelete` that returns `ErrNotFound`, so the seam sta
   "disable this" (`active=false`) or "clear that" (`label=""`) update is persisted rather than
   silently dropped. Secret columns are only rewritten when the entity carries a new secret value,
   so a non-secret update never wipes the stored secret.
+- **The tenant key (`account_id`) is never writable.** It is assigned at create and sourced from the
+  request context, so it is omitted from the no-mask column map and rejected with
+  `codes.InvalidArgument` if named in the field mask. This prevents an update that omits `account_id`
+  from blanking the scoping key and orphaning the row from its tenant.
 
 ## ListOptions
 
