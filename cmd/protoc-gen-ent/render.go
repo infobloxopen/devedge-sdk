@@ -220,7 +220,13 @@ func renderEntSchema(msg entMessageInfo) string {
 				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type),\n", ename, strings.Title(typeName))
 			case f.BelongsTo != nil:
 				typeName := entTypeName(f.SnakeName)
-				fmt.Fprintf(&b, "\t\tedge.From(\"%s\", %s.Type).Ref(\"%s\").Unique(),\n", ename, strings.Title(typeName), ename+"s")
+				// A self-contained forward edge: belongs_to means "this resource has
+				// one parent", with the FK on this side. An inverse edge.From(...).Ref(...)
+				// would require a matching edge.To on the parent type — but the parent is
+				// generated from a separate message and no back-edge is emitted there, so
+				// ent codegen aborts ("edge <x> is missing for inverse edge"). A unique
+				// edge.To needs no counterpart and compiles standalone.
+				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Unique(),\n", ename, strings.Title(typeName))
 			case f.ManyToMany != nil:
 				typeName := entTypeName(f.SnakeName)
 				joinType := strings.Title(f.ManyToMany.GetJoinTable())
