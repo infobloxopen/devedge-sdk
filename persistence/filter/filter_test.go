@@ -204,3 +204,128 @@ func TestParseOrderBy_empty(t *testing.T) {
 		t.Errorf("expected nil, got %v", clauses)
 	}
 }
+
+// ---- tag (JSON) filtering ----
+
+var jsonCols = map[string]string{"tags": "tags"}
+
+// TestParse_tagEquality_dialects verifies tags.<key> = / != render dialect-aware
+// JSON SQL with the key and value as bind args (never interpolated).
+func TestParse_tagEquality_dialects(t *testing.T) {
+	cases := []struct {
+		name    string
+		dialect string
+		expr    string
+		wantSQL string
+		wantArg []interface{}
+	}{
+		{"postgres eq", "postgres", `tags.env = "prod"`, `tags ->> ? = ?`, []interface{}{"env", "prod"}},
+		{"postgres neq", "postgres", `tags.env != "prod"`, `tags ->> ? != ?`, []interface{}{"env", "prod"}},
+		{"sqlite eq", "sqlite", `tags.env = "prod"`, `json_extract(tags, ?) = ?`, []interface{}{"$.env", "prod"}},
+		{"sqlite3 alias", "sqlite3", `tags.team = "x"`, `json_extract(tags, ?) = ?`, []interface{}{"$.team", "x"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cond, err := filter.Parse(tc.expr, cols, filter.WithJSONColumns(jsonCols), filter.WithDialect(tc.dialect))
+			if err != nil {
+				t.Fatalf("Parse(%q) error: %v", tc.expr, err)
+			}
+			sql, args := cond.SQL()
+			if sql != tc.wantSQL {
+				t.Errorf("SQL: got %q, want %q", sql, tc.wantSQL)
+			}
+			if len(args) != len(tc.wantArg) || args[0] != tc.wantArg[0] || args[1] != tc.wantArg[1] {
+				t.Errorf("args: got %v, want %v", args, tc.wantArg)
+			}
+		})
+	}
+}
+
+// TestParse_tagPresence_dialects verifies has(tags.<key>) renders dialect-aware
+// presence SQL with the key as a bind arg.
+func TestParse_tagPresence_dialects(t *testing.T) {
+	cases := []struct {
+		dialect string
+		wantSQL string
+		wantArg interface{}
+	}{
+		{"postgres", `jsonb_exists(tags, ?)`, "team"},
+		{"sqlite", `json_extract(tags, ?) IS NOT NULL`, "$.team"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dialect, func(t *testing.T) {
+			cond, err := filter.Parse(`has(tags.team)`, cols, filter.WithJSONColumns(jsonCols), filter.WithDialect(tc.dialect))
+			if err != nil {
+				t.Fatalf("Parse error: %v", err)
+			}
+			sql, args := cond.SQL()
+			if sql != tc.wantSQL {
+				t.Errorf("SQL: got %q, want %q", sql, tc.wantSQL)
+			}
+			if len(args) != 1 || args[0] != tc.wantArg {
+				t.Errorf("args: got %v, want [%v]", args, tc.wantArg)
+			}
+		})
+	}
+}
+
+// TestParse_tagCombined verifies tag predicates compose with AND/NOT and that
+// the bind args are ordered correctly.
+func TestParse_tagCombined(t *testing.T) {
+	cond, err := filter.Parse(`tags.env = "prod" AND has(tags.team)`, cols,
+		filter.WithJSONColumns(jsonCols), filter.WithDialect("sqlite"))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	sql, args := cond.SQL()
+	if !strings.Contains(sql, "json_extract(tags, ?) = ?") || !strings.Contains(sql, "IS NOT NULL") || !strings.Contains(sql, "AND") {
+		t.Errorf("unexpected SQL: %q", sql)
+	}
+	if len(args) != 3 || args[0] != "$.env" || args[1] != "prod" || args[2] != "$.team" {
+		t.Errorf("args: got %v, want [$.env prod $.team]", args)
+	}
+}
+
+// TestParse_tagInjectionSafe verifies a malicious tag key/value never reaches the
+// SQL string — both are bind args.
+func TestParse_tagInjectionSafe(t *testing.T) {
+	cond, err := filter.Parse(`tags.env = "'; DROP TABLE apikeys; --"`, cols,
+		filter.WithJSONColumns(jsonCols), filter.WithDialect("postgres"))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	sql, args := cond.SQL()
+	if strings.Contains(sql, "DROP") || strings.Contains(sql, ";") {
+		t.Errorf("injection: SQL string carries the value: %q", sql)
+	}
+	if len(args) != 2 || args[1] != "'; DROP TABLE apikeys; --" {
+		t.Errorf("args: got %v", args)
+	}
+}
+
+// TestParse_tagErrors verifies the rejected cases.
+func TestParse_tagErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		expr string
+		opts []filter.Option
+	}{
+		{"unsupported op", `tags.env < "x"`, []filter.Option{filter.WithJSONColumns(jsonCols), filter.WithDialect("sqlite")}},
+		{"unknown json field", `meta.x = "y"`, []filter.Option{filter.WithJSONColumns(jsonCols), filter.WithDialect("sqlite")}},
+		{"explicitly unsupported dialect", `tags.env = "prod"`, []filter.Option{filter.WithJSONColumns(jsonCols), filter.WithDialect("oracle")}},
+		{"bare path no key", `tags = "x"`, []filter.Option{filter.WithJSONColumns(jsonCols), filter.WithDialect("sqlite")}},
+		{"has bad path", `has(tags)`, []filter.Option{filter.WithJSONColumns(jsonCols), filter.WithDialect("sqlite")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := filter.Parse(tc.expr, cols, tc.opts...)
+			if err == nil {
+				t.Fatalf("expected error for %q, got nil", tc.expr)
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.InvalidArgument {
+				t.Errorf("expected InvalidArgument, got %v", err)
+			}
+		})
+	}
+}

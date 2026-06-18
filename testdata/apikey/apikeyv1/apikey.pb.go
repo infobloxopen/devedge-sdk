@@ -49,7 +49,12 @@ type APIKey struct {
 	// AIP-154 ETag: framework-managed. The storage layer stamps a fresh token on
 	// every create/update and surfaces it here on read, so a client can echo it as
 	// If-Match for a conditional update (412 on mismatch).
-	Etag          string `protobuf:"bytes,9,opt,name=etag,proto3" json:"etag,omitempty"`
+	Etag string `protobuf:"bytes,9,opt,name=etag,proto3" json:"etag,omitempty"`
+	// tags is a free-form map of string labels. The Tags field kind: a
+	// map<string, string> is detected by the storage generators and persisted as a
+	// single JSONB column (via types.Tags on the GORM model, a JSON field on the
+	// ent schema) — no annotation needed.
+	Tags          map[string]string `protobuf:"bytes,10,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -145,6 +150,13 @@ func (x *APIKey) GetEtag() string {
 		return x.Etag
 	}
 	return ""
+}
+
+func (x *APIKey) GetTags() map[string]string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
 }
 
 type CreateAPIKeyRequest struct {
@@ -449,7 +461,7 @@ var File_apikey_proto protoreflect.FileDescriptor
 
 const file_apikey_proto_rawDesc = "" +
 	"\n" +
-	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xfa\x02\n" +
+	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xe4\x03\n" +
 	"\x06APIKey\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1d\n" +
@@ -463,7 +475,12 @@ const file_apikey_proto_rawDesc = "" +
 	"deleteTime\x12@\n" +
 	"\vexpire_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"expireTime\x12\x17\n" +
-	"\x04etag\x18\t \x01(\tB\x03\xe0A\x03R\x04etag:1\xeaA.\n" +
+	"\x04etag\x18\t \x01(\tB\x03\xe0A\x03R\x04etag\x12/\n" +
+	"\x04tags\x18\n" +
+	" \x03(\v2\x1b.apikey.v1.APIKey.TagsEntryR\x04tags\x1a7\n" +
+	"\tTagsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:1\xeaA.\n" +
 	"\x19apikey.example.com/APIKey\x12\x11apikeys/{api_key}\"A\n" +
 	"\x13CreateAPIKeyRequest\x12*\n" +
 	"\aapi_key\x18\x01 \x01(\v2\x11.apikey.v1.APIKeyR\x06apiKey\"[\n" +
@@ -504,7 +521,7 @@ func file_apikey_proto_rawDescGZIP() []byte {
 	return file_apikey_proto_rawDescData
 }
 
-var file_apikey_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_apikey_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_apikey_proto_goTypes = []any{
 	(*APIKey)(nil),                // 0: apikey.v1.APIKey
 	(*CreateAPIKeyRequest)(nil),   // 1: apikey.v1.CreateAPIKeyRequest
@@ -513,29 +530,31 @@ var file_apikey_proto_goTypes = []any{
 	(*ListAPIKeysResponse)(nil),   // 4: apikey.v1.ListAPIKeysResponse
 	(*DeleteAPIKeyRequest)(nil),   // 5: apikey.v1.DeleteAPIKeyRequest
 	(*DeleteAPIKeyResponse)(nil),  // 6: apikey.v1.DeleteAPIKeyResponse
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil), // 8: google.protobuf.FieldMask
+	nil,                           // 7: apikey.v1.APIKey.TagsEntry
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil), // 9: google.protobuf.FieldMask
 }
 var file_apikey_proto_depIdxs = []int32{
-	7,  // 0: apikey.v1.APIKey.delete_time:type_name -> google.protobuf.Timestamp
-	7,  // 1: apikey.v1.APIKey.expire_time:type_name -> google.protobuf.Timestamp
-	0,  // 2: apikey.v1.CreateAPIKeyRequest.api_key:type_name -> apikey.v1.APIKey
-	8,  // 3: apikey.v1.GetAPIKeyRequest.read_mask:type_name -> google.protobuf.FieldMask
-	8,  // 4: apikey.v1.ListAPIKeysRequest.read_mask:type_name -> google.protobuf.FieldMask
-	0,  // 5: apikey.v1.ListAPIKeysResponse.api_keys:type_name -> apikey.v1.APIKey
-	1,  // 6: apikey.v1.APIKeyService.CreateAPIKey:input_type -> apikey.v1.CreateAPIKeyRequest
-	2,  // 7: apikey.v1.APIKeyService.GetAPIKey:input_type -> apikey.v1.GetAPIKeyRequest
-	3,  // 8: apikey.v1.APIKeyService.ListAPIKeys:input_type -> apikey.v1.ListAPIKeysRequest
-	5,  // 9: apikey.v1.APIKeyService.DeleteAPIKey:input_type -> apikey.v1.DeleteAPIKeyRequest
-	0,  // 10: apikey.v1.APIKeyService.CreateAPIKey:output_type -> apikey.v1.APIKey
-	0,  // 11: apikey.v1.APIKeyService.GetAPIKey:output_type -> apikey.v1.APIKey
-	4,  // 12: apikey.v1.APIKeyService.ListAPIKeys:output_type -> apikey.v1.ListAPIKeysResponse
-	6,  // 13: apikey.v1.APIKeyService.DeleteAPIKey:output_type -> apikey.v1.DeleteAPIKeyResponse
-	10, // [10:14] is the sub-list for method output_type
-	6,  // [6:10] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	8,  // 0: apikey.v1.APIKey.delete_time:type_name -> google.protobuf.Timestamp
+	8,  // 1: apikey.v1.APIKey.expire_time:type_name -> google.protobuf.Timestamp
+	7,  // 2: apikey.v1.APIKey.tags:type_name -> apikey.v1.APIKey.TagsEntry
+	0,  // 3: apikey.v1.CreateAPIKeyRequest.api_key:type_name -> apikey.v1.APIKey
+	9,  // 4: apikey.v1.GetAPIKeyRequest.read_mask:type_name -> google.protobuf.FieldMask
+	9,  // 5: apikey.v1.ListAPIKeysRequest.read_mask:type_name -> google.protobuf.FieldMask
+	0,  // 6: apikey.v1.ListAPIKeysResponse.api_keys:type_name -> apikey.v1.APIKey
+	1,  // 7: apikey.v1.APIKeyService.CreateAPIKey:input_type -> apikey.v1.CreateAPIKeyRequest
+	2,  // 8: apikey.v1.APIKeyService.GetAPIKey:input_type -> apikey.v1.GetAPIKeyRequest
+	3,  // 9: apikey.v1.APIKeyService.ListAPIKeys:input_type -> apikey.v1.ListAPIKeysRequest
+	5,  // 10: apikey.v1.APIKeyService.DeleteAPIKey:input_type -> apikey.v1.DeleteAPIKeyRequest
+	0,  // 11: apikey.v1.APIKeyService.CreateAPIKey:output_type -> apikey.v1.APIKey
+	0,  // 12: apikey.v1.APIKeyService.GetAPIKey:output_type -> apikey.v1.APIKey
+	4,  // 13: apikey.v1.APIKeyService.ListAPIKeys:output_type -> apikey.v1.ListAPIKeysResponse
+	6,  // 14: apikey.v1.APIKeyService.DeleteAPIKey:output_type -> apikey.v1.DeleteAPIKeyResponse
+	11, // [11:15] is the sub-list for method output_type
+	7,  // [7:11] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_apikey_proto_init() }
@@ -549,7 +568,7 @@ func file_apikey_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_apikey_proto_rawDesc), len(file_apikey_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -589,6 +589,16 @@ func LabelContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldLabel, v))
 }
 
+// TagsIsNil applies the IsNil predicate on the "tags" field.
+func TagsIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldTags))
+}
+
+// TagsNotNil applies the NotNil predicate on the "tags" field.
+func TagsNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldTags))
+}
+
 // ExpireTimeEQ applies the EQ predicate on the "expire_time" field.
 func ExpireTimeEQ(v time.Time) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldExpireTime, v))

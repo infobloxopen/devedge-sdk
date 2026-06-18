@@ -39,6 +39,11 @@ message APIKey {
   // every create/update and surfaces it here on read, so a client can echo it as
   // If-Match for a conditional update (412 on mismatch).
   string etag = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // tags is a free-form map of string labels. The Tags field kind: a
+  // map<string, string> is detected by the storage generators and persisted as a
+  // single JSONB column (via types.Tags on the GORM model, a JSON field on the
+  // ent schema) — no annotation needed.
+  map<string, string> tags = 10;
 }
 
 service APIKeyService {

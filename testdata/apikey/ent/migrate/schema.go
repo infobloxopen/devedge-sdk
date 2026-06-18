@@ -18,6 +18,7 @@ var (
 		{Name: "key_value_cipher", Type: field.TypeString, Nullable: true},
 		{Name: "key_prefix", Type: field.TypeString, Nullable: true},
 		{Name: "label", Type: field.TypeString, Nullable: true},
+		{Name: "tags", Type: field.TypeJSON, Nullable: true},
 		{Name: "expire_time", Type: field.TypeTime, Nullable: true},
 	}
 	// APIKeysTable holds the schema information for the "api_keys" table.

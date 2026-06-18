@@ -16,6 +16,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
+	"github.com/infobloxopen/devedge-sdk/types"
 	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -38,13 +39,14 @@ var (
 
 // APIKeyModel is the GORM model for APIKey.
 type APIKeyModel struct {
-	ID             string `gorm:"primaryKey;type:varchar(36)"`
-	AccountId      string `gorm:"column:account_id"`
-	KeyValueHash   string `gorm:"column:key_value_hash;index"`
-	KeyValueCipher string `gorm:"column:key_value_cipher"`
-	KeyPrefix      string `gorm:"column:key_prefix"`
-	Label          string `gorm:"column:label"`
-	ETag           string `gorm:"column:etag"`
+	ID             string     `gorm:"primaryKey;type:varchar(36)"`
+	AccountId      string     `gorm:"column:account_id"`
+	KeyValueHash   string     `gorm:"column:key_value_hash;index"`
+	KeyValueCipher string     `gorm:"column:key_value_cipher"`
+	KeyPrefix      string     `gorm:"column:key_prefix"`
+	Label          string     `gorm:"column:label"`
+	Tags           types.Tags `gorm:"column:tags;type:jsonb"`
+	ETag           string     `gorm:"column:etag"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	DeletedAt      gorm.DeletedAt `gorm:"index"`
@@ -59,6 +61,7 @@ func toModel_APIKey(p *APIKey) *APIKeyModel {
 	m.AccountId = p.AccountId
 	m.KeyPrefix = p.KeyPrefix
 	m.Label = p.Label
+	m.Tags = types.Tags(p.Tags)
 	if p.ExpireTime != nil {
 		m.ExpireTime = sql.NullTime{Time: p.ExpireTime.AsTime(), Valid: true}
 	}
@@ -74,6 +77,7 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 	p.AccountId = m.AccountId
 	p.KeyPrefix = m.KeyPrefix
 	p.Label = m.Label
+	p.Tags = map[string]string(m.Tags)
 	if m.DeletedAt.Valid {
 		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
 	}
@@ -92,6 +96,11 @@ var APIKeyColumns = map[string]string{
 	"label":       "label",
 	"delete_time": "deleted_at",
 	"expire_time": "expire_time",
+}
+
+// APIKeyJSONColumns maps tag (map<string,string>) field names to DB columns for `tags.<key>` filtering.
+var APIKeyJSONColumns = map[string]string{
+	"tags": "tags",
 }
 
 // APIKeyNamePattern is the AIP-122 resource name pattern for APIKey.
@@ -146,7 +155,7 @@ func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOption
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
-		cond, err := filter.Parse(opts.Filter, APIKeyColumns)
+		cond, err := filter.Parse(opts.Filter, APIKeyColumns, filter.WithJSONColumns(APIKeyJSONColumns), filter.WithDialect(r.db.Dialector.Name()))
 		if err != nil {
 			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
 		}
@@ -261,6 +270,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		updates := map[string]interface{}{
 			"key_prefix": m.KeyPrefix,
 			"label":      m.Label,
+			"tags":       m.Tags,
 		}
 		if entity.KeyValue != "" {
 			updates["key_value_hash"] = m.KeyValueHash

@@ -148,6 +148,18 @@ func (_u *APIKeyUpdate) ClearLabel() *APIKeyUpdate {
 	return _u
 }
 
+// SetTags sets the "tags" field.
+func (_u *APIKeyUpdate) SetTags(v map[string]string) *APIKeyUpdate {
+	_u.mutation.SetTags(v)
+	return _u
+}
+
+// ClearTags clears the value of the "tags" field.
+func (_u *APIKeyUpdate) ClearTags() *APIKeyUpdate {
+	_u.mutation.ClearTags()
+	return _u
+}
+
 // SetExpireTime sets the "expire_time" field.
 func (_u *APIKeyUpdate) SetExpireTime(v time.Time) *APIKeyUpdate {
 	_u.mutation.SetExpireTime(v)
@@ -244,6 +256,12 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.LabelCleared() {
 		_spec.ClearField(apikey.FieldLabel, field.TypeString)
+	}
+	if value, ok := _u.mutation.Tags(); ok {
+		_spec.SetField(apikey.FieldTags, field.TypeJSON, value)
+	}
+	if _u.mutation.TagsCleared() {
+		_spec.ClearField(apikey.FieldTags, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ExpireTime(); ok {
 		_spec.SetField(apikey.FieldExpireTime, field.TypeTime, value)
@@ -391,6 +409,18 @@ func (_u *APIKeyUpdateOne) ClearLabel() *APIKeyUpdateOne {
 	return _u
 }
 
+// SetTags sets the "tags" field.
+func (_u *APIKeyUpdateOne) SetTags(v map[string]string) *APIKeyUpdateOne {
+	_u.mutation.SetTags(v)
+	return _u
+}
+
+// ClearTags clears the value of the "tags" field.
+func (_u *APIKeyUpdateOne) ClearTags() *APIKeyUpdateOne {
+	_u.mutation.ClearTags()
+	return _u
+}
+
 // SetExpireTime sets the "expire_time" field.
 func (_u *APIKeyUpdateOne) SetExpireTime(v time.Time) *APIKeyUpdateOne {
 	_u.mutation.SetExpireTime(v)
@@ -517,6 +547,12 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if _u.mutation.LabelCleared() {
 		_spec.ClearField(apikey.FieldLabel, field.TypeString)
+	}
+	if value, ok := _u.mutation.Tags(); ok {
+		_spec.SetField(apikey.FieldTags, field.TypeJSON, value)
+	}
+	if _u.mutation.TagsCleared() {
+		_spec.ClearField(apikey.FieldTags, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ExpireTime(); ok {
 		_spec.SetField(apikey.FieldExpireTime, field.TypeTime, value)

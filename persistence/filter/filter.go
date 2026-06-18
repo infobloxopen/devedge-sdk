@@ -35,18 +35,62 @@ func (c OrderClause) GORMExpr() string {
 	return c.Column + " ASC"
 }
 
+// options carries the dialect-aware settings needed for JSON/tag column access.
+// JSON path syntax (`tags.key`) differs by database, so the parser must know the
+// target dialect and which columns are JSON/JSONB. The parser stays ORM-agnostic:
+// it takes a dialect string, never a *gorm.DB.
+type options struct {
+	dialect     string            // normalized: "postgres" or "sqlite"
+	jsonColumns map[string]string // proto base field name → DB column (JSON/JSONB)
+}
+
+// Option configures Parse.
+type Option func(*options)
+
+// WithDialect tells the parser which SQL dialect to target for tag/JSON access.
+// Recognized values are the gorm dialector names "postgres" and "sqlite" (and
+// their aliases). It is required for any filter that references a tag column path
+// such as `tags.env`; without it, tag predicates are rejected.
+func WithDialect(name string) Option {
+	return func(o *options) { o.dialect = normalizeDialect(name) }
+}
+
+// WithJSONColumns registers the JSON/JSONB columns (proto field name → DB column)
+// that admit `field.key` value access and the has(field.key) presence function.
+func WithJSONColumns(cols map[string]string) Option {
+	return func(o *options) { o.jsonColumns = cols }
+}
+
+func normalizeDialect(name string) string {
+	switch strings.ToLower(name) {
+	case "postgres", "postgresql", "pgx":
+		return "postgres"
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	default:
+		return strings.ToLower(name)
+	}
+}
+
 // Parse parses an AIP-160 filter expression and validates every referenced field
 // name against the columns whitelist.
 //
 // columns maps proto field name → DB column name.
 // An empty expr returns (nil, nil) — no condition needs to be applied.
 // Unknown field names return a codes.InvalidArgument error.
-func Parse(expr string, columns map[string]string) (Condition, error) {
+//
+// Pass WithJSONColumns + WithDialect to enable tag (map<string,string>) filtering:
+// `tags.<key> = "v"`, `tags.<key> != "v"`, and `has(tags.<key>)`.
+func Parse(expr string, columns map[string]string, opts ...Option) (Condition, error) {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
 		return nil, nil
 	}
-	p := &parser{tokens: tokenize(expr), pos: 0, columns: columns}
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	p := &parser{tokens: tokenize(expr), pos: 0, columns: columns, opts: o}
 	cond, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -244,6 +288,7 @@ type parser struct {
 	tokens  []token
 	pos     int
 	columns map[string]string
+	opts    *options
 }
 
 func (p *parser) peek() token {
@@ -251,6 +296,13 @@ func (p *parser) peek() token {
 		return token{tokEOF, ""}
 	}
 	return p.tokens[p.pos]
+}
+
+func (p *parser) peekAt(n int) token {
+	if p.pos+n >= len(p.tokens) {
+		return token{tokEOF, ""}
+	}
+	return p.tokens[p.pos+n]
 }
 
 func (p *parser) consume() token {
@@ -275,7 +327,7 @@ func (p *parser) parseOrExpr() (Condition, error) {
 		if err != nil {
 			return nil, err
 		}
-		left = &binaryCondition{"OR", left, right}
+		left = &Logical{Op: "OR", Left: left, Right: right}
 	}
 	return left, nil
 }
@@ -291,7 +343,7 @@ func (p *parser) parseAndExpr() (Condition, error) {
 		if err != nil {
 			return nil, err
 		}
-		left = &binaryCondition{"AND", left, right}
+		left = &Logical{Op: "AND", Left: left, Right: right}
 	}
 	return left, nil
 }
@@ -303,12 +355,18 @@ func (p *parser) parseNotExpr() (Condition, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &notCondition{inner}, nil
+		return &Negation{Inner: inner}, nil
 	}
 	return p.parsePrimary()
 }
 
 func (p *parser) parsePrimary() (Condition, error) {
+	// has(<json_col>.<key>) — JSON key-presence predicate. Recognized only as a
+	// function call (`has(`); a bare field literally named "has" still parses as a
+	// normal comparison.
+	if t := p.peek(); t.kind == tokIdent && strings.EqualFold(t.val, "has") && p.peekAt(1).kind == tokLParen {
+		return p.parseHas()
+	}
 	if p.peek().kind == tokLParen {
 		p.consume()
 		inner, err := p.parseExpr()
@@ -324,6 +382,46 @@ func (p *parser) parsePrimary() (Condition, error) {
 	return p.parseComparison()
 }
 
+// parseHas parses has(<json_col>.<key>) into a JSON key-presence condition.
+func (p *parser) parseHas() (Condition, error) {
+	p.consume() // has
+	p.consume() // (
+	pathTok := p.consume()
+	if pathTok.kind != tokIdent {
+		return nil, status.Errorf(codes.InvalidArgument, "has() expects a tag field path like `tags.key`, got %q", pathTok.val)
+	}
+	col, key, err := p.resolveJSONPath(pathTok.val)
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().kind != tokRParen {
+		return nil, status.Errorf(codes.InvalidArgument, "expected ')' after has(...), got %q", p.peek().val)
+	}
+	p.consume()
+	return &TagPresence{Column: col, Key: key, dialect: p.opts.dialect}, nil
+}
+
+// resolveJSONPath splits a `base.key` path and validates base against the JSON
+// column whitelist and a supported dialect. Returns the DB column and the key.
+func (p *parser) resolveJSONPath(path string) (col, key string, err error) {
+	base, key, ok := strings.Cut(path, ".")
+	if !ok || base == "" || key == "" {
+		return "", "", status.Errorf(codes.InvalidArgument, "expected a tag field path like `tags.key`, got %q", path)
+	}
+	dbcol, ok := p.opts.jsonColumns[base]
+	if !ok {
+		return "", "", status.Errorf(codes.InvalidArgument, "unknown tag field %q", path)
+	}
+	// A dialect is required only to render SQL (the GORM backend). When no dialect
+	// is given the parse still succeeds and yields the AST, which alternative
+	// backends (e.g. ent) translate themselves; an explicitly unsupported dialect
+	// is still rejected.
+	if p.opts.dialect != "" && p.opts.dialect != "postgres" && p.opts.dialect != "sqlite" {
+		return "", "", status.Errorf(codes.InvalidArgument, "tag filtering is not supported on this database dialect")
+	}
+	return dbcol, key, nil
+}
+
 func (p *parser) parseComparison() (Condition, error) {
 	fieldTok := p.peek()
 	if fieldTok.kind != tokIdent {
@@ -335,6 +433,17 @@ func (p *parser) parseComparison() (Condition, error) {
 		return nil, status.Errorf(codes.InvalidArgument, "unexpected keyword %q where field name expected", fieldTok.val)
 	}
 	p.consume()
+
+	// A dotted path (e.g. `tags.env`) that isn't a literal column name is a JSON
+	// (tag) value access. No proto scalar column contains a dot, so this is
+	// unambiguous.
+	if _, isCol := p.columns[fieldTok.val]; !isCol && strings.Contains(fieldTok.val, ".") {
+		col, key, err := p.resolveJSONPath(fieldTok.val)
+		if err != nil {
+			return nil, err
+		}
+		return p.parseJSONComparison(col, key)
+	}
 
 	col, ok := p.columns[fieldTok.val]
 	if !ok {
@@ -380,40 +489,116 @@ func (p *parser) parseComparison() (Condition, error) {
 		val = fmt.Sprintf("%%%v%%", val)
 	}
 
-	return &comparisonCondition{col: col, op: op, val: val}, nil
+	return &Comparison{Column: col, Op: op, Value: val}, nil
 }
 
-// ---- condition implementations ----
-
-type comparisonCondition struct {
-	col string
-	op  string
-	val interface{}
+// parseJSONComparison parses the operator and value after a `tags.key` path.
+// Only = and != are supported (tag values are text); the key and value are bind
+// args, never interpolated.
+func (p *parser) parseJSONComparison(col, key string) (Condition, error) {
+	opTok := p.consume()
+	var op string
+	switch opTok.kind {
+	case tokEQ:
+		op = "="
+	case tokNEQ:
+		op = "!="
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "operator %q is not supported on a tag field (use = or !=)", opTok.val)
+	}
+	valTok := p.consume()
+	var val interface{}
+	switch valTok.kind {
+	case tokString, tokNumber, tokIdent:
+		val = valTok.val
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "expected value after tag field, got %q", valTok.val)
+	}
+	return &TagComparison{Column: col, Key: key, Op: op, Value: val, dialect: p.opts.dialect}, nil
 }
 
-func (c *comparisonCondition) SQL() (string, []interface{}) {
-	return fmt.Sprintf("%s %s ?", c.col, c.op), []interface{}{c.val}
+// ---- condition AST ----
+//
+// The conditions returned by Parse form a small, exported AST. SQL() renders
+// dialect SQL for the GORM backend; alternative backends (e.g. ent) type-switch
+// on these nodes and build their own predicates. The dialect needed by SQL() for
+// tag predicates is captured at Parse via WithDialect and is irrelevant to a
+// caller that translates the AST itself.
+
+// Comparison is a scalar column comparison: Column Op Value.
+type Comparison struct {
+	Column string
+	Op     string // =, !=, <, <=, >, >=, LIKE
+	Value  interface{}
 }
 
-type binaryCondition struct {
-	op    string // "AND" or "OR"
-	left  Condition
-	right Condition
+func (c *Comparison) SQL() (string, []interface{}) {
+	return fmt.Sprintf("%s %s ?", c.Column, c.Op), []interface{}{c.Value}
 }
 
-func (b *binaryCondition) SQL() (string, []interface{}) {
-	lsql, largs := b.left.SQL()
-	rsql, rargs := b.right.SQL()
-	sql := fmt.Sprintf("(%s) %s (%s)", lsql, b.op, rsql)
+// TagComparison is an equality/inequality test on a single key of a JSON/JSONB
+// (tag) column: Column.Key Op Value. Column is a generator-controlled column name
+// (safe to interpolate); Key and Value are always bind args. The extracted value
+// is text:
+//
+//	postgres: <col> ->> ? <op> ?            args: [key, val]
+//	sqlite:   json_extract(<col>, ?) <op> ? args: ["$."+key, val]
+type TagComparison struct {
+	Column  string
+	Key     string
+	Op      string // "=" or "!="
+	Value   interface{}
+	dialect string // for SQL() rendering only; ignored by AST translators
+}
+
+func (c *TagComparison) SQL() (string, []interface{}) {
+	if c.dialect == "postgres" {
+		return fmt.Sprintf("%s ->> ? %s ?", c.Column, c.Op), []interface{}{c.Key, c.Value}
+	}
+	// sqlite (and other json_extract dialects)
+	return fmt.Sprintf("json_extract(%s, ?) %s ?", c.Column, c.Op), []interface{}{"$." + c.Key, c.Value}
+}
+
+// TagPresence tests whether a JSON/JSONB (tag) column contains a given key:
+// has(Column.Key). On Postgres it uses jsonb_exists rather than the `?` operator,
+// which would collide with the bind-parameter placeholder.
+//
+//	postgres: jsonb_exists(<col>, ?)            args: [key]
+//	sqlite:   json_extract(<col>, ?) IS NOT NULL args: ["$."+key]
+type TagPresence struct {
+	Column  string
+	Key     string
+	dialect string // for SQL() rendering only; ignored by AST translators
+}
+
+func (c *TagPresence) SQL() (string, []interface{}) {
+	if c.dialect == "postgres" {
+		return fmt.Sprintf("jsonb_exists(%s, ?)", c.Column), []interface{}{c.Key}
+	}
+	return fmt.Sprintf("json_extract(%s, ?) IS NOT NULL", c.Column), []interface{}{"$." + c.Key}
+}
+
+// Logical is AND/OR over two sub-conditions.
+type Logical struct {
+	Op    string // "AND" or "OR"
+	Left  Condition
+	Right Condition
+}
+
+func (b *Logical) SQL() (string, []interface{}) {
+	lsql, largs := b.Left.SQL()
+	rsql, rargs := b.Right.SQL()
+	sql := fmt.Sprintf("(%s) %s (%s)", lsql, b.Op, rsql)
 	args := append(largs, rargs...) //nolint:gocritic
 	return sql, args
 }
 
-type notCondition struct {
-	inner Condition
+// Negation is NOT over a sub-condition.
+type Negation struct {
+	Inner Condition
 }
 
-func (n *notCondition) SQL() (string, []interface{}) {
-	isql, iargs := n.inner.SQL()
+func (n *Negation) SQL() (string, []interface{}) {
+	isql, iargs := n.Inner.SQL()
 	return fmt.Sprintf("NOT (%s)", isql), iargs
 }

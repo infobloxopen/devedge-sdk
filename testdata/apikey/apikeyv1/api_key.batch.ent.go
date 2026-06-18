@@ -84,6 +84,9 @@ func (r *APIKeyEntRepository) BatchUpdate(ctx context.Context, items []persisten
 		if apikeyInMask(it.FieldMask, "label") {
 			u = u.SetLabel(it.Entity.GetLabel())
 		}
+		if apikeyInMask(it.FieldMask, "tags") {
+			u = u.SetTags(it.Entity.GetTags())
+		}
 		if apikeyInMask(it.FieldMask, "key_value") && it.Entity.GetKeyValue() != "" {
 			h, herr := r.enc.Hash(ctx, it.Entity.GetKeyValue())
 			if herr != nil {

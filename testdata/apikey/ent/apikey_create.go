@@ -110,6 +110,12 @@ func (_c *APIKeyCreate) SetNillableLabel(v *string) *APIKeyCreate {
 	return _c
 }
 
+// SetTags sets the "tags" field.
+func (_c *APIKeyCreate) SetTags(v map[string]string) *APIKeyCreate {
+	_c.mutation.SetTags(v)
+	return _c
+}
+
 // SetExpireTime sets the "expire_time" field.
 func (_c *APIKeyCreate) SetExpireTime(v time.Time) *APIKeyCreate {
 	_c.mutation.SetExpireTime(v)
@@ -234,6 +240,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Label(); ok {
 		_spec.SetField(apikey.FieldLabel, field.TypeString, value)
 		_node.Label = value
+	}
+	if value, ok := _c.mutation.Tags(); ok {
+		_spec.SetField(apikey.FieldTags, field.TypeJSON, value)
+		_node.Tags = value
 	}
 	if value, ok := _c.mutation.ExpireTime(); ok {
 		_spec.SetField(apikey.FieldExpireTime, field.TypeTime, value)

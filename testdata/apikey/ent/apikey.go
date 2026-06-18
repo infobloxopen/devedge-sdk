@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -31,6 +32,8 @@ type APIKey struct {
 	KeyPrefix string `json:"key_prefix,omitempty"`
 	// Label holds the value of the "label" field.
 	Label string `json:"label,omitempty"`
+	// Tags holds the value of the "tags" field.
+	Tags map[string]string `json:"tags,omitempty"`
 	// AIP-148 TTL: soft-delete rows may be purged after this time.
 	ExpireTime   *time.Time `json:"expire_time,omitempty"`
 	selectValues sql.SelectValues
@@ -41,6 +44,8 @@ func (*APIKey) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case apikey.FieldTags:
+			values[i] = new([]byte)
 		case apikey.FieldID, apikey.FieldAccountID, apikey.FieldName, apikey.FieldKeyValueHash, apikey.FieldKeyValueCipher, apikey.FieldKeyPrefix, apikey.FieldLabel:
 			values[i] = new(sql.NullString)
 		case apikey.FieldDeleteTime, apikey.FieldExpireTime:
@@ -109,6 +114,14 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Label = value.String
 			}
+		case apikey.FieldTags:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field tags", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Tags); err != nil {
+					return fmt.Errorf("unmarshal field tags: %w", err)
+				}
+			}
 		case apikey.FieldExpireTime:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field expire_time", values[i])
@@ -174,6 +187,9 @@ func (_m *APIKey) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("label=")
 	builder.WriteString(_m.Label)
+	builder.WriteString(", ")
+	builder.WriteString("tags=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Tags))
 	builder.WriteString(", ")
 	if v := _m.ExpireTime; v != nil {
 		builder.WriteString("expire_time=")

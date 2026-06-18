@@ -140,26 +140,35 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			if field.Message != nil {
 				relatedGoType = string(field.Message.GoIdent.GoName)
 			}
+			// A proto map<string, string> is the Tags field kind: persisted as a
+			// single JSONB column (types.Tags), not a nested message or relation. A
+			// map arrives as Kind()==MessageKind with IsMap()==true and a synthetic
+			// map-entry message, so it must be detected here or it falls into the
+			// nested-message skip below. Non-string maps keep the old skip behavior.
+			isStringMap := field.Desc.IsMap() &&
+				field.Desc.MapKey().Kind() == protoreflect.StringKind &&
+				field.Desc.MapValue().Kind() == protoreflect.StringKind
 			msg.Fields = append(msg.Fields, fieldInfo{
 				Name:          string(field.Desc.Name()),
 				GoFieldName:   string(field.GoName),
 				SnakeName:     toSnake(string(field.Desc.Name())),
 				IsRepeated:    field.Desc.IsList(),
-				IsMessage:     field.Desc.Kind() == protoreflect.MessageKind,
+				IsMessage:     field.Desc.Kind() == protoreflect.MessageKind && !isStringMap,
+				IsTags:        isStringMap,
 				IsID:          string(field.Desc.Name()) == "id",
 				GoType:        protoKindToGoType(field.Desc.Kind()),
 				RelatedGoType: relatedGoType,
-				IsSecret:     isSecret,
-				IsOutputOnly: isOutputOnly,
-				NotNull:      notNull,
-				Unique:       unique,
-				Index:        index,
-				ColumnName:   columnName,
-				ColumnType:   columnType,
-				HasOne:       hasOne,
-				HasMany:      hasMany,
-				BelongsTo:    belongsTo,
-				ManyToMany:   manyToMany,
+				IsSecret:      isSecret,
+				IsOutputOnly:  isOutputOnly,
+				NotNull:       notNull,
+				Unique:        unique,
+				Index:         index,
+				ColumnName:    columnName,
+				ColumnType:    columnType,
+				HasOne:        hasOne,
+				HasMany:       hasMany,
+				BelongsTo:     belongsTo,
+				ManyToMany:    manyToMany,
 			})
 		}
 		messages = append(messages, msg)

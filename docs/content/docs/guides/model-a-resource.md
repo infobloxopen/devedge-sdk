@@ -72,7 +72,8 @@ Scalar proto types map straight to columns:
 {{< callout type="warning" >}}
 **Not every type is a column.** Repeated scalars and nested messages **without** a
 [relationship annotation](#relationships) are skipped (they need a JSON/JSONB serialization
-strategy that isn't generated yet). **Enums** are not mapped to a typed column either — model an
+strategy that isn't generated yet) — the one exception is a `map<string, string>`, which persists
+as a JSONB column (see [Tags](#tags)). **Enums** are not mapped to a typed column either — model an
 enum as a `string` (or an integer field) if you need it persisted, and validate it at the API
 boundary. `google.protobuf.Timestamp` only carries built-in storage meaning for the two
 [framework fields](#framework-managed-fields) below; other timestamp fields aren't persisted by the
@@ -246,6 +247,64 @@ Your handler still receives the raw value on the **request**. Return it to the c
 creation time if at all — never on `Get`/`List`. `AssertNoSecretFieldsLeaked` is your safety net.
 {{< /callout >}}
 
+## Tags
+
+A `map<string, string>` field is the **Tags** field kind: a free-form set of string labels
+persisted as a single JSONB column. No annotation is needed — the storage generators detect a
+`map<string, string>` and wire it automatically.
+
+```proto
+message APIKey {
+  string id = 2;
+  // ...
+  map<string, string> tags = 10;
+}
+```
+
+- **GORM** (`protoc-gen-storage`) emits a `types.Tags` column tagged `gorm:"type:jsonb"`.
+  `github.com/infobloxopen/devedge-sdk/types.Tags` is an ORM-agnostic `map[string]string` that
+  implements `driver.Valuer` / `sql.Scanner` (the atlas custom-field-type convention), so it
+  persists transparently. `jsonb` is native on Postgres and works on SQLite via type affinity. The
+  type ships helpers (`Merge`, `Clone`, `Filter`, `Keys`, `String`) and a structural `Validate`.
+- **ent** (`protoc-gen-ent`) emits an optional `field.JSON("tags", map[string]string{})`, which ent
+  stores in the dialect-appropriate JSON column.
+
+Tags round-trip through Create, Get, List, and a full (no-field-mask) Update. Override the column
+type with `column_type` if `jsonb` isn't right for your dialect.
+
+### Filtering by tags
+
+`List` accepts AIP-160 predicates over individual tag keys on **both** storage backends, evaluated
+as dialect-aware JSON SQL. The tag key and value are always bind arguments, never interpolated:
+
+| Filter | Meaning |
+|---|---|
+| `tags.env = "prod"` | the `env` tag equals `prod` |
+| `tags.env != "prod"` | the `env` tag is present and not `prod` |
+| `has(tags.team)` | the `team` tag key exists |
+
+These compose with `AND` / `OR` / `NOT` and grouping like any other predicate, e.g.
+`tags.env = "prod" AND has(tags.team)`. The generator emits a separate `<Message>JSONColumns` map
+for tag paths, kept out of the scalar `<Message>Columns` map.
+
+- **GORM** (`protoc-gen-storage`) renders the JSON SQL directly (Postgres `->>` / `jsonb_exists`,
+  SQLite `json_extract`), with `List` passing the live dialect via `r.db.Dialector.Name()`.
+- **ent** uses `entrepo.FilterPredicate`, which translates the parsed filter into ent predicates via
+  `sqljson` — ent emits the dialect-correct JSON SQL when the query is built, so no dialect string
+  is needed. Wire it in the hand-written `List` of the ent adapter (see `testdata/apikey/ent_wiring.go`).
+
+{{< callout type="info" >}}
+**Still out of scope**, tracked as follow-ups: ordering by a tag key (`order_by=tags.env`);
+field-masked updates that name `tags` (set tags with a full update); and, on the GORM backend,
+dialects other than Postgres/SQLite (MySQL returns a clear error — ent's `sqljson` handles MySQL).
+A bare `tags = "..."` (whole-map) predicate is intentionally unsupported — only `tags.<key>` access is.
+{{< /callout >}}
+
+**Semantic tag policy** — which keys/values are allowed and which combinations are permitted — is
+*not* part of the type. `types.Tags` carries data only (its `Validate` checks structural
+well-formedness: UTF-8 keys/values, length and count limits). Policy belongs to an external tag
+definition service, reached through the `types.TagValidator` seam.
+
 ## Planned field kinds
 
 `secret` is the first of what will be a vocabulary of **semantic field kinds** — each a
@@ -262,7 +321,6 @@ closest thing you can express right now.
 
 | Kind | What it will be | Today |
 |---|---|---|
-| **Tags** | a `map<string,string>` of labels, persisted as JSONB and filterable with inclusion operators (e.g. `tags.env = "prod"`, `has(tags.team)`) | not expressible — `map`, `repeated`, and nested-message fields are skipped by the generator (they need exactly the JSONB serialization this kind would add) |
 | **Typed ID** | a structured/opaque identifier kind (cf. atlas-app-toolkit's `atlas.rpc.Identifier`) rather than a bare string | a string `id` plus an AIP-122 resource name (see *Give it a resource name* above) |
 | **Memo** | a first-class multi-line-text kind | a `string` field with `column_type: "text"` |
 | **Case-insensitive text** | CI semantics wired through unique indexes, lookups, and filters | a `string` field with `column_type: "citext"` (Postgres) — the column compares case-insensitively, but unique/index/filter aren't made CI automatically |

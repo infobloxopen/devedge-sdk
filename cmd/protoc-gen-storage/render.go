@@ -58,6 +58,30 @@ func hasETagMsg(messages []messageInfo) bool {
 	return false
 }
 
+// hasTagsFields reports whether any field across all messages is a tags
+// (map<string,string>) field, which makes the generated file import types.
+func hasTagsFields(messages []messageInfo) bool {
+	for _, msg := range messages {
+		for _, f := range msg.Fields {
+			if f.IsTags {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// msgHasTags reports whether the message has a tags (map<string,string>) field,
+// which makes List parse tag (JSON) predicates dialect-aware.
+func msgHasTags(msg messageInfo) bool {
+	for _, f := range msg.Fields {
+		if f.IsTags {
+			return true
+		}
+	}
+	return false
+}
+
 // messageInfo describes a proto message for storage code generation.
 type messageInfo struct {
 	MessageName     string
@@ -76,19 +100,20 @@ type messageInfo struct {
 
 // fieldInfo describes a single proto message field.
 type fieldInfo struct {
-	Name         string
-	GoFieldName  string // Go struct field name (e.g. "PageSize" for proto "page_size")
-	GoType       string
+	Name        string
+	GoFieldName string // Go struct field name (e.g. "PageSize" for proto "page_size")
+	GoType      string
 	// RelatedGoType is the Go type name of the message a relationship field points
 	// at (e.g. "Destination" for a belongs_to Destination). The generated GORM
 	// association references the related model type "<RelatedGoType>Model".
 	RelatedGoType string
 	SnakeName     string
-	IsID         bool // this field is the resource primary key
-	IsRepeated   bool // repeated field — skipped in GORM model with a TODO
-	IsMessage    bool // nested message field — skipped with a TODO
-	IsSecret     bool // secret field — stored as hash+cipher columns; plaintext never persisted
-	IsOutputOnly bool // OUTPUT_ONLY field (google.api.field_behavior) — computed, not persisted
+	IsID          bool // this field is the resource primary key
+	IsRepeated    bool // repeated field — skipped in GORM model with a TODO
+	IsMessage     bool // nested message field — skipped with a TODO
+	IsTags        bool // map<string,string> field — persisted as a types.Tags JSONB column
+	IsSecret      bool // secret field — stored as hash+cipher columns; plaintext never persisted
+	IsOutputOnly  bool // OUTPUT_ONLY field (google.api.field_behavior) — computed, not persisted
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull    bool
 	Unique     bool
@@ -118,6 +143,7 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	withSoftDelete := hasSoftDeleteMsg(messages)
 	withExpireTime := hasExpireTimeMsg(messages)
 	withETag := hasETagMsg(messages)
+	withTags := hasTagsFields(messages)
 
 	// Determine if any message needs the middleware import (tenant or secret lookup).
 	withMiddleware := false
@@ -157,6 +183,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/filter\"\n")
+	if withTags {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/types\"\n")
+	}
 	// Emit resourcename import only when at least one message has a resource pattern.
 	hasResourcePattern := false
 	for _, m := range messages {
@@ -237,6 +266,22 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		}
 		if f.IsOutputOnly {
 			continue // computed field, not stored in DB
+		}
+		if f.IsTags {
+			// Tags (map<string,string>) persist as a single JSONB column via the
+			// ORM-agnostic types.Tags (driver.Valuer/sql.Scanner). jsonb works on
+			// Postgres natively and on SQLite via type affinity (stores the JSON
+			// text); a column_type annotation overrides the default.
+			col := f.SnakeName
+			if f.ColumnName != "" {
+				col = f.ColumnName
+			}
+			colType := "jsonb"
+			if f.ColumnType != "" {
+				colType = f.ColumnType
+			}
+			fmt.Fprintf(b, "\t%s types.Tags `gorm:\"column:%s;type:%s\"`\n", goFieldName(f), col, colType)
+			continue
 		}
 		if f.IsRepeated {
 			if f.HasMany != nil {
@@ -358,6 +403,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			continue // output-only and secret fields are not persisted via toModel
 		}
 		gfn := goFieldName(f)
+		if f.IsTags {
+			fmt.Fprintf(b, "\tm.%s = types.Tags(p.%s)\n", gfn, gfn)
+			continue
+		}
 		fmt.Fprintf(b, "\tm.%s = p.%s\n", gfn, gfn)
 	}
 	// AIP-148 TTL: expire_time is OUTPUT_ONLY (server-managed), so it is not in the
@@ -393,6 +442,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			continue // output-only and secret fields are never copied from model
 		}
 		gfn := goFieldName(f)
+		if f.IsTags {
+			fmt.Fprintf(b, "\tp.%s = map[string]string(m.%s)\n", gfn, gfn)
+			continue
+		}
 		fmt.Fprintf(b, "\tp.%s = m.%s\n", gfn, gfn)
 	}
 	// AIP-148: populate delete_time / expire_time from GORM columns.
@@ -418,7 +471,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	fmt.Fprintf(b, "var %sColumns = map[string]string{\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\"id\": \"id\",\n")
 	for _, f := range msg.Fields {
-		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+		// Tags are intentionally absent: filtering/ordering on a JSONB map is a
+		// distinct feature (inclusion operators) not yet supported, and a plain
+		// `tags = 'x'` predicate errors against a Postgres jsonb column.
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsTags || f.IsSecret || f.IsOutputOnly {
 			continue
 		}
 		col := f.SnakeName
@@ -435,6 +491,24 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\t\"expire_time\": \"expire_time\",\n")
 	}
 	b.WriteString("}\n\n")
+
+	// JSON/tag column map for `tags.<key>` filtering (kept separate from the
+	// filter/order_by column map above, which is for scalar columns only).
+	if msgHasTags(msg) {
+		fmt.Fprintf(b, "// %sJSONColumns maps tag (map<string,string>) field names to DB columns for `tags.<key>` filtering.\n", msg.MessageName)
+		fmt.Fprintf(b, "var %sJSONColumns = map[string]string{\n", msg.MessageName)
+		for _, f := range msg.Fields {
+			if !f.IsTags {
+				continue
+			}
+			col := f.SnakeName
+			if f.ColumnName != "" {
+				col = f.ColumnName
+			}
+			fmt.Fprintf(b, "\t%q: %q,\n", f.Name, col)
+		}
+		b.WriteString("}\n\n")
+	}
 
 	// AIP-122 resource name helpers.
 	if msg.ResourcePattern != "" {
@@ -504,7 +578,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	}
 	fmt.Fprintf(b, "\tif opts.Filter != \"\" {\n")
-	fmt.Fprintf(b, "\t\tcond, err := filter.Parse(opts.Filter, %sColumns)\n", msg.MessageName)
+	if msgHasTags(msg) {
+		// Tag (map) columns admit `tags.<key>` predicates, whose JSON SQL is
+		// dialect-specific; pass the JSON column whitelist and the live dialect.
+		fmt.Fprintf(b, "\t\tcond, err := filter.Parse(opts.Filter, %sColumns, filter.WithJSONColumns(%sJSONColumns), filter.WithDialect(r.db.Dialector.Name()))\n", msg.MessageName, msg.MessageName)
+	} else {
+		fmt.Fprintf(b, "\t\tcond, err := filter.Parse(opts.Filter, %sColumns)\n", msg.MessageName)
+	}
 	fmt.Fprintf(b, "\t\tif err != nil {\n")
 	fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.InvalidArgument, \"invalid filter: %%v\", err)\n")
 	fmt.Fprintf(b, "\t\t}\n")
@@ -730,7 +810,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", res.Error)\n", msg.MessageName)
 		b.WriteString("\t}\n")
 		b.WriteString("\tif res.RowsAffected == 0 {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
-		fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n", )
+		fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n")
 	} else {
 		// Stub: hard-delete resources have no soft-deleted rows to restore.
 		fmt.Fprintf(b, "func (r *%sRepository) Undelete(_ context.Context, _ string) (%s, error) {\n", msg.MessageName, pbType)

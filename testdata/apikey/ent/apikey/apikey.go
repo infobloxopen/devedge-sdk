@@ -26,6 +26,8 @@ const (
 	FieldKeyPrefix = "key_prefix"
 	// FieldLabel holds the string denoting the label field in the database.
 	FieldLabel = "label"
+	// FieldTags holds the string denoting the tags field in the database.
+	FieldTags = "tags"
 	// FieldExpireTime holds the string denoting the expire_time field in the database.
 	FieldExpireTime = "expire_time"
 	// Table holds the table name of the apikey in the database.
@@ -42,6 +44,7 @@ var Columns = []string{
 	FieldKeyValueCipher,
 	FieldKeyPrefix,
 	FieldLabel,
+	FieldTags,
 	FieldExpireTime,
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/secret"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent"
 	entapikey "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/apikey"
+	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/predicate"
 )
 
 // NewAPIKeyEntRepository wires the ent client into a persistence.Repository.
@@ -32,7 +33,8 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 				SetID(entity.Id).
 				SetName(entity.Name).
 				SetAccountID(entity.AccountId).
-				SetKeyPrefix(entity.KeyPrefix)
+				SetKeyPrefix(entity.KeyPrefix).
+				SetTags(entity.Tags)
 			if enc != nil && entity.KeyValue != "" {
 				h, err := enc.Hash(ctx, entity.KeyValue)
 				if err != nil {
@@ -69,6 +71,18 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 				ctx = entrepo.WithShowDeleted(ctx)
 			}
 			q := client.APIKey.Query()
+			// AIP-160 list filter, including tag (map) predicates such as
+			// `tags.env = "prod"` and `has(tags.team)`. FilterPredicate renders
+			// dialect-correct JSON SQL via ent's sqljson at query time.
+			if opts.Filter != "" {
+				pred, err := entrepo.FilterPredicate(opts.Filter, APIKeyColumns, APIKeyJSONColumns)
+				if err != nil {
+					return nil, "", err
+				}
+				if pred != nil {
+					q = q.Where(entpredicate.APIKey(pred))
+				}
+			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
 			}
@@ -93,7 +107,8 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 		Update_: func(ctx context.Context, key string, entity *APIKey, fieldMask ...string) (*APIKey, error) {
 			u := client.APIKey.UpdateOneID(key).
 				SetName(entity.Name).
-				SetKeyPrefix(entity.KeyPrefix)
+				SetKeyPrefix(entity.KeyPrefix).
+				SetTags(entity.Tags)
 			// Tenant guard: ent query interceptors do NOT run for mutations, so the
 			// account_id predicate must be applied explicitly or a caller could
 			// update another tenant's row by ID. Empty tenant = unscoped (matches
@@ -165,6 +180,7 @@ func fromEntAPIKey(e *ent.APIKey) *APIKey {
 		Name:      e.Name,
 		AccountId: e.AccountID,
 		KeyPrefix: e.KeyPrefix,
+		Tags:      e.Tags,
 		// KeyValue intentionally omitted — never returned from storage
 	}
 	if e.DeleteTime != nil {

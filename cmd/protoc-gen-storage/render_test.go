@@ -11,8 +11,8 @@ import (
 
 func TestRenderStorageFile_basic(t *testing.T) {
 	msg := messageInfo{
-		MessageName: "Widget",
-		PbPkgName:   "widgetsv1",
+		MessageName:  "Widget",
+		PbPkgName:    "widgetsv1",
 		PbImportPath: "github.com/example/widgets/v1",
 		Fields: []fieldInfo{
 			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
@@ -458,7 +458,7 @@ func TestRenderStorageFile_softDelete(t *testing.T) {
 	// AC-005: fromModel populates delete_time.
 	mustContain(t, out, "m.DeletedAt.Valid")
 	mustContain(t, out, "timestamppb.New(m.DeletedAt.Time)")
-	mustNotContain(t, out, "m.DeleteTime = ")  // OUTPUT_ONLY: toModel never copies it
+	mustNotContain(t, out, "m.DeleteTime = ") // OUTPUT_ONLY: toModel never copies it
 
 	// AC-007: column map includes delete_time.
 	mustContain(t, out, `"delete_time": "deleted_at"`)
@@ -652,6 +652,106 @@ func TestRenderStorageFile_updateNeverWritesTenantKey(t *testing.T) {
 
 	// Tenant scoping is still enforced as a WHERE predicate.
 	mustContain(t, out, `"account_id = ?"`)
+}
+
+// A map<string,string> field is the Tags kind: a single types.Tags JSONB column
+// with both-direction conversions, persisted by a full update, and deliberately
+// absent from the filter/order_by column map.
+func TestRenderStorageFile_tagsField(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Resource",
+		PbPkgName:    "resv1",
+		PbImportPath: "example/res/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "label", GoFieldName: "Label", GoType: "string", SnakeName: "label"},
+			{Name: "tags", GoFieldName: "Tags", SnakeName: "tags", IsTags: true},
+		},
+	}
+	out := renderStorageFile("resv1storage", []messageInfo{msg})
+
+	// types import + a JSONB column backed by types.Tags.
+	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/types"`)
+	mustContain(t, out, "Tags types.Tags")
+	mustContain(t, out, "column:tags;type:jsonb")
+	// Conversions both directions (map <-> types.Tags).
+	mustContain(t, out, "m.Tags = types.Tags(p.Tags)")
+	mustContain(t, out, "p.Tags = map[string]string(m.Tags)")
+	// A no-field-mask full update persists tags.
+	mustContain(t, out, `"tags": m.Tags,`)
+	// Never treated as a skipped nested message or repeated field.
+	mustNotContain(t, out, "TODO: nested message tags skipped")
+	mustNotContain(t, out, "TODO: repeated field tags skipped")
+	// Present in exactly one column map — the JSON map for `tags.<key>` filtering,
+	// never the scalar filter/order_by map (so `tags` isn't order-by-able and a
+	// bare `tags = 'x'` can't hit a Postgres jsonb column).
+	if n := strings.Count(out, `"tags": "tags",`); n != 1 {
+		t.Errorf(`expected "tags" in exactly one (JSON) column map, found %d`, n)
+	}
+}
+
+// A column_type annotation overrides the default jsonb on a tags column.
+func TestRenderStorageFile_tagsColumnTypeOverride(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Resource",
+		PbPkgName:   "resv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "labels", GoFieldName: "Labels", SnakeName: "labels", IsTags: true, ColumnType: "json", ColumnName: "lbls"},
+		},
+	}
+	out := renderStorageFile("resv1storage", []messageInfo{msg})
+	mustContain(t, out, "column:lbls;type:json")
+}
+
+// No tags field → no types import.
+func TestRenderStorageFile_noTagsNoImport(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Plain",
+		PbPkgName:   "plainv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/types"`)
+	mustNotContain(t, out, "types.Tags")
+}
+
+// A tags field makes List dialect-aware: it emits a JSON column whitelist and
+// passes it plus the live dialect to filter.Parse.
+func TestRenderStorageFile_tagsFiltering(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Resource",
+		PbPkgName:   "resv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "tags", GoFieldName: "Tags", SnakeName: "tags", IsTags: true},
+		},
+	}
+	out := renderStorageFile("resv1storage", []messageInfo{msg})
+	mustContain(t, out, "var ResourceJSONColumns = map[string]string{")
+	mustContain(t, out, `"tags": "tags",`)
+	mustContain(t, out, "filter.WithJSONColumns(ResourceJSONColumns)")
+	mustContain(t, out, "filter.WithDialect(r.db.Dialector.Name())")
+}
+
+// A message with no tags keeps the plain (scalar-only) filter.Parse call and
+// emits no JSON column map.
+func TestRenderStorageFile_noTagsPlainFilter(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Plain",
+		PbPkgName:   "plainv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	mustContain(t, out, "filter.Parse(opts.Filter, PlainColumns)")
+	mustNotContain(t, out, "WithJSONColumns")
+	mustNotContain(t, out, "JSONColumns")
 }
 
 func mustContain(t *testing.T, s, substr string) {

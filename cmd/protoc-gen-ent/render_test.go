@@ -61,6 +61,35 @@ func TestRenderEntSchema_basicNoTenantNoSecret(t *testing.T) {
 	mustNotContain(t, out, "entgo.io/ent/schema/index")
 }
 
+// A map<string,string> field is the Tags kind: an Optional JSON ent field,
+// never a skipped nested message.
+func TestRenderEntSchema_tagsField(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Resource",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "tags", SnakeName: "tags", IsTags: true},
+		},
+	}
+	out := renderEntSchema(msg, nil)
+	mustContain(t, out, `field.JSON("tags", map[string]string{}).Optional()`)
+	mustNotContain(t, out, "TODO: nested message tags skipped")
+}
+
+// The generated batch wrapper sets a tags field via the generic writable path
+// (proto GetTags() and ent SetTags() are both map[string]string — no conversion).
+func TestRenderEntRepository_tagsInBatchUpdate(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Resource",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "tags", SnakeName: "tags", IsTags: true},
+		},
+	}
+	out := renderEntRepository(msg, "resv1", "example/res/v1")
+	mustContain(t, out, "u = u.SetTags(it.Entity.GetTags())")
+}
+
 func TestRenderEntSchema_accountIDAddsTenantMixin(t *testing.T) {
 	msg := entMessageInfo{
 		MessageName: "Record",

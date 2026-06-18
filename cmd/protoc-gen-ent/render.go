@@ -24,6 +24,7 @@ type entFieldInfo struct {
 	IsID       bool   // the resource primary key
 	IsRepeated bool   // repeated field — skipped with a TODO comment
 	IsMessage  bool   // nested message field — skipped with a TODO comment
+	IsTags     bool   // map<string,string> field — emitted as a JSON field
 	IsSecret   bool   // secret field — emitted as _hash + _cipher, never plaintext
 	OutputOnly bool   // AIP-203 OUTPUT_ONLY — never written by Create/Update/batch
 	// Storage constraints (from field.v1.FieldOptions).
@@ -228,6 +229,11 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 		case f.Name == "account_id" || f.SnakeName == "account_id":
 			// Supplied by TenantMixin — never emitted directly.
 			continue
+		case f.IsTags:
+			// Tags (map<string,string>) persist as a JSON field; ent picks the
+			// dialect-appropriate column (jsonb on Postgres). Optional so an absent
+			// or empty map is allowed.
+			fmt.Fprintf(&b, "\t\tfield.JSON(\"%s\", map[string]string{}).Optional(),\n", f.SnakeName)
 		case f.IsRepeated:
 			if f.HasMany != nil || f.ManyToMany != nil {
 				// Relationships are in Edges() — not a field.
@@ -423,8 +429,8 @@ func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) strin
 	if len(msg.Fields) == 0 {
 		return ""
 	}
-	res := msg.MessageName          // e.g. "APIKey"
-	lower := strings.ToLower(res)   // ent predicate pkg + helper prefix, e.g. "apikey"
+	res := msg.MessageName        // e.g. "APIKey"
+	lower := strings.ToLower(res) // ent predicate pkg + helper prefix, e.g. "apikey"
 	hasTenant := msgHasTenantField(msg)
 	hasSecret := msgHasSecretField(msg)
 	soft := msg.SoftDelete

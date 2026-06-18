@@ -40,6 +40,7 @@ type APIKeyMutation struct {
 	key_value_cipher *string
 	key_prefix       *string
 	label            *string
+	tags             *map[string]string
 	expire_time      *time.Time
 	clearedFields    map[string]struct{}
 	done             bool
@@ -481,6 +482,55 @@ func (m *APIKeyMutation) ResetLabel() {
 	delete(m.clearedFields, apikey.FieldLabel)
 }
 
+// SetTags sets the "tags" field.
+func (m *APIKeyMutation) SetTags(value map[string]string) {
+	m.tags = &value
+}
+
+// Tags returns the value of the "tags" field in the mutation.
+func (m *APIKeyMutation) Tags() (r map[string]string, exists bool) {
+	v := m.tags
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTags returns the old "tags" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldTags(ctx context.Context) (v map[string]string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTags is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTags requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTags: %w", err)
+	}
+	return oldValue.Tags, nil
+}
+
+// ClearTags clears the value of the "tags" field.
+func (m *APIKeyMutation) ClearTags() {
+	m.tags = nil
+	m.clearedFields[apikey.FieldTags] = struct{}{}
+}
+
+// TagsCleared returns if the "tags" field was cleared in this mutation.
+func (m *APIKeyMutation) TagsCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldTags]
+	return ok
+}
+
+// ResetTags resets all changes to the "tags" field.
+func (m *APIKeyMutation) ResetTags() {
+	m.tags = nil
+	delete(m.clearedFields, apikey.FieldTags)
+}
+
 // SetExpireTime sets the "expire_time" field.
 func (m *APIKeyMutation) SetExpireTime(t time.Time) {
 	m.expire_time = &t
@@ -564,7 +614,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 8)
+	fields := make([]string, 0, 9)
 	if m.account_id != nil {
 		fields = append(fields, apikey.FieldAccountID)
 	}
@@ -585,6 +635,9 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.label != nil {
 		fields = append(fields, apikey.FieldLabel)
+	}
+	if m.tags != nil {
+		fields = append(fields, apikey.FieldTags)
 	}
 	if m.expire_time != nil {
 		fields = append(fields, apikey.FieldExpireTime)
@@ -611,6 +664,8 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.KeyPrefix()
 	case apikey.FieldLabel:
 		return m.Label()
+	case apikey.FieldTags:
+		return m.Tags()
 	case apikey.FieldExpireTime:
 		return m.ExpireTime()
 	}
@@ -636,6 +691,8 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldKeyPrefix(ctx)
 	case apikey.FieldLabel:
 		return m.OldLabel(ctx)
+	case apikey.FieldTags:
+		return m.OldTags(ctx)
 	case apikey.FieldExpireTime:
 		return m.OldExpireTime(ctx)
 	}
@@ -696,6 +753,13 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLabel(v)
 		return nil
+	case apikey.FieldTags:
+		v, ok := value.(map[string]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTags(v)
+		return nil
 	case apikey.FieldExpireTime:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -751,6 +815,9 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	if m.FieldCleared(apikey.FieldLabel) {
 		fields = append(fields, apikey.FieldLabel)
 	}
+	if m.FieldCleared(apikey.FieldTags) {
+		fields = append(fields, apikey.FieldTags)
+	}
 	if m.FieldCleared(apikey.FieldExpireTime) {
 		fields = append(fields, apikey.FieldExpireTime)
 	}
@@ -786,6 +853,9 @@ func (m *APIKeyMutation) ClearField(name string) error {
 	case apikey.FieldLabel:
 		m.ClearLabel()
 		return nil
+	case apikey.FieldTags:
+		m.ClearTags()
+		return nil
 	case apikey.FieldExpireTime:
 		m.ClearExpireTime()
 		return nil
@@ -817,6 +887,9 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldLabel:
 		m.ResetLabel()
+		return nil
+	case apikey.FieldTags:
+		m.ResetTags()
 		return nil
 	case apikey.FieldExpireTime:
 		m.ResetExpireTime()

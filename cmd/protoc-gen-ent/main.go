@@ -105,6 +105,13 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			if field.Message != nil {
 				relatedType = string(field.Message.GoIdent.GoName)
 			}
+			// A proto map<string, string> is the Tags field kind: an ent JSON field,
+			// not a nested message or edge. A map arrives as Kind()==MessageKind with
+			// IsMap()==true, so detect it here or it falls into the nested-message
+			// skip below. Non-string maps keep the old skip behavior.
+			isStringMap := field.Desc.IsMap() &&
+				field.Desc.MapKey().Kind() == protoreflect.StringKind &&
+				field.Desc.MapValue().Kind() == protoreflect.StringKind
 			// AIP-148: detect soft-delete and TTL markers.
 			fieldName := string(field.Desc.Name())
 			isTimestamp := field.Desc.Kind() == protoreflect.MessageKind &&
@@ -132,7 +139,8 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				EntType:     protoKindToEntType(field.Desc.Kind()),
 				IsID:        string(field.Desc.Name()) == "id",
 				IsRepeated:  field.Desc.IsList(),
-				IsMessage:   field.Desc.Kind() == protoreflect.MessageKind,
+				IsMessage:   field.Desc.Kind() == protoreflect.MessageKind && !isStringMap,
+				IsTags:      isStringMap,
 				IsSecret:    isSecret,
 				OutputOnly:  isOutputOnly,
 				NotNull:     notNull,
