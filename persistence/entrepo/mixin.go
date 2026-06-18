@@ -14,7 +14,11 @@ import (
 type softDeleteContextKey struct{}
 
 // TenantFilterer is implemented by generated ent query types that support
-// tenant-scoped filtering. protoc-gen-ent emits WhereAccountID on each query type.
+// tenant-scoped filtering. protoc-gen-ent emits WhereAccountID on each tenant
+// resource's query type (in ent/<resource>_filter.ent.go); the TenantMixin
+// interceptor below calls it. If a query type does not implement this interface
+// the filter is silently skipped — which is why the method is generated, not
+// left to the consumer (GH #39).
 type TenantFilterer interface {
 	WhereAccountID(id string)
 }

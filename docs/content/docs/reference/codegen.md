@@ -205,12 +205,14 @@ lives in `testdata/fleet/`.
 - In a **consumer module**, give `protoc-gen-ent` a bare `out: .` (it writes `ent/schema/...`). Do
   **not** add the `opt: module=...` used for the other plugins — ent rejects it
   (`generated file does not match prefix`).
-- **Cold-start order matters.** `buf generate` writes the schema *and* a `*.batch.ent.go` wrapper
-  that imports the not-yet-generated ent *client* packages (`<module>/ent/<resource>`), so a plain
-  `go mod tidy` can't resolve the module before the client exists, and `go generate ./ent` can't run
-  without the ent codegen toolchain in `go.sum`. Break the deadlock once, in this order:
+- **Cold-start order matters.** `buf generate` writes the schema *and* generated files that import
+  the not-yet-generated ent *client* packages (`<module>/ent/<resource>`): the `*.batch.ent.go` batch
+  wrappers and the `ent/*_filter.ent.go` tenant / soft-delete filterers. In a fresh module a plain
+  `go mod tidy` therefore **fails** — it treats `<module>/ent/<resource>` as a remote dependency and
+  reports `Repository not found` for your own module path, aborting before it can pull the ent codegen
+  toolchain that `go generate ./ent` then needs in `go.sum`. Break the deadlock once, in this order:
 
-  1. Pin the ent codegen tool so its deps survive `go mod tidy` — add a `tools.go`:
+  1. Pin the ent codegen tool so it stays in `go.mod` across future tidies — add a `tools.go`:
      ```go
      //go:build tools
 
@@ -218,13 +220,52 @@ lives in `testdata/fleet/`.
 
      import _ "entgo.io/ent/cmd/ent"
      ```
-  2. `go mod tidy` (the schema + storage + pb packages now resolve; the wrapper is excluded only if
-     the client is missing — see step 3).
-  3. `go generate ./ent` to produce the client, then `go mod tidy` again. The `*.batch.ent.go`
-     wrapper now compiles.
+  2. Pull the codegen toolchain into `go.sum` **without** a full `go mod tidy` (which would choke on
+     the not-yet-generated client packages above) — `go get` resolves the tool and its deps without
+     building your module:
+     ```
+     go get entgo.io/ent/cmd/ent
+     ```
+  3. `go generate ./ent` — this produces the client, so the `<module>/ent/<resource>` packages the
+     wrappers and filterers import now exist.
+  4. `go mod tidy` — everything resolves now that the client is generated.
 
   After this, regenerating is just `buf generate` → `go generate ./ent`. `testdata/fleet/tools.go`
   shows the pin.
+
+**Testing the ent client (SQLite driver name).** ent's SQLite dialect is `"sqlite3"`
+(`dialect.SQLite`), but the pure-Go driver `modernc.org/sqlite` registers itself under the name
+`"sqlite"` — so `enttest.Open(t, "sqlite3", …)` fails with `sql: unknown driver "sqlite3"` unless you
+register the alias. Do it once in your test package, and turn on foreign keys in the DSN:
+
+```go
+import (
+    "database/sql"
+    "database/sql/driver"
+
+    _ "modernc.org/sqlite" // registers driver name "sqlite"
+)
+
+func init() {
+    for _, n := range sql.Drivers() {
+        if n == "sqlite3" {
+            return // already present (e.g. mattn/go-sqlite3 pulled in transitively)
+        }
+    }
+    db, _ := sql.Open("sqlite", ":memory:")
+    drv := db.Driver()
+    _ = db.Close()
+    sql.Register("sqlite3", drv.(driver.Driver))
+}
+
+// client := enttest.Open(t, "sqlite3", "file:ent?mode=memory&_pragma=foreign_keys(1)")
+```
+
+If the same module also pulls `github.com/mattn/go-sqlite3` (e.g. via `gorm.io/driver/sqlite` for a
+GORM backend), it already registers `"sqlite3"` — the guard above skips the alias — and it reads the
+foreign-key pragma as `_fk=1`, so use a DSN that satisfies both drivers:
+`file:ent?mode=memory&_pragma=foreign_keys(1)&_fk=1`. `testdata/fleet/fleetv1/sqlite_test.go` is the
+canonical shim.
 {{< /callout >}}
 
 ## Putting them in `buf.gen.yaml`

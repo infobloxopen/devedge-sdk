@@ -68,12 +68,16 @@ with no grant at all sees **403**, not 404. To observe the 404 isolation path en
 tenants the verb/resource and let the repository hide the row; `seccheck.AssertCrossAccountIsolation`
 exercises the repository layer directly, which is why it asserts NotFound.
 
-## ent shape — the privacy layer
+## ent shape — the query interceptor
 
-The ent shape enforces the same invariant through ent's **privacy** rules and **hooks**, applied
-by the generated mixin. Tenant scoping is a query-level privacy rule, so it holds even for ad-hoc
-graph traversals — not just the CRUD methods. The mixin reads the tenant from the same
-`middleware.TenantIDFromContext(ctx)`.
+The ent shape enforces the same invariant through a **query interceptor** installed by the generated
+`entrepo.TenantMixin` (embedded automatically whenever the message has an `account_id`). The
+interceptor runs on every `Get`/`List`/edge-traversal query and scopes it to
+`middleware.TenantIDFromContext(ctx)` — so the bound holds even for ad-hoc graph traversals, not just
+the CRUD methods. It applies the scope by calling a generated `WhereAccountID` method on the query
+type: `protoc-gen-ent` emits one per tenant resource in `ent/<resource>_filter.ent.go`, so isolation
+is wired without any consumer code. (Soft-delete works the same way via `SoftDeleteMixin` and a
+generated `WhereDeleteTimeIsNil`.)
 
 ## Proving it: `seccheck.AssertCrossAccountIsolation`
 

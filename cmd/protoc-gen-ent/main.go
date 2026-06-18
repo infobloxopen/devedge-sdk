@@ -190,6 +190,21 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		bg := gen.NewGeneratedFile(outPath, f.GoImportPath)
 		bg.P(content)
 	}
+
+	// Per-resource query filterers (ent/<snake>_filter.ent.go): WhereAccountID and
+	// WhereDeleteTimeIsNil, so each generated <Resource>Query satisfies
+	// entrepo.TenantFilterer / SoftDeleteFilterer. The mixin interceptors call
+	// these by interface assertion; without them tenant isolation and soft-delete
+	// silently no-op while still compiling (GH #39). Emitted into package ent.
+	for _, msg := range messages {
+		content := renderEntFilterers(msg, string(f.GoImportPath))
+		if content == "" {
+			continue
+		}
+		outPath := "ent/" + toSnake(msg.MessageName) + "_filter.ent.go"
+		fg := gen.NewGeneratedFile(outPath, f.GoImportPath)
+		fg.P(content)
+	}
 }
 
 // protoKindToEntType maps a proto field kind to the ent field constructor name

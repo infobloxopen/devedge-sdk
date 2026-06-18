@@ -15,7 +15,9 @@ import (
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
@@ -119,25 +121,62 @@ func New(cfg Config) (*Server, error) {
 
 	var gwMux *runtime.ServeMux
 	if cfg.HTTPAddr != "" {
-		gwMux = runtime.NewServeMux(runtime.WithIncomingHeaderMatcher(incomingHeaderMatcher))
+		gwMux = runtime.NewServeMux(
+			runtime.WithIncomingHeaderMatcher(incomingHeaderMatcher),
+			runtime.WithErrorHandler(httpErrorHandler),
+		)
 	}
 
 	return &Server{cfg: cfg, grpcSrv: grpcSrv, gwMux: gwMux}, nil
 }
 
-// incomingHeaderMatcher forwards the identity headers the framework chain reads —
-// account-id (tenant scoping, via middleware.TenantIDUnary) plus subject/groups
-// (consumed by grpcauthz.DevPrincipalFunc) — from the HTTP gateway into gRPC
-// metadata, so the documented REST examples work with plain headers such as
-// `-H 'account-id: t1'`. All other headers keep grpc-gateway's default behavior,
-// including the standard `Grpc-Metadata-` prefix passthrough.
+// incomingHeaderMatcher forwards the headers the framework chain reads — from the
+// HTTP gateway into gRPC metadata — so the documented REST examples work with
+// plain headers:
+//   - account-id (tenant scoping, via middleware.TenantIDUnary) plus subject/groups
+//     (consumed by grpcauthz.DevPrincipalFunc), e.g. `-H 'account-id: t1'`;
+//   - if-match / if-none-match (AIP-154 conditional requests) so etag.PreconditionUnary
+//     can enforce the 412 precondition over the gateway, not just over direct gRPC.
+// All other headers keep grpc-gateway's default behavior, including the standard
+// `Grpc-Metadata-` prefix passthrough.
 func incomingHeaderMatcher(key string) (string, bool) {
 	switch strings.ToLower(key) {
-	case "account-id", "subject", "groups":
+	case "account-id", "subject", "groups", "if-match", "if-none-match":
 		return strings.ToLower(key), true
 	default:
 		return runtime.DefaultHeaderMatcher(key)
 	}
+}
+
+// httpErrorHandler is the gateway's HTTP error handler. It defers to
+// grpc-gateway's default mapping/body for every error except a failed AIP-154
+// ETag precondition: middleware.ErrorMapperUnary surfaces that as
+// codes.FailedPrecondition, which grpc-gateway would otherwise render as 400.
+// AIP-154 specifies 412 Precondition Failed, and the documented client recipe
+// ("echo the ETag as If-Match for a 412-guarded conditional update") expects it,
+// so we keep the default JSON body but override the status line to 412.
+func httpErrorHandler(ctx context.Context, mux *runtime.ServeMux, m runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
+	if status.Code(err) == codes.FailedPrecondition {
+		w = &statusOverrideWriter{ResponseWriter: w, code: http.StatusPreconditionFailed}
+	}
+	runtime.DefaultHTTPErrorHandler(ctx, mux, m, w, r, err)
+}
+
+// statusOverrideWriter forces the HTTP status code written by the wrapped
+// handler to a fixed value, leaving headers and body untouched. Used to surface
+// a failed ETag precondition as 412 (see httpErrorHandler).
+type statusOverrideWriter struct {
+	http.ResponseWriter
+	code        int
+	wroteHeader bool
+}
+
+func (w *statusOverrideWriter) WriteHeader(int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(w.code)
 }
 
 // Serve starts the gRPC server (and the HTTP gateway when configured) and
