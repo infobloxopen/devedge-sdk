@@ -1,4 +1,4 @@
-.PHONY: build test security-check vet lint tidy generate
+.PHONY: build test security-check vet lint tidy generate sync-scaffold-mirrors
 
 # Regenerate protobuf Go bindings (the authz annotation + the authzpb test fixture)
 # and the <Service>AuthzRules tables. Requires buf + protoc-gen-go on PATH; the
@@ -23,6 +23,14 @@ generate:
 	@echo "      resource shape changed, regenerate the ent CLIENT too:"
 	@echo "        cd testdata/apikey && go generate ./ent"
 	@echo "        cd testdata/fleet  && go generate ./ent"
+
+# Refresh the annotation .proto mirrors embedded in the `devedge-sdk new service`
+# scaffold (cmd/devedge-sdk) from the canonical proto/infoblox source. The
+# scaffold vendors these into generated projects so buf can resolve the
+# infoblox/{authz,field} imports. TestMirrorsMatchSDKSource fails if they drift.
+sync-scaffold-mirrors:
+	cp proto/infoblox/authz/v1/authz.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/authz/v1/authz.proto
+	cp proto/infoblox/field/v1/field.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/field/v1/field.proto
 
 build:
 	go build ./...
