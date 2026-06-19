@@ -11,6 +11,7 @@ devedge-sdk is a Go module. To build a service with it you need:
 |---|---|---|
 | **Go** | 1.25+ | the SDK module targets a current Go toolchain |
 | **buf** | latest | drives proto compilation and the codegen plugins ([buf.build](https://buf.build)) |
+| **apx** | 0.12.1+ | declares/governs the public API surface; the `devedge-sdk new` scaffold shells out to `apx init app` ([infobloxopen/apx](https://github.com/infobloxopen/apx)) |
 | **protoc-gen-go**, **protoc-gen-go-grpc** | latest | base proto/gRPC code generation |
 | **PostgreSQL** | 14+ (prod shapes) | only needed when you use a real GORM/ent backend; the in-memory store and SQLite suffice for tests |
 | **HashiCorp Vault** | optional | only for production secret handling via Transit; dev mode uses AES-256-GCM with no external service |
@@ -44,6 +45,24 @@ The core packages depend only on the standard library plus gRPC and protobuf. Th
 **no ORM dependency** and **no policy-engine dependency** — those live in adapters built *on*
 the SDK, or in the generated storage code's own module (so `gorm.io/gorm` never enters the
 SDK's `go.mod`).
+
+## Install the scaffold CLI (recommended)
+
+The fastest way to start is the `devedge-sdk` CLI. It scaffolds a complete, building, authz-gated,
+persisted service in one command — declaring the **public API surface** as an [`apx`](https://github.com/infobloxopen/apx)
+`app` module and generating the **internal models** locally with the SDK plugins (which it installs and
+invokes for you):
+
+```bash
+go install github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk@latest
+
+devedge-sdk new service notes --resource Note --backend gorm   # or --backend ent
+```
+
+This emits the `buf.yaml`/`buf.gen.yaml`/`apx.yaml` wiring, an annotated example proto, the server, and a
+smoke test, then runs the first `buf generate`. See the [Quickstart](../quickstart/) for the full walk-through.
+The manual plugin install below is what the CLI does under the hood — useful when wiring an existing repo
+by hand (see [Define a service](../../guides/define-a-service/)).
 
 ## Install the codegen plugins
 
