@@ -88,7 +88,7 @@ storage and lifecycle; you never write the plumbing.
 | Field (proto) | Type | What it gives you |
 |---|---|---|
 | `account_id` | `string` | **Tenant scope.** Every query is automatically filtered by `account_id` from `middleware.TenantIDFromContext(ctx)` — see [Tenant Isolation](../../concepts/tenant-isolation/). It also makes `unique` per-tenant (below). |
-| `etag` | `string` `OUTPUT_ONLY` | **AIP-154 concurrency.** Stamped on every write, surfaced on read; a client echoes it as `If-Match` for a 412-guarded conditional update. |
+| `etag` | `string` `OUTPUT_ONLY` | **AIP-154 concurrency.** Stamped on every write, surfaced on read; a client echoes it as `If-Match` for a 412-guarded conditional update. Auto-stamped on **both** backends (ent via the generated `EtagMixin`); on ent, surface it with `p.Etag = e.Etag` in your `fromEnt` mapping — see [codegen → ETag](../../reference/codegen/). |
 | `delete_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 soft-delete.** Opts the resource into soft-delete (a `DeletedAt` column); `Delete` sets it, `Undelete` clears it, `List` hides soft-deleted rows unless `show_deleted`. Omit the field for hard-delete. |
 | `expire_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 TTL.** Adds an `expire_time` column and a `PurgeExpired` method to the repository. |
 | `created_at`, `updated_at` | — | Added to every model automatically; you don't declare them. |

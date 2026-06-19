@@ -14,6 +14,7 @@ type entMessageInfo struct {
 	Fields        []entFieldInfo
 	SoftDelete    bool // true when the message has a delete_time OUTPUT_ONLY Timestamp field (AIP-148)
 	HasExpireTime bool // true when the message has an expire_time OUTPUT_ONLY Timestamp field (AIP-148)
+	HasETag       bool // true when the message has a string `etag` field (AIP-154); supplied by EtagMixin
 }
 
 // entFieldInfo describes a single proto message field for ent schema generation.
@@ -198,7 +199,8 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	// Imports. The index package is only needed when at least one index is
 	// emitted (secret fields or index-annotated fields). The edge package is
 	// only needed when relationship annotations are present. The entrepo
-	// package is only needed when TenantMixin or SoftDeleteMixin is referenced.
+	// package is only needed when TenantMixin, SoftDeleteMixin, or EtagMixin is
+	// referenced.
 	b.WriteString("import (\n")
 	b.WriteString("\t\"entgo.io/ent\"\n")
 	if hasEdges {
@@ -208,7 +210,7 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	if hasSecret || hasIndex || hasTenantUnique {
 		b.WriteString("\t\"entgo.io/ent/schema/index\"\n")
 	}
-	if hasTenant || hasSoftDelete {
+	if hasTenant || hasSoftDelete || msg.HasETag {
 		b.WriteString("\n\t\"github.com/infobloxopen/devedge-sdk/persistence/entrepo\"\n")
 	}
 	b.WriteString(")\n\n")
@@ -219,8 +221,9 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	b.WriteString("\tent.Schema\n")
 	b.WriteString("}\n\n")
 
-	// Mixin(): emitted when any mixin is needed (TenantMixin, SoftDeleteMixin).
-	if hasTenant || hasSoftDelete {
+	// Mixin(): emitted when any mixin is needed (TenantMixin, SoftDeleteMixin,
+	// EtagMixin).
+	if hasTenant || hasSoftDelete || msg.HasETag {
 		fmt.Fprintf(&b, "// Mixin returns the mixins applied to %s.\n", msg.MessageName)
 		fmt.Fprintf(&b, "func (%s) Mixin() []ent.Mixin {\n", msg.MessageName)
 		b.WriteString("\treturn []ent.Mixin{\n")
@@ -229,6 +232,11 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 		}
 		if hasSoftDelete {
 			b.WriteString("\t\tentrepo.SoftDeleteMixin{},\n")
+		}
+		if msg.HasETag {
+			// EtagMixin supplies the etag column and stamps a fresh token on every
+			// Create/Update (AIP-154), mirroring the GORM backend.
+			b.WriteString("\t\tentrepo.EtagMixin{},\n")
 		}
 		b.WriteString("\t}\n")
 		b.WriteString("}\n\n")

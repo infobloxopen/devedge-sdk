@@ -40,6 +40,20 @@ func (_c *APIKeyCreate) SetNillableDeleteTime(v *time.Time) *APIKeyCreate {
 	return _c
 }
 
+// SetEtag sets the "etag" field.
+func (_c *APIKeyCreate) SetEtag(v string) *APIKeyCreate {
+	_c.mutation.SetEtag(v)
+	return _c
+}
+
+// SetNillableEtag sets the "etag" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableEtag(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetEtag(*v)
+	}
+	return _c
+}
+
 // SetName sets the "name" field.
 func (_c *APIKeyCreate) SetName(v string) *APIKeyCreate {
 	_c.mutation.SetName(v)
@@ -220,6 +234,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DeleteTime(); ok {
 		_spec.SetField(apikey.FieldDeleteTime, field.TypeTime, value)
 		_node.DeleteTime = &value
+	}
+	if value, ok := _c.mutation.Etag(); ok {
+		_spec.SetField(apikey.FieldEtag, field.TypeString, value)
+		_node.Etag = value
 	}
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)

@@ -99,8 +99,19 @@ string etag = N [(google.api.field_behavior) = OUTPUT_ONLY];
 it on every read** (`fromModel` copies the stored `etag` column onto the proto). A `Get` therefore
 returns a stable token a client echoes as `If-Match`; the token changes on the next write, so a
 stale `If-Match` is rejected with a 412 (see [middleware → etag](../middleware/#etag--412-preconditions)
-for the handler pattern). The token is opaque — clients must not parse it. On the **ent** backend the
-`etag` field is not auto-stamped (compute it in your ent wiring if needed).
+for the handler pattern). The token is opaque — clients must not parse it.
+
+On the **ent** backend you get the same behavior: `protoc-gen-ent` adds the generated `entrepo.EtagMixin`,
+which supplies the `etag` column **and** a mutation hook that stamps a fresh `etag.New()` token on every
+Create/Update — automatically, with no consumer code on the write path. Surface it on reads by copying it
+onto the proto in your `fromEnt<Resource>` mapping, alongside the other fields:
+
+```go
+p.Etag = e.Etag // AIP-154: the EtagMixin-stamped token a client echoes as If-Match
+```
+
+The If-Match precondition comparison is the same documented handler pattern on both backends (see
+[middleware → etag](../middleware/#etag--412-preconditions)).
 
 ### Secret fields
 

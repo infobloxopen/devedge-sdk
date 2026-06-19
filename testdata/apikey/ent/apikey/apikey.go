@@ -16,6 +16,8 @@ const (
 	FieldAccountID = "account_id"
 	// FieldDeleteTime holds the string denoting the delete_time field in the database.
 	FieldDeleteTime = "delete_time"
+	// FieldEtag holds the string denoting the etag field in the database.
+	FieldEtag = "etag"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
 	// FieldKeyValueHash holds the string denoting the key_value_hash field in the database.
@@ -39,6 +41,7 @@ var Columns = []string{
 	FieldID,
 	FieldAccountID,
 	FieldDeleteTime,
+	FieldEtag,
 	FieldName,
 	FieldKeyValueHash,
 	FieldKeyValueCipher,
@@ -64,6 +67,7 @@ func ValidColumn(column string) bool {
 //
 //	import _ "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/runtime"
 var (
+	Hooks        [1]ent.Hook
 	Interceptors [2]ent.Interceptor
 	// AccountIDValidator is a validator for the "account_id" field. It is called by the builders before save.
 	AccountIDValidator func(string) error
@@ -85,6 +89,11 @@ func ByAccountID(opts ...sql.OrderTermOption) OrderOption {
 // ByDeleteTime orders the results by the delete_time field.
 func ByDeleteTime(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDeleteTime, opts...).ToFunc()
+}
+
+// ByEtag orders the results by the etag field.
+func ByEtag(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEtag, opts...).ToFunc()
 }
 
 // ByName orders the results by the name field.

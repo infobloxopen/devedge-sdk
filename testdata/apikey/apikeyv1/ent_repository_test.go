@@ -147,3 +147,43 @@ func TestEntRepository_GetAndDelete(t *testing.T) {
 		t.Errorf("get after delete: expected ErrNotFound, got %v", err)
 	}
 }
+
+// TestEntRepository_ETagStampedAndChanges is the ent-backend counterpart of
+// TestETag_GORM_StampedAndChanges (#49): EtagMixin must stamp a non-empty token
+// on Create, surface it on read (so a client can echo it as If-Match), keep it
+// stable between writes, and re-stamp it on Update (so a stale If-Match yields a
+// 412). Before the fix protoc-gen-ent dropped the etag field entirely, so the
+// ent ETag was always empty and the documented conditional-request loop was a
+// dead end on ent while working on GORM.
+func TestEntRepository_ETagStampedAndChanges(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:etag_ent_rt?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
+	ctx := tenantCtx("t1")
+
+	created, err := repo.Create(ctx, &apikeyv1.APIKey{Id: "k1", Name: "a", AccountId: "t1", KeyValue: "sk_1"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.Etag == "" {
+		t.Fatal("ent Create response ETag is empty; want an EtagMixin-stamped token")
+	}
+
+	got, err := repo.Get(ctx, "k1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Etag != created.Etag {
+		t.Errorf("Get ETag = %q, want %q (must be stable until the next write)", got.Etag, created.Etag)
+	}
+
+	updated, err := repo.Update(ctx, "k1", &apikeyv1.APIKey{Id: "k1", Name: "b"}, "name")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Etag == "" || updated.Etag == created.Etag {
+		t.Errorf("Update ETag = %q, want a fresh non-empty token (was %q)", updated.Etag, created.Etag)
+	}
+}

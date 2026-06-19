@@ -127,11 +127,13 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					continue // emitted as a direct Time field in renderEntSchema
 				}
 			}
-			// AIP-154 ETag is framework-managed and not auto-stamped on the ent
-			// backend (the GORM storage layer computes it). Skip the `etag` field
-			// so it does not become a stray, never-populated ent column.
+			// AIP-154 ETag is framework-managed: EtagMixin supplies the `etag`
+			// column AND a mutation hook that stamps a fresh token on every
+			// Create/Update (mirroring the GORM storage layer). It is owned by the
+			// mixin, so it is not emitted as a direct field here.
 			if fieldName == "etag" && field.Desc.Kind() == protoreflect.StringKind {
-				continue
+				msg.HasETag = true
+				continue // EtagMixin owns this field
 			}
 			msg.Fields = append(msg.Fields, entFieldInfo{
 				Name:        string(field.Desc.Name()),

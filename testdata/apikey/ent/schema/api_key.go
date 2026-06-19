@@ -19,6 +19,7 @@ func (APIKey) Mixin() []ent.Mixin {
 	return []ent.Mixin{
 		entrepo.TenantMixin{},
 		entrepo.SoftDeleteMixin{},
+		entrepo.EtagMixin{},
 	}
 }
 

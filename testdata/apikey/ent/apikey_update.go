@@ -48,6 +48,26 @@ func (_u *APIKeyUpdate) ClearDeleteTime() *APIKeyUpdate {
 	return _u
 }
 
+// SetEtag sets the "etag" field.
+func (_u *APIKeyUpdate) SetEtag(v string) *APIKeyUpdate {
+	_u.mutation.SetEtag(v)
+	return _u
+}
+
+// SetNillableEtag sets the "etag" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableEtag(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetEtag(*v)
+	}
+	return _u
+}
+
+// ClearEtag clears the value of the "etag" field.
+func (_u *APIKeyUpdate) ClearEtag() *APIKeyUpdate {
+	_u.mutation.ClearEtag()
+	return _u
+}
+
 // SetName sets the "name" field.
 func (_u *APIKeyUpdate) SetName(v string) *APIKeyUpdate {
 	_u.mutation.SetName(v)
@@ -227,6 +247,12 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.DeleteTimeCleared() {
 		_spec.ClearField(apikey.FieldDeleteTime, field.TypeTime)
 	}
+	if value, ok := _u.mutation.Etag(); ok {
+		_spec.SetField(apikey.FieldEtag, field.TypeString, value)
+	}
+	if _u.mutation.EtagCleared() {
+		_spec.ClearField(apikey.FieldEtag, field.TypeString)
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 	}
@@ -306,6 +332,26 @@ func (_u *APIKeyUpdateOne) SetNillableDeleteTime(v *time.Time) *APIKeyUpdateOne 
 // ClearDeleteTime clears the value of the "delete_time" field.
 func (_u *APIKeyUpdateOne) ClearDeleteTime() *APIKeyUpdateOne {
 	_u.mutation.ClearDeleteTime()
+	return _u
+}
+
+// SetEtag sets the "etag" field.
+func (_u *APIKeyUpdateOne) SetEtag(v string) *APIKeyUpdateOne {
+	_u.mutation.SetEtag(v)
+	return _u
+}
+
+// SetNillableEtag sets the "etag" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableEtag(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetEtag(*v)
+	}
+	return _u
+}
+
+// ClearEtag clears the value of the "etag" field.
+func (_u *APIKeyUpdateOne) ClearEtag() *APIKeyUpdateOne {
+	_u.mutation.ClearEtag()
 	return _u
 }
 
@@ -517,6 +563,12 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if _u.mutation.DeleteTimeCleared() {
 		_spec.ClearField(apikey.FieldDeleteTime, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Etag(); ok {
+		_spec.SetField(apikey.FieldEtag, field.TypeString, value)
+	}
+	if _u.mutation.EtagCleared() {
+		_spec.ClearField(apikey.FieldEtag, field.TypeString)
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)

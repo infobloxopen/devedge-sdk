@@ -8,6 +8,7 @@ import (
 	"entgo.io/ent/schema/mixin"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 )
 
 // softDeleteContextKey is the unexported key for the show_deleted flag in context.
@@ -119,5 +120,55 @@ func (SoftDeleteMixin) Interceptors() []ent.Interceptor {
 				return next.Query(ctx, q)
 			})
 		}),
+	}
+}
+
+// etagSetter is implemented by every generated mutation type for a resource that
+// embeds EtagMixin (the mixin's etag field generates a SetEtag method). The hook
+// below uses it to stamp a fresh token without depending on a concrete type.
+type etagSetter interface {
+	SetEtag(string)
+}
+
+// EtagMixin is an ent schema mixin that adds an opaque AIP-154 `etag` field and a
+// mutation hook that stamps a fresh token (etag.New) on every Create and Update —
+// so a resource's ETag changes whenever the resource changes. This mirrors the
+// GORM storage layer, which stamps etag.New() on Create/Update, giving the two
+// backends the same optimistic-concurrency behavior out of the box.
+//
+// Generated schemas embed this mixin when the proto message has a string `etag`
+// field. The write path (persist + re-stamp) is fully automatic — there is no
+// consumer code to write for it. A consumer's fromEnt mapping surfaces e.Etag on
+// the proto so a Get returns the stable token a client echoes as If-Match; the
+// If-Match precondition comparison itself stays the documented handler pattern,
+// identical on both backends.
+type EtagMixin struct {
+	mixin.Schema
+}
+
+func (EtagMixin) Fields() []ent.Field {
+	return []ent.Field{
+		field.String("etag").
+			Optional().
+			Comment("AIP-154 opaque concurrency token; re-stamped on every write."),
+	}
+}
+
+func (EtagMixin) Hooks() []ent.Hook {
+	return []ent.Hook{
+		func(next ent.Mutator) ent.Mutator {
+			return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+				// Stamp a fresh token on create and every update. ent query
+				// interceptors do not run for mutations, so this lives in a hook
+				// (which does) — the write-path analogue of the Tenant/SoftDelete
+				// query interceptors above.
+				if m.Op().Is(ent.OpCreate | ent.OpUpdate | ent.OpUpdateOne) {
+					if s, ok := m.(etagSetter); ok {
+						s.SetEtag(etag.New())
+					}
+				}
+				return next.Mutate(ctx, m)
+			})
+		},
 	}
 }
