@@ -205,6 +205,21 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		fg := gen.NewGeneratedFile(outPath, f.GoImportPath)
 		fg.P(content)
 	}
+
+	// GH #47: per-resource ent column maps (<pkg>/<snake>.columns.ent.go) so an
+	// ent-only service can wire AIP-160 filter / AIP-132 order_by / tag filtering
+	// without hand-maintaining the proto-field→column whitelist. Emitted into the
+	// proto's Go package with ent-suffixed names so they coexist with the GORM
+	// backend's <Msg>Columns when both generators run.
+	for _, msg := range messages {
+		content := renderEntColumns(msg, pkgName)
+		if content == "" {
+			continue
+		}
+		outPath := pkgName + "/" + toSnake(msg.MessageName) + ".columns.ent.go"
+		cg := gen.NewGeneratedFile(outPath, f.GoImportPath)
+		cg.P(content)
+	}
 }
 
 // protoKindToEntType maps a proto field kind to the ent field constructor name

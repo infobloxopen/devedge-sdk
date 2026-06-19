@@ -12,19 +12,26 @@ var (
 	FleetsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
 		{Name: "account_id", Type: field.TypeString},
-		{Name: "display_name", Type: field.TypeString, Unique: true, Nullable: true},
+		{Name: "display_name", Type: field.TypeString, Nullable: true},
 	}
 	// FleetsTable holds the schema information for the "fleets" table.
 	FleetsTable = &schema.Table{
 		Name:       "fleets",
 		Columns:    FleetsColumns,
 		PrimaryKey: []*schema.Column{FleetsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "ux_fleet_account_display_name",
+				Unique:  true,
+				Columns: []*schema.Column{FleetsColumns[1], FleetsColumns[2]},
+			},
+		},
 	}
 	// VehiclesColumns holds the columns for the "vehicles" table.
 	VehiclesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
 		{Name: "account_id", Type: field.TypeString},
-		{Name: "vin", Type: field.TypeString, Unique: true, Nullable: true},
+		{Name: "vin", Type: field.TypeString, Nullable: true},
 		{Name: "fleet_id", Type: field.TypeString, Nullable: true},
 	}
 	// VehiclesTable holds the schema information for the "vehicles" table.
@@ -38,6 +45,13 @@ var (
 				Columns:    []*schema.Column{VehiclesColumns[3]},
 				RefColumns: []*schema.Column{FleetsColumns[0]},
 				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "ux_vehicle_account_vin",
+				Unique:  true,
+				Columns: []*schema.Column{VehiclesColumns[1], VehiclesColumns[2]},
 			},
 		},
 	}
