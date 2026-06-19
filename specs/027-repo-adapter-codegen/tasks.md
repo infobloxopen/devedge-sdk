@@ -28,16 +28,20 @@ Gate: each phase's tests green before the next. No back-compat — clean impleme
 - [X] T402 `[C]` **Obviated — no scaffolder/CLI needed.** The package-var hook idiom means the developer registers hooks from their OWN regen-safe file (e.g. an `init()`); there is no generated file to scaffold-once or clobber. This is simpler than a `_projection_custom.go` generator and still satisfies the split-files "owned, survives regen" goal. (Fail-closed (Phase 3), not a hook, handles unmapped fields — so no `// devedge:wire` stubs are needed.)
 - [X] T403 `[S]` Runtime test `testdata/apikey/.../repo_custom_hook_test.go`: registers the exported hooks from the external test package, proves the read hook runs after the deterministic projection (Create + Get) and the create hook runs before save; render test asserts the hook vars + call sites are emitted. Regeneration is idempotent — hooks live in the generated file; registration lives in the consumer's file, untouched by codegen.
 
-## Phase 5 — neutral multi-surface annotation
-- [ ] T501 `[C]` Define `proto/infoblox/storage/v1/storage.proto` MessageOptions extension `model`; generate Go; vendor/wire into the plugins. FR G-004
-- [ ] T502 `[C]` Group messages by resolved model name → one repo + N projections; conflicting field types across surfaces → fail-closed. AC-004
-- [ ] T503 `[S]` Multi-surface fixture + round-trip test. AC-004
+## Phase 5 — neutral multi-surface annotation (CONTRACT only; codegen deferred) ✅ T501 done
+- [X] T501 `[C]` Defined `proto/infoblox/storage/v1/storage.proto` — a `google.protobuf.MessageOptions` extension `string model = 50050` (devedge-sdk-owned go_package, generated locally via `buf.gen.storage.yaml` + a storage-first `make generate` step, so `protoc-gen-ent` can import the binding). The plugin reads the option and, since the cross-message surface codegen is deferred, **rejects `model != the message's own name`** with an actionable error so it can't silently mis-generate a duplicate schema. `model` absent / == name is the normal single-surface case. FR G-004.
 
-## Phase 6 — GORM parity (`protoc-gen-storage`)
-- [ ] T601 `[C]` `protoc-gen-storage` adopts the shared checker (T301) + the split-file + owned-hook contract + the neutral annotation. FR G-005
+### ⏸ DEFERRED — Phase 5b (multi-surface codegen) — build when a real 2-surface consumer exists
+The annotation contract is locked (T501); the generator does NOT yet emit a surface adapter over a shared model. To resume:
+- [ ] T502 `[C]` Group messages by resolved model name. For a SURFACE message (`model != name`): skip its ent schema (no second table); generate `New<Surface>EntRepository` returning `Repository[*<Surface>, K]` over the OWNER's ent type (thread a `modelType` distinct from the proto `res` through `renderEntRepoAdapter` / `renderEntColumns` / `renderEntFilterers`); map the surface's proto fields to the owner's ent columns. Conflicting field types across surfaces → fail-closed (reuse `storagegen`). Remove the reject-guard added in T501. AC-004
+- [ ] T503 `[S]` Multi-surface fixture + round-trip test. NOTE the entanglement: every current fixture runs BOTH backends, so a clean ent-only surface fixture needs the GORM surface side too — sequence T503 with/after Phase 6, or add an ent-only fixture module. AC-004
+
+## ⏸ DEFERRED — Phase 6 — GORM parity (`protoc-gen-storage`) — build alongside Phase 5b
+Large rewrite; no GORM-only or multi-surface consumer needs it today. To resume:
+- [ ] T601 `[C]` `protoc-gen-storage` adopts the shared `cmd/internal/storagegen` checker (already engine-neutral) + the split-file + the exported owned-hook contract + the neutral `infoblox.storage.v1.model` annotation, matching protoc-gen-ent. FR G-005
 - [ ] T602 `[S]` Regenerate toy/apikey/fleet GORM; `go test ./cmd/protoc-gen-storage/...` + integration green. AC-006
 
-## Phase 7 — docs + cross-backend validation
-- [ ] T701 `[S]` Update `reference/codegen.md` + `guides/model-a-resource.md`: the adapter is generated; the owned hook; the multi-surface annotation; remove "hand-write ent wiring" guidance.
-- [ ] T702 `[C]` Re-run the Run 9 `coupond` build docs-only on ent **and** GORM with zero hand-written adapter; record the before/after churn. AC-007
-- [ ] T703 `[S]` Full SDK gates + `make security-check`; close #53 in the PR.
+## Phase 7 — docs + ship
+- [ ] T701 `[S]` Update `reference/codegen.md` + `guides/model-a-resource.md`: the ent adapter + projection are generated (no hand-written `ent_wiring.go`); the exported `FromEnt<R>Custom` / `ToEnt<R>On{Create,Update}` hooks; the fail-closed coverage check; the `infoblox.storage.v1.model` annotation (reserved for multi-surface, codegen forthcoming). Remove "hand-write ent wiring" guidance.
+- [ ] T702 `[C]` (DEFERRED with Phase 6) Re-run the Run 9 `coupond` build docs-only on ent + GORM with zero hand-written adapter; record before/after churn. AC-007
+- [ ] T703 `[S]` Full SDK gates + `make security-check` green; close #53.

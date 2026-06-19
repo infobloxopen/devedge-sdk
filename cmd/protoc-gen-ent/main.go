@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	storagev1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
@@ -71,6 +72,19 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		}
 		if !hasID {
 			continue
+		}
+		// F027 Phase 5 (contract): the (infoblox.storage.v1.model) annotation binds a
+		// message to a backing storage model so multiple API surfaces can share one
+		// table. The option is the locked contract, but the cross-message surface
+		// codegen is not yet generated (Phase 5b) — so reject model != the message's
+		// own name rather than silently emit a duplicate schema/table. An absent
+		// option, or model == the message name, is the normal single-surface case.
+		if opts := m.Desc.Options(); opts != nil && proto.HasExtension(opts, storagev1.E_Model) {
+			model, _ := proto.GetExtension(opts, storagev1.E_Model).(string)
+			if model != "" && model != name && model != string(m.Desc.Name()) {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s: (infoblox.storage.v1.model)=%q — multi-surface model binding is not yet generated (F027 Phase 5b: specs/027-repo-adapter-codegen); remove the annotation or set it to the message's own name", name, model))
+				continue
+			}
 		}
 		msg := entMessageInfo{MessageName: name}
 		for _, field := range m.Fields {
