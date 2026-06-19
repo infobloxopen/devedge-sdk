@@ -1,0 +1,61 @@
+# {{.Service}}
+
+`{{.ServiceType}}` — an apx-native, authz-gated, persisting gRPC + HTTP service over the
+`{{.Resource}}` resource, scaffolded by [`devedge-sdk new service`](https://github.com/infobloxopen/devedge-sdk).
+
+- **Public API:** the proto under `proto/{{.ProtoPathSuffix}}/` is the apx-governed surface. Every RPC
+  carries an `(infoblox.authz.v1.rule)`; the server asserts at boot that all methods are declared and
+  refuses to start otherwise (fail-closed authz).
+- **Private implementation:** the models, repository, service registration, and gateway are **generated**
+  from the proto by `buf generate` (the devedge-sdk plugins, pinned to SDK `{{.SDKVersion}}`) into `gen/`.
+  Engine ({{.Backend}}) dependencies live only in this module's `go.mod`.
+
+## Fresh clone — bootstrap first
+
+`gen/` is generated code and is **git-ignored** (see `.gitignore`), so a fresh clone has none. Building
+before generating fails with `no required module provides package .../gen/...`. Generate first:
+
+```sh
+make tools      # install the codegen plugins (buf, the devedge-sdk plugins) onto PATH
+make generate   # buf generate -> gen/ (the {{.Backend}} models, repository, service, gateway{{- if eq (printf "%s" .Backend) "ent" }}, then entc client{{- end }})
+make test       # build + run the smoke tests (positive CRUD + fail-closed deny)
+```
+
+`make bootstrap` runs `tools` + `generate` in one step. `make build`, `make test`, and `make run`
+auto-generate on first use if `gen/` is missing, then stay fast (they do **not** regenerate on every
+invocation). Re-run `make generate` explicitly after editing the proto.
+
+Prerequisites: [`apx`](https://github.com/infobloxopen/apx), [`buf`](https://buf.build), and Go (see
+`go.mod` for the version).
+
+## Run it
+
+```sh
+make run   # serves gRPC on :{{.GRPCPort}}, HTTP on :{{.HTTPPort}}
+```
+
+The dev server grants the `admin` group everything and derives the caller's identity from request
+metadata via `grpcauthz.DevPrincipalFunc`. A call is authorized when it sends `account-id: <tenant>`
+and `groups: admin`:
+
+```sh
+grpcurl -plaintext -H 'account-id: t1' -H 'groups: admin' \
+  -d '{"{{.ResourceSnake}}": {"id": "{{.ResourceSnake}}-1", "display_name": "first"}}' \
+  localhost:{{.GRPCPort}} {{.ProtoPackage}}.{{.ServiceType}}/Create{{.Resource}}
+```
+
+Swap the dev authorizer and `PrincipalFunc` in `server/main.go` for a real policy + verified-token
+function in production — nothing else changes.
+
+## Layout
+
+```
+proto/{{.ProtoPathSuffix}}/    PUBLIC API (apx-governed) — edit this, then `make generate`
+server/main.go               hand-owned entrypoint + handler (edit to change logic)
+gen/                         GENERATED, git-ignored — never edit by hand
+Makefile                     tools / generate / bootstrap / build / test / run
+```
+
+## Releasing the API
+
+The public proto is versioned with apx. See `.github/workflows/apx-release.yml` and `make api-release`.
