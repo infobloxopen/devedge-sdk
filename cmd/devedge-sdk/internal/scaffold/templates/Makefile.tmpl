@@ -1,0 +1,40 @@
+.PHONY: tools generate build test run api-lint api-release
+
+# Pinned SDK version that supplies the codegen plugins and the runtime.
+# Keep this aligned with the `github.com/infobloxopen/devedge-sdk` require in go.mod.
+SDK_VERSION ?= {{.SDKVersion}}
+
+# Install the protoc plugins `buf generate` needs onto PATH (GOPATH/bin):
+#   - the SDK plugins, pinned to SDK_VERSION;
+#   - the public plugins from their canonical modules.
+tools:
+	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@$(SDK_VERSION)
+	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-svc@$(SDK_VERSION)
+	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-storage@$(SDK_VERSION)
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
+
+# Generate the consumer-local implementation (models, repository, service
+# scaffolding, authz rules, gateway) from the public proto. Output is git-ignored.
+generate:
+	buf generate
+	go mod tidy
+
+build:
+	go build ./...
+
+test:
+	go test ./...
+
+# Run the service locally.
+run:
+	go run ./server
+
+# apx governs the PUBLIC proto surface.
+api-lint:
+	apx lint
+
+# Prepare/submit a versioned release of the public API (see .github/workflows/apx-release.yml).
+api-release:
+	apx release prepare {{.ProtoPathSuffix}} --version v1.0.0-alpha.1 --lifecycle experimental

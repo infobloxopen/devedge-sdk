@@ -1,0 +1,35 @@
+version: v2
+# GORM backend: six SDK `local:` plugins. Output lands under gen/{{.ProtoPathSuffix}}
+# (git-ignored, consumer-local). All take `module={{.Module}}/gen`; protoc-gen-storage
+# additionally takes `dialect=sqlite` (the smoke test runs on SQLite). The ent
+# plugin is intentionally excluded on the gorm path.
+#
+# The SDK plugins (protoc-gen-{devedge-authz,svc,storage}) must be on PATH for buf;
+# `make generate` installs them pinned to the SDK version. The public plugins
+# (protoc-gen-{go,go-grpc,grpc-gateway}) come from your toolchain (also installed
+# by `make tools`).
+inputs:
+  - directory: proto
+    paths:
+      - proto/{{.ProtoPathSuffix}}/{{.ProtoFile}}
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-devedge-authz
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-svc
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-storage
+    out: gen
+    opt:
+      - module={{.Module}}/gen
+      - dialect=sqlite
+  - local: protoc-gen-grpc-gateway
+    out: gen
+    opt: module={{.Module}}/gen

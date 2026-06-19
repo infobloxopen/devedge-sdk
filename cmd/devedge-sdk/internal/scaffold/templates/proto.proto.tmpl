@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+// {{.ServiceType}} ({{.Resource}} resource), scaffolded by `devedge-sdk new service`.
+//
+// This is the PUBLIC, apx-governed API surface. It carries only engine-neutral
+// annotations ((infoblox.authz.v1.rule), (infoblox.field.v1.opts)) — no ORM or
+// engine options ever appear here (enforced by `apx policy check`). The GORM
+// models and repository are generated from this proto by `buf generate` and are
+// git-ignored, consumer-local code (see .gitignore).
+package {{.ProtoPackage}};
+
+option go_package = "{{.Module}}/gen/{{.ProtoPathSuffix}};{{.GoPkg}}";
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "infoblox/authz/v1/authz.proto";
+import "infoblox/field/v1/field.proto";
+
+// {{.Resource}} is the resource managed by {{.Service}}.
+message {{.Resource}} {
+  option (google.api.resource) = {
+    type: "{{.ProtoPackage}}/{{.Resource}}"
+    pattern: "{{.ResourcePlural}}/{{"{"}}{{.ResourceSnake}}{{"}"}}"
+  };
+
+  // name is the AIP-122 resource name, e.g. "{{.ResourcePlural}}/abc123".
+  string name        = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string id          = 2;
+  // account_id scopes the resource to a tenant; the repository filters every
+  // query by it (set from the request's tenant context — see server/main.go).
+  string account_id  = 3;
+  // display_name is a human-friendly label; indexed for lookup.
+  string display_name = 4 [(infoblox.field.v1.opts) = {index: true}];
+  string description  = 5;
+  // AIP-154 ETag: framework-managed; stamped on every write, surfaced on read.
+  string etag         = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.
+  google.protobuf.Timestamp delete_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// {{.ServiceType}} is a CRUD service over {{.Resource}}. EVERY rpc carries an
+// (infoblox.authz.v1.rule): the server asserts at boot that all methods are
+// declared, and refuses to start if any is missing (fail-closed authz gate).
+service {{.ServiceType}} {
+  rpc Create{{.Resource}}(Create{{.Resource}}Request) returns ({{.Resource}}) {
+    option (google.api.http) = {post: "/v1/{{.ResourcePlural}}", body: "{{.ResourceSnake}}"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "{{.ResourcePlural}}"};
+  }
+  rpc Get{{.Resource}}(Get{{.Resource}}Request) returns ({{.Resource}}) {
+    option (google.api.http) = {get: "/v1/{{.ResourcePlural}}/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "{{.ResourcePlural}}"};
+  }
+  rpc List{{.Resource}}s(List{{.Resource}}sRequest) returns (List{{.Resource}}sResponse) {
+    option (google.api.http) = {get: "/v1/{{.ResourcePlural}}"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "{{.ResourcePlural}}"};
+  }
+  rpc Update{{.Resource}}(Update{{.Resource}}Request) returns ({{.Resource}}) {
+    option (google.api.http) = {patch: "/v1/{{.ResourcePlural}}/{{"{"}}{{.ResourceSnake}}.id{{"}"}}", body: "{{.ResourceSnake}}"};
+    option (infoblox.authz.v1.rule) = {verb: "update", resource: "{{.ResourcePlural}}"};
+  }
+  rpc Delete{{.Resource}}(Delete{{.Resource}}Request) returns (Delete{{.Resource}}Response) {
+    option (google.api.http) = {delete: "/v1/{{.ResourcePlural}}/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "delete", resource: "{{.ResourcePlural}}"};
+  }
+}
+
+message Create{{.Resource}}Request { {{.Resource}} {{.ResourceSnake}} = 1; }
+message Get{{.Resource}}Request {
+  string id = 1;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 2;
+}
+message List{{.Resource}}sRequest {
+  int32  page_size    = 1;
+  string page_token   = 2;
+  // AIP-148: include soft-deleted resources when true.
+  bool   show_deleted = 3;
+}
+message List{{.Resource}}sResponse {
+  repeated {{.Resource}} {{.ResourcePlural}} = 1;
+  string next_page_token = 2;
+}
+message Update{{.Resource}}Request {
+  {{.Resource}}    {{.ResourceSnake}} = 1;
+  repeated string update_mask = 2;
+}
+message Delete{{.Resource}}Request  { string id = 1; }
+message Delete{{.Resource}}Response {}

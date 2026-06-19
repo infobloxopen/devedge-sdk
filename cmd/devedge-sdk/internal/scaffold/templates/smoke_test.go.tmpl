@@ -1,0 +1,105 @@
+package main
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"github.com/infobloxopen/devedge-sdk/authz"
+
+	{{.GoPkg}} "{{.Module}}/gen/{{.ProtoPathSuffix}}"
+)
+
+// TestSmoke boots the generated server and runs one tenant-scoped CRUD
+// round-trip over gRPC: Create -> Get -> List -> Update -> Delete ->
+// Get(NotFound). It proves the scaffold builds, boots, authz-gates, and
+// persists with zero hand-edits to generated code (F028 AC-007).
+func TestSmoke(t *testing.T) {
+	// ":0" => kernel-assigned ports, so the test never collides with a real
+	// listener or another test run.
+	s, err := newServer(authz.NewDevAuthorizer(authz.Grant{
+		Tenant: "*", Subjects: []string{"*"}, Verbs: []authz.Verb{"*"}, Resource: "*",
+	}), ":0", ":0")
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = s.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if a := s.GRPCAddr(); a != "" && a != ":0" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	addr := s.GRPCAddr()
+	if addr == "" {
+		t.Fatal("server did not bind gRPC address within 2s")
+	}
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial %q: %v", addr, err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := {{.GoPkg}}.New{{.ServiceType}}Client(conn)
+
+	// Pass account-id so the TenantID middleware is satisfied and the resource
+	// is scoped to "tenant1".
+	mdCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("account-id", "tenant1"))
+
+	created, err := client.Create{{.Resource}}(mdCtx, &{{.GoPkg}}.Create{{.Resource}}Request{
+		{{.Resource}}: &{{.GoPkg}}.{{.Resource}}{Id: "{{.ResourceSnake}}-1", DisplayName: "first {{.ResourceSnake}}"},
+	})
+	if err != nil {
+		t.Fatalf("Create{{.Resource}}: %v", err)
+	}
+	if created.Id != "{{.ResourceSnake}}-1" {
+		t.Fatalf("Create{{.Resource}}: got id %q, want %q", created.Id, "{{.ResourceSnake}}-1")
+	}
+
+	got, err := client.Get{{.Resource}}(mdCtx, &{{.GoPkg}}.Get{{.Resource}}Request{Id: "{{.ResourceSnake}}-1"})
+	if err != nil {
+		t.Fatalf("Get{{.Resource}}: %v", err)
+	}
+	if got.DisplayName != "first {{.ResourceSnake}}" {
+		t.Fatalf("Get{{.Resource}}: got display_name %q", got.DisplayName)
+	}
+
+	list, err := client.List{{.Resource}}s(mdCtx, &{{.GoPkg}}.List{{.Resource}}sRequest{PageSize: 10})
+	if err != nil {
+		t.Fatalf("List{{.Resource}}s: %v", err)
+	}
+	if len(list.{{.Resource}}s) != 1 {
+		t.Fatalf("List{{.Resource}}s: want 1, got %d", len(list.{{.Resource}}s))
+	}
+
+	updated, err := client.Update{{.Resource}}(mdCtx, &{{.GoPkg}}.Update{{.Resource}}Request{
+		{{.Resource}}:  &{{.GoPkg}}.{{.Resource}}{Id: "{{.ResourceSnake}}-1", DisplayName: "renamed"},
+		UpdateMask: []string{"display_name"},
+	})
+	if err != nil {
+		t.Fatalf("Update{{.Resource}}: %v", err)
+	}
+	if updated.DisplayName != "renamed" {
+		t.Fatalf("Update{{.Resource}}: got display_name %q, want %q", updated.DisplayName, "renamed")
+	}
+
+	if _, err := client.Delete{{.Resource}}(mdCtx, &{{.GoPkg}}.Delete{{.Resource}}Request{Id: "{{.ResourceSnake}}-1"}); err != nil {
+		t.Fatalf("Delete{{.Resource}}: %v", err)
+	}
+
+	_, err = client.Get{{.Resource}}(mdCtx, &{{.GoPkg}}.Get{{.Resource}}Request{Id: "{{.ResourceSnake}}-1"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("Get{{.Resource}} after delete: want NotFound, got %v (err=%v)", status.Code(err), err)
+	}
+}

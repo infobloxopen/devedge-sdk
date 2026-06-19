@@ -1,0 +1,33 @@
+version: v2
+# ent backend (F028 Phase 4, gated on F027 → main). NOT YET WIRED — the CLI
+# rejects `--backend ent` before rendering. When enabling: add protoc-gen-ent as a
+# seventh `local:` plugin with NO `module=` opt (it derives output from the schema
+# dir), keep the storage plugin's `dialect=`, and emit ent/schema + the generated
+# *_repo.ent.go adapter (F027). See specs/028-apx-native-scaffold/tasks.md T-401.
+inputs:
+  - directory: proto
+    paths:
+      - proto/{{.ProtoPathSuffix}}/{{.ProtoFile}}
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-devedge-authz
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-svc
+    out: gen
+    opt: module={{.Module}}/gen
+  - local: protoc-gen-storage
+    out: gen
+    opt:
+      - module={{.Module}}/gen
+      - dialect=sqlite
+  - local: protoc-gen-grpc-gateway
+    out: gen
+    opt: module={{.Module}}/gen
+  # - local: protoc-gen-ent
+  #   out: gen
