@@ -23,10 +23,10 @@ Gate: each phase's tests green before the next. No back-compat — clean impleme
 
 > Note: the `gen.Error` path is the canonical protogen failure mechanism (recorded error → CodeGeneratorResponse error → buf fails non-zero). The classification + bridge are unit-tested; a full e2e "buf generate fails on a bad proto" fixture is a nice-to-have follow-up.
 
-## Phase 4 — owned override seam + scaffolder
-- [ ] T401 `[C]` Generated `fromEnt<R>` calls `fromEnt<R>Custom(e, p)` (and `toEnt<R>Custom`) when present; define the hook contract.
-- [ ] T402 `[C]` One-shot scaffolder (`cmd/devedge-scaffold` or a `--scaffold` mode): write `<snake>_projection_custom.go` once if absent, never overwrite; auto-fill `// devedge:wire field=…` stubs for unmapped fields. FR G-003
-- [ ] T403 `[S]` Test: regenerate is idempotent and never clobbers the custom file; a hand-edit survives.
+## Phase 4 — owned override seam ✅ done
+- [X] T401 `[C]` The generated adapter declares exported nil hook vars and calls them when set: `FromEnt<R>Custom(e, p)` at the end of `fromEnt<R>` (computed/derived read fields), and `ToEnt<R>OnCreate(p, b)` / `ToEnt<R>OnUpdate(p, u)` just before the ent builder saves (custom write columns). FR G-003.
+- [X] T402 `[C]` **Obviated — no scaffolder/CLI needed.** The package-var hook idiom means the developer registers hooks from their OWN regen-safe file (e.g. an `init()`); there is no generated file to scaffold-once or clobber. This is simpler than a `_projection_custom.go` generator and still satisfies the split-files "owned, survives regen" goal. (Fail-closed (Phase 3), not a hook, handles unmapped fields — so no `// devedge:wire` stubs are needed.)
+- [X] T403 `[S]` Runtime test `testdata/apikey/.../repo_custom_hook_test.go`: registers the exported hooks from the external test package, proves the read hook runs after the deterministic projection (Create + Get) and the create hook runs before save; render test asserts the hook vars + call sites are emitted. Regeneration is idempotent — hooks live in the generated file; registration lives in the consumer's file, untouched by codegen.
 
 ## Phase 5 — neutral multi-surface annotation
 - [ ] T501 `[C]` Define `proto/infoblox/storage/v1/storage.proto` MessageOptions extension `model`; generate Go; vendor/wire into the plugins. FR G-004

@@ -46,6 +46,9 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 				b = b.SetKeyValueHash(h).SetKeyValueCipher(c)
 				entity.KeyValue = "" // never persist plaintext
 			}
+			if ToEntAPIKeyOnCreate != nil {
+				ToEntAPIKeyOnCreate(entity, b)
+			}
 			created, err := b.Save(ctx)
 			if err != nil {
 				if ce := persistence.ConstraintError(err); ce != nil {
@@ -119,6 +122,9 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 				}
 				u = u.SetKeyValueHash(h).SetKeyValueCipher(c)
 			}
+			if ToEntAPIKeyOnUpdate != nil {
+				ToEntAPIKeyOnUpdate(entity, u)
+			}
 			updated, err := u.Save(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
@@ -167,6 +173,16 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 	}
 }
 
+// FromEntAPIKeyCustom, if set, runs at the end of fromEntAPIKey to populate fields the
+// generator cannot derive (computed/derived values). Register it from your own
+// (regen-safe) file — e.g. in an init(); this generated file never assigns it.
+var FromEntAPIKeyCustom func(e *ent.APIKey, p *APIKey)
+
+// ToEntAPIKeyOnCreate / ToEntAPIKeyOnUpdate, if set, run just before the ent builder is
+// saved, to set columns the generator does not (e.g. a custom-encoded field).
+var ToEntAPIKeyOnCreate func(p *APIKey, b *ent.APIKeyCreate)
+var ToEntAPIKeyOnUpdate func(p *APIKey, u *ent.APIKeyUpdateOne)
+
 // fromEntAPIKey converts a generated ent.APIKey to the proto *APIKey. Secret fields are
 // intentionally omitted — they are never returned from storage after creation.
 func fromEntAPIKey(e *ent.APIKey) *APIKey {
@@ -188,6 +204,9 @@ func fromEntAPIKey(e *ent.APIKey) *APIKey {
 	}
 	if e.ExpireTime != nil {
 		p.ExpireTime = timestamppb.New(*e.ExpireTime)
+	}
+	if FromEntAPIKeyCustom != nil {
+		FromEntAPIKeyCustom(e, p)
 	}
 	return p
 }

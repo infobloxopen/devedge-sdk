@@ -967,6 +967,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		fmt.Fprintf(&b, "\t\t\t\tentity.%s = \"\" // never persist plaintext\n", getName)
 		b.WriteString("\t\t\t}\n")
 	}
+	fmt.Fprintf(&b, "\t\t\tif ToEnt%sOnCreate != nil {\n\t\t\t\tToEnt%sOnCreate(entity, b)\n\t\t\t}\n", res, res)
 	b.WriteString("\t\t\tcreated, err := b.Save(ctx)\n")
 	b.WriteString("\t\t\tif err != nil {\n")
 	b.WriteString("\t\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\t\treturn nil, ce\n\t\t\t\t}\n")
@@ -1033,6 +1034,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		fmt.Fprintf(&b, "\t\t\t\tu = u.Set%sHash(h).Set%sCipher(c)\n", setName, setName)
 		b.WriteString("\t\t\t}\n")
 	}
+	fmt.Fprintf(&b, "\t\t\tif ToEnt%sOnUpdate != nil {\n\t\t\t\tToEnt%sOnUpdate(entity, u)\n\t\t\t}\n", res, res)
 	b.WriteString("\t\t\tupdated, err := u.Save(ctx)\n")
 	b.WriteString("\t\t\tif err != nil {\n")
 	b.WriteString("\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n")
@@ -1078,6 +1080,19 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 
 	b.WriteString("\t}\n}\n\n")
 
+	// ---- Owned customization hooks (F027 split-files override seam) ----
+	// Nil by default; the developer registers them from their OWN (regen-safe)
+	// file. The generated file only declares and calls them, so re-running codegen
+	// never disturbs custom logic. No scaffolded file is required.
+	fmt.Fprintf(&b, "// FromEnt%sCustom, if set, runs at the end of fromEnt%s to populate fields the\n", res, res)
+	b.WriteString("// generator cannot derive (computed/derived values). Register it from your own\n")
+	b.WriteString("// (regen-safe) file — e.g. in an init(); this generated file never assigns it.\n")
+	fmt.Fprintf(&b, "var FromEnt%sCustom func(e *ent.%s, p *%s)\n\n", res, res, res)
+	fmt.Fprintf(&b, "// ToEnt%sOnCreate / ToEnt%sOnUpdate, if set, run just before the ent builder is\n", res, res)
+	b.WriteString("// saved, to set columns the generator does not (e.g. a custom-encoded field).\n")
+	fmt.Fprintf(&b, "var ToEnt%sOnCreate func(p *%s, b *ent.%sCreate)\n", res, res, res)
+	fmt.Fprintf(&b, "var ToEnt%sOnUpdate func(p *%s, u *ent.%sUpdateOne)\n\n", res, res, res)
+
 	// ---- fromEnt<R> projection ----
 	fmt.Fprintf(&b, "// fromEnt%s converts a generated ent.%s to the proto *%s. Secret fields are\n", res, res, res)
 	b.WriteString("// intentionally omitted — they are never returned from storage after creation.\n")
@@ -1111,6 +1126,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	if msg.HasExpireTime {
 		b.WriteString("\tif e.ExpireTime != nil {\n\t\tp.ExpireTime = timestamppb.New(*e.ExpireTime)\n\t}\n")
 	}
+	fmt.Fprintf(&b, "\tif FromEnt%sCustom != nil {\n\t\tFromEnt%sCustom(e, p)\n\t}\n", res, res)
 	b.WriteString("\treturn p\n}\n")
 
 	// ---- LookupBy<Secret>Hash helpers ----

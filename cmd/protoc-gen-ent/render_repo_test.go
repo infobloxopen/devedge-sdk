@@ -98,6 +98,13 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 		"p.ExpireTime = timestamppb.New(*e.ExpireTime)",
 		"func LookupBySigningKeyHash(ctx context.Context, client *ent.Client, hash string) (*Coupon, error)",
 		"entcoupon.SigningKeyHash(hash)",
+		// Owned override seam (Phase 4): exported hook vars + call sites.
+		"var FromEntCouponCustom func(e *ent.Coupon, p *Coupon)",
+		"var ToEntCouponOnCreate func(p *Coupon, b *ent.CouponCreate)",
+		"var ToEntCouponOnUpdate func(p *Coupon, u *ent.CouponUpdateOne)",
+		"if FromEntCouponCustom != nil {",
+		"if ToEntCouponOnCreate != nil {",
+		"if ToEntCouponOnUpdate != nil {",
 	}
 	for _, w := range wants {
 		if !strings.Contains(out, w) {

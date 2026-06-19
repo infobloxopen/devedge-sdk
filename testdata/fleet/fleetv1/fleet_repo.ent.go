@@ -29,6 +29,9 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 				SetID(entity.GetId()).
 				SetAccountID(entity.GetAccountId()).
 				SetDisplayName(entity.GetDisplayName())
+			if ToEntFleetOnCreate != nil {
+				ToEntFleetOnCreate(entity, b)
+			}
 			created, err := b.Save(ctx)
 			if err != nil {
 				if ce := persistence.ConstraintError(err); ce != nil {
@@ -89,6 +92,9 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entfleet.AccountID(tenantID))
 			}
+			if ToEntFleetOnUpdate != nil {
+				ToEntFleetOnUpdate(entity, u)
+			}
 			updated, err := u.Save(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
@@ -137,6 +143,16 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 	}
 }
 
+// FromEntFleetCustom, if set, runs at the end of fromEntFleet to populate fields the
+// generator cannot derive (computed/derived values). Register it from your own
+// (regen-safe) file — e.g. in an init(); this generated file never assigns it.
+var FromEntFleetCustom func(e *ent.Fleet, p *Fleet)
+
+// ToEntFleetOnCreate / ToEntFleetOnUpdate, if set, run just before the ent builder is
+// saved, to set columns the generator does not (e.g. a custom-encoded field).
+var ToEntFleetOnCreate func(p *Fleet, b *ent.FleetCreate)
+var ToEntFleetOnUpdate func(p *Fleet, u *ent.FleetUpdateOne)
+
 // fromEntFleet converts a generated ent.Fleet to the proto *Fleet. Secret fields are
 // intentionally omitted — they are never returned from storage after creation.
 func fromEntFleet(e *ent.Fleet) *Fleet {
@@ -150,6 +166,9 @@ func fromEntFleet(e *ent.Fleet) *Fleet {
 	}
 	if e.DeleteTime != nil {
 		p.DeleteTime = timestamppb.New(*e.DeleteTime)
+	}
+	if FromEntFleetCustom != nil {
+		FromEntFleetCustom(e, p)
 	}
 	return p
 }

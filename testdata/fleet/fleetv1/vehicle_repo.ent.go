@@ -29,6 +29,9 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			if entity.GetFleetId() != "" {
 				b = b.SetFleetID(entity.GetFleetId())
 			}
+			if ToEntVehicleOnCreate != nil {
+				ToEntVehicleOnCreate(entity, b)
+			}
 			created, err := b.Save(ctx)
 			if err != nil {
 				if ce := persistence.ConstraintError(err); ce != nil {
@@ -89,6 +92,9 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entvehicle.AccountID(tenantID))
 			}
+			if ToEntVehicleOnUpdate != nil {
+				ToEntVehicleOnUpdate(entity, u)
+			}
 			updated, err := u.Save(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
@@ -118,6 +124,16 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 	}
 }
 
+// FromEntVehicleCustom, if set, runs at the end of fromEntVehicle to populate fields the
+// generator cannot derive (computed/derived values). Register it from your own
+// (regen-safe) file — e.g. in an init(); this generated file never assigns it.
+var FromEntVehicleCustom func(e *ent.Vehicle, p *Vehicle)
+
+// ToEntVehicleOnCreate / ToEntVehicleOnUpdate, if set, run just before the ent builder is
+// saved, to set columns the generator does not (e.g. a custom-encoded field).
+var ToEntVehicleOnCreate func(p *Vehicle, b *ent.VehicleCreate)
+var ToEntVehicleOnUpdate func(p *Vehicle, u *ent.VehicleUpdateOne)
+
 // fromEntVehicle converts a generated ent.Vehicle to the proto *Vehicle. Secret fields are
 // intentionally omitted — they are never returned from storage after creation.
 func fromEntVehicle(e *ent.Vehicle) *Vehicle {
@@ -129,6 +145,9 @@ func fromEntVehicle(e *ent.Vehicle) *Vehicle {
 		AccountId: e.AccountID,
 		Vin:       e.Vin,
 		FleetId:   e.FleetID,
+	}
+	if FromEntVehicleCustom != nil {
+		FromEntVehicleCustom(e, p)
 	}
 	return p
 }
