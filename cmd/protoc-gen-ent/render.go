@@ -5,8 +5,35 @@ import (
 	"path"
 	"strings"
 
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
+
+// toStorageFields projects a message's fields onto the engine-neutral
+// storagegen.Field view used by the fail-closed coverage check (F027 G-002/G-005).
+// It derives the same facts from the same proto annotations protoc-gen-storage
+// will, so the auto-wire-vs-fail verdict is identical across backends.
+func toStorageFields(msg entMessageInfo) []storagegen.Field {
+	fks := msgForeignKeyFields(msg)
+	out := make([]storagegen.Field, 0, len(msg.Fields))
+	for _, f := range msg.Fields {
+		out = append(out, storagegen.Field{
+			Name:           f.Name,
+			IsID:           f.IsID,
+			IsTenant:       f.Name == "account_id" || f.SnakeName == "account_id",
+			IsSecret:       f.IsSecret,
+			IsTags:         f.IsTags,
+			OutputOnly:     f.OutputOnly,
+			IsRepeated:     f.IsRepeated,
+			IsMessage:      f.IsMessage,
+			IsEnum:         f.IsEnum,
+			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil,
+			IsScalarFK:     fks[f.SnakeName] || fks[f.Name],
+			HasColumnType:  f.EntType != "",
+		})
+	}
+	return out
+}
 
 // targetDialect is the SQL dialect selected via the `dialect` plugin option
 // (see main.go). It picks the soft-delete + per-tenant-unique strategy:
@@ -38,6 +65,7 @@ type entFieldInfo struct {
 	IsRepeated bool   // repeated field — skipped with a TODO comment
 	IsMessage  bool   // nested message field — skipped with a TODO comment
 	IsTags     bool   // map<string,string> field — emitted as a JSON field
+	IsEnum     bool   // enum field — not deterministically wirable (F027 fail-closed)
 	IsSecret   bool   // secret field — emitted as _hash + _cipher, never plaintext
 	OutputOnly bool   // AIP-203 OUTPUT_ONLY — never written by Create/Update/batch
 	// Storage constraints (from field.v1.FieldOptions).
@@ -776,5 +804,326 @@ func renderEntColumns(msg entMessageInfo, pkgName string) string {
 		}
 		b.WriteString("}\n")
 	}
+	return b.String()
+}
+
+// msgHasTags reports whether the message has a map<string,string> (Tags) field.
+func msgHasTags(msg entMessageInfo) bool {
+	for _, f := range msg.Fields {
+		if f.IsTags {
+			return true
+		}
+	}
+	return false
+}
+
+// msgForeignKeyFields returns the set of scalar field names that are the foreign
+// key of a belongs_to edge on this message. ent binds the edge to the scalar via
+// .Field(fk), so the FK is written through the edge-backed Set<FK> setter and must
+// be set ONLY when non-empty — an empty FK would create a dangling edge / violate
+// a foreign-key constraint. Such fields are emitted as guarded conditional sets
+// rather than in the unconditional create/update chain.
+func msgForeignKeyFields(msg entMessageInfo) map[string]bool {
+	fks := map[string]bool{}
+	for _, f := range msg.Fields {
+		if f.BelongsTo != nil {
+			if fk := f.BelongsTo.GetForeignKey(); fk != "" {
+				fks[fk] = true
+			}
+		}
+	}
+	return fks
+}
+
+// renderEntRepoAdapter generates <pkg>/<snake>_repo.ent.go — the repository
+// adapter that bridges the generated ent client to persistence.Repository[*<R>,
+// string], plus the deterministic fromEnt<R> projection and a LookupBy<Secret>Hash
+// helper per secret field. It replaces the hand-written ent_wiring.go: it fills
+// the six entrepo.EntRepository closures (Create/Get/List/Update/Delete/Undelete)
+// with ConstraintError classification, ent.IsNotFound→persistence.ErrNotFound
+// mapping, tenant + soft-delete mutation guards (ent interceptors do not cover
+// mutations), the secret hash/cipher block, and AIP-160 filter / paging wired from
+// the generated <R>EntColumns maps. Output equivalence with the prior hand-written
+// adapter is the bar (F027). Returns "" for non-resource messages (no fields).
+func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) string {
+	if len(msg.Fields) == 0 {
+		return ""
+	}
+	res := msg.MessageName        // e.g. "APIKey"
+	lower := strings.ToLower(res) // ent predicate pkg + helper prefix, e.g. "apikey"
+	hasTenant := msgHasTenantField(msg)
+	hasSecret := msgHasSecretField(msg)
+	hasTags := msgHasTags(msg)
+	soft := msg.SoftDelete
+
+	entImport := path.Dir(goImportPath) + "/ent"
+	entPredImport := entImport + "/" + lower
+	entPredicatePkgImport := entImport + "/predicate"
+
+	// Partition fields into plain writable scalars, foreign-key scalars (set
+	// conditionally), and secret fields. Skip id, the tenant discriminator,
+	// output-only, repeated and message fields.
+	fkSet := msgForeignKeyFields(msg)
+	var plainWritable, fkWritable, secrets []entFieldInfo
+	for _, f := range msg.Fields {
+		if f.IsSecret {
+			secrets = append(secrets, f)
+			continue
+		}
+		if f.IsID || f.OutputOnly || f.IsRepeated || f.IsMessage {
+			continue
+		}
+		if f.Name == "account_id" || f.SnakeName == "account_id" {
+			continue
+		}
+		if fkSet[f.SnakeName] || fkSet[f.Name] {
+			fkWritable = append(fkWritable, f)
+			continue
+		}
+		plainWritable = append(plainWritable, f)
+	}
+
+	var b strings.Builder
+	b.WriteString("// Code generated by protoc-gen-ent. DO NOT EDIT.\n")
+	fmt.Fprintf(&b, "package %s\n\n", pkgName)
+
+	// Imports — included conditionally so the file compiles with no unused imports.
+	b.WriteString("import (\n")
+	b.WriteString("\t\"context\"\n")
+	b.WriteString("\t\"fmt\"\n")
+	if soft {
+		b.WriteString("\t\"time\"\n")
+	}
+	b.WriteString("\n")
+	if soft || msg.HasExpireTime {
+		b.WriteString("\t\"google.golang.org/protobuf/types/known/timestamppb\"\n\n")
+	}
+	if hasTenant {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
+	}
+	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
+	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/entrepo\"\n")
+	if hasSecret {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
+	}
+	fmt.Fprintf(&b, "\tent %q\n", entImport)
+	// The field-predicate package is always needed: every Delete_ references it
+	// (ent<lower>.ID for hard delete, ent<lower>.DeleteTimeIsNil for soft delete),
+	// as do the tenant guards, Undelete, and LookupBy<Secret>Hash.
+	fmt.Fprintf(&b, "\tent%s %q\n", lower, entPredImport)
+	fmt.Fprintf(&b, "\tentpredicate %q\n", entPredicatePkgImport)
+	b.WriteString(")\n\n")
+
+	// Constructor signature: enc only when there are secret fields.
+	fmt.Fprintf(&b, "// New%sEntRepository wires the generated ent client into a\n", res)
+	fmt.Fprintf(&b, "// persistence.Repository[*%s, string].\n", res)
+	if hasSecret {
+		b.WriteString("// enc may be nil only if no secret values will be written.\n")
+		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*%s, string] {\n", res, res)
+		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
+		b.WriteString("\t\tEnc: enc,\n")
+	} else {
+		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client) persistence.Repository[*%s, string] {\n", res, res)
+		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
+	}
+
+	// ---- Create_ ----
+	fmt.Fprintf(&b, "\t\tCreate_: func(ctx context.Context, entity *%s) (*%s, error) {\n", res, res)
+	if hasTenant {
+		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\t\t\tif entity.GetAccountId() == \"\" && tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")
+	}
+	// Build the create setter chain: id, account_id (if tenant), then writable.
+	b.WriteString("\t\t\tb := client." + res + ".Create().\n")
+	chain := []string{"SetID(entity.GetId())"}
+	if hasTenant {
+		chain = append(chain, "SetAccountID(entity.GetAccountId())")
+	}
+	for _, f := range plainWritable {
+		chain = append(chain, fmt.Sprintf("Set%s(entity.Get%s())", entSetterGoName(f.SnakeName), entGoName(f.SnakeName)))
+	}
+	for i, c := range chain {
+		if i == len(chain)-1 {
+			fmt.Fprintf(&b, "\t\t\t\t%s\n", c)
+		} else {
+			fmt.Fprintf(&b, "\t\t\t\t%s.\n", c)
+		}
+	}
+	// Foreign keys: set only when non-empty (an empty FK would dangle the edge).
+	for _, f := range fkWritable {
+		getName := entGoName(f.SnakeName)
+		setName := entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif entity.Get%s() != \"\" {\n\t\t\t\tb = b.Set%s(entity.Get%s())\n\t\t\t}\n", getName, setName, getName)
+	}
+	for _, f := range secrets {
+		getName := entGoName(f.SnakeName)
+		setName := entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif enc != nil && entity.Get%s() != \"\" {\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\th, herr := enc.Hash(ctx, entity.Get%s())\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\tif herr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\t\tc, cerr := enc.Encrypt(ctx, entity.Get%s())\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\tif cerr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"encrypt %s: %%w\", cerr)\n\t\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\t\tb = b.Set%sHash(h).Set%sCipher(c)\n", setName, setName)
+		fmt.Fprintf(&b, "\t\t\t\tentity.%s = \"\" // never persist plaintext\n", getName)
+		b.WriteString("\t\t\t}\n")
+	}
+	b.WriteString("\t\t\tcreated, err := b.Save(ctx)\n")
+	b.WriteString("\t\t\tif err != nil {\n")
+	b.WriteString("\t\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\t\treturn nil, ce\n\t\t\t\t}\n")
+	fmt.Fprintf(&b, "\t\t\t\treturn nil, fmt.Errorf(\"create %s: %%w\", err)\n\t\t\t}\n", lower)
+	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(created), nil\n", res)
+	b.WriteString("\t\t},\n")
+
+	// ---- Get_ ----
+	fmt.Fprintf(&b, "\t\tGet_: func(ctx context.Context, key string) (*%s, error) {\n", res)
+	fmt.Fprintf(&b, "\t\t\te, err := client.%s.Get(ctx, key)\n", res)
+	b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n\t\t\t\treturn nil, err\n\t\t\t}\n")
+	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(e), nil\n", res)
+	b.WriteString("\t\t},\n")
+
+	// ---- List_ ----
+	fmt.Fprintf(&b, "\t\tList_: func(ctx context.Context, opts persistence.ListOptions) ([]*%s, string, error) {\n", res)
+	if soft {
+		b.WriteString("\t\t\tif opts.ShowDeleted {\n\t\t\t\tctx = entrepo.WithShowDeleted(ctx)\n\t\t\t}\n")
+	}
+	fmt.Fprintf(&b, "\t\t\tq := client.%s.Query()\n", res)
+	b.WriteString("\t\t\tif opts.Filter != \"\" {\n")
+	if hasTags {
+		fmt.Fprintf(&b, "\t\t\t\tpred, perr := entrepo.FilterPredicate(opts.Filter, %sEntColumns, %sEntJSONColumns)\n", res, res)
+	} else {
+		fmt.Fprintf(&b, "\t\t\t\tpred, perr := entrepo.FilterPredicate(opts.Filter, %sEntColumns, nil)\n", res)
+	}
+	b.WriteString("\t\t\t\tif perr != nil {\n\t\t\t\t\treturn nil, \"\", perr\n\t\t\t\t}\n")
+	fmt.Fprintf(&b, "\t\t\t\tif pred != nil {\n\t\t\t\t\tq = q.Where(entpredicate.%s(pred))\n\t\t\t\t}\n", res)
+	b.WriteString("\t\t\t}\n")
+	b.WriteString("\t\t\tif opts.PageSize <= 0 {\n\t\t\t\topts.PageSize = 50\n\t\t\t}\n")
+	b.WriteString("\t\t\toffset := 0\n\t\t\tif opts.PageToken != \"\" {\n\t\t\t\tfmt.Sscanf(opts.PageToken, \"%d\", &offset) //nolint:errcheck\n\t\t\t}\n")
+	b.WriteString("\t\t\titems, err := q.Limit(opts.PageSize).Offset(offset).All(ctx)\n")
+	b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn nil, \"\", err\n\t\t\t}\n")
+	fmt.Fprintf(&b, "\t\t\tout := make([]*%s, len(items))\n", res)
+	fmt.Fprintf(&b, "\t\t\tfor i, e := range items {\n\t\t\t\tout[i] = fromEnt%s(e)\n\t\t\t}\n", res)
+	b.WriteString("\t\t\tnextToken := \"\"\n\t\t\tif len(items) == opts.PageSize {\n\t\t\t\tnextToken = fmt.Sprintf(\"%d\", offset+opts.PageSize)\n\t\t\t}\n")
+	b.WriteString("\t\t\treturn out, nextToken, nil\n")
+	b.WriteString("\t\t},\n")
+
+	// ---- Update_ ----
+	fmt.Fprintf(&b, "\t\tUpdate_: func(ctx context.Context, key string, entity *%s, fieldMask ...string) (*%s, error) {\n", res, res)
+	fmt.Fprintf(&b, "\t\t\tu := client.%s.UpdateOneID(key)\n", res)
+	for _, f := range plainWritable {
+		fmt.Fprintf(&b, "\t\t\tu = u.Set%s(entity.Get%s())\n", entSetterGoName(f.SnakeName), entGoName(f.SnakeName))
+	}
+	for _, f := range fkWritable {
+		getName := entGoName(f.SnakeName)
+		setName := entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif entity.Get%s() != \"\" {\n\t\t\t\tu = u.Set%s(entity.Get%s())\n\t\t\t}\n", getName, setName, getName)
+	}
+	if hasTenant {
+		// Tenant guard: ent query interceptors do NOT run for mutations, so the
+		// account_id predicate must be applied explicitly.
+		fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
+	}
+	for _, f := range secrets {
+		getName := entGoName(f.SnakeName)
+		setName := entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif enc != nil && entity.Get%s() != \"\" {\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\th, herr := enc.Hash(ctx, entity.Get%s())\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\tif herr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\t\tc, cerr := enc.Encrypt(ctx, entity.Get%s())\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\tif cerr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"encrypt %s: %%w\", cerr)\n\t\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\t\tu = u.Set%sHash(h).Set%sCipher(c)\n", setName, setName)
+		b.WriteString("\t\t\t}\n")
+	}
+	b.WriteString("\t\t\tupdated, err := u.Save(ctx)\n")
+	b.WriteString("\t\t\tif err != nil {\n")
+	b.WriteString("\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n")
+	b.WriteString("\t\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\t\treturn nil, ce\n\t\t\t\t}\n")
+	b.WriteString("\t\t\t\treturn nil, err\n\t\t\t}\n")
+	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(updated), nil\n", res)
+	b.WriteString("\t\t},\n")
+
+	// ---- Delete_ ----
+	fmt.Fprintf(&b, "\t\tDelete_: func(ctx context.Context, key string) error {\n")
+	if soft {
+		fmt.Fprintf(&b, "\t\t\tq := client.%s.UpdateOneID(key)\n", res)
+		if hasTenant {
+			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tq = q.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
+		}
+		fmt.Fprintf(&b, "\t\t\tq = q.Where(ent%s.DeleteTimeIsNil())\n", lower)
+		b.WriteString("\t\t\terr := q.SetDeleteTime(time.Now()).Exec(ctx)\n")
+		b.WriteString("\t\t\tif ent.IsNotFound(err) {\n\t\t\t\treturn persistence.ErrNotFound\n\t\t\t}\n\t\t\treturn err\n")
+	} else {
+		fmt.Fprintf(&b, "\t\t\tdel := client.%s.Delete().Where(ent%s.ID(key))\n", res, lower)
+		if hasTenant {
+			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tdel = del.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
+		}
+		b.WriteString("\t\t\tn, err := del.Exec(ctx)\n")
+		b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tif n == 0 {\n\t\t\t\treturn persistence.ErrNotFound\n\t\t\t}\n\t\t\treturn nil\n")
+	}
+	b.WriteString("\t\t},\n")
+
+	// ---- Undelete_ (soft-delete resources only) ----
+	if soft {
+		fmt.Fprintf(&b, "\t\tUndelete_: func(ctx context.Context, key string) (*%s, error) {\n", res)
+		b.WriteString("\t\t\tshowCtx := entrepo.WithShowDeleted(ctx)\n")
+		fmt.Fprintf(&b, "\t\t\texisting, err := client.%s.Query().Where(\n\t\t\t\tent%s.ID(key),\n\t\t\t\tent%s.DeleteTimeNotNil(),\n\t\t\t).Only(showCtx)\n", res, lower, lower)
+		b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n")
+		fmt.Fprintf(&b, "\t\t\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", err)\n\t\t\t}\n", lower)
+		b.WriteString("\t\t\trestored, err := existing.Update().ClearDeleteTime().Save(ctx)\n")
+		b.WriteString("\t\t\tif err != nil {\n")
+		b.WriteString("\t\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\t\treturn nil, ce\n\t\t\t\t}\n")
+		fmt.Fprintf(&b, "\t\t\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", err)\n\t\t\t}\n", lower)
+		fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(restored), nil\n", res)
+		b.WriteString("\t\t},\n")
+	}
+
+	b.WriteString("\t}\n}\n\n")
+
+	// ---- fromEnt<R> projection ----
+	fmt.Fprintf(&b, "// fromEnt%s converts a generated ent.%s to the proto *%s. Secret fields are\n", res, res, res)
+	b.WriteString("// intentionally omitted — they are never returned from storage after creation.\n")
+	fmt.Fprintf(&b, "func fromEnt%s(e *ent.%s) *%s {\n", res, res, res)
+	b.WriteString("\tif e == nil {\n\t\treturn nil\n\t}\n")
+	fmt.Fprintf(&b, "\tp := &%s{\n", res)
+	for _, f := range msg.Fields {
+		switch {
+		case f.IsSecret:
+			fmt.Fprintf(&b, "\t\t// %s omitted — secret, never returned\n", f.SnakeName)
+		case f.IsRepeated || f.IsMessage:
+			// Relationships / repeated are ent edges, not scalar columns.
+			continue
+		case f.SnakeName == "etag" || f.SnakeName == "delete_time" || f.SnakeName == "expire_time":
+			// Framework fields surfaced below via flags: etag from the mixin, and the
+			// timestamps need timestamppb conversion. (Other OUTPUT_ONLY scalars — e.g.
+			// the AIP resource `name` — are still returned on read; OUTPUT_ONLY means
+			// the client can't write them, not that they're hidden on read.)
+			continue
+		default:
+			fmt.Fprintf(&b, "\t\t%s: e.%s,\n", entGoName(f.SnakeName), entSetterGoName(f.SnakeName))
+		}
+	}
+	if msg.HasETag {
+		b.WriteString("\t\tEtag: e.Etag, // AIP-154: the EtagMixin-stamped token a client echoes as If-Match\n")
+	}
+	b.WriteString("\t}\n")
+	if soft {
+		b.WriteString("\tif e.DeleteTime != nil {\n\t\tp.DeleteTime = timestamppb.New(*e.DeleteTime)\n\t}\n")
+	}
+	if msg.HasExpireTime {
+		b.WriteString("\tif e.ExpireTime != nil {\n\t\tp.ExpireTime = timestamppb.New(*e.ExpireTime)\n\t}\n")
+	}
+	b.WriteString("\treturn p\n}\n")
+
+	// ---- LookupBy<Secret>Hash helpers ----
+	for _, f := range secrets {
+		setName := entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\n// LookupBy%sHash finds a %s by the HMAC-SHA256 hash of its %s.\n", setName, res, f.SnakeName)
+		b.WriteString("// Returns persistence.ErrNotFound when no record matches or hash is empty.\n")
+		fmt.Fprintf(&b, "func LookupBy%sHash(ctx context.Context, client *ent.Client, hash string) (*%s, error) {\n", setName, res)
+		b.WriteString("\tif hash == \"\" {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
+		fmt.Fprintf(&b, "\te, err := client.%s.Query().Where(ent%s.%sHash(hash)).Only(ctx)\n", res, lower, setName)
+		b.WriteString("\tif err != nil {\n\t\tif ent.IsNotFound(err) {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n\t\treturn nil, err\n\t}\n")
+		fmt.Fprintf(&b, "\treturn fromEnt%s(e), nil\n}\n", res)
+	}
+
 	return b.String()
 }
