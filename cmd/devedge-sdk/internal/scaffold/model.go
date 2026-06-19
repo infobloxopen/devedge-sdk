@@ -32,6 +32,10 @@ const (
 	grpcVersion           = "v1.81.1"
 	protobufVersion       = "v1.36.11"
 	gormVersion           = "v1.31.1"
+	// ent backend deps (mirror testdata/apikey + testdata/fleet).
+	entVersion     = "v0.14.6"
+	moderncSQLiteVersion = "v1.52.0"
+	fieldBindingVersion  = "v1.0.0-alpha.1"
 )
 
 // Options are the user-supplied inputs to a scaffold.
@@ -72,9 +76,19 @@ type Model struct {
 	BinName        string // server binary name, e.g. "orders"
 
 	ProtoPackage    string // proto package, e.g. "orders.v1"
-	ProtoPathSuffix string // path under proto/ and gen/, e.g. "orders/v1"
+	ProtoPathSuffix string // path of the .proto SOURCE under proto/, e.g. "orders/v1"
 	ProtoFile       string // proto file name, e.g. "orders.proto"
-	GoPkg           string // generated Go package alias, e.g. "ordersv1"
+	GoPkg           string // generated Go package name/alias, e.g. "ordersv1"
+	// GoImportPath is the import path of the generated Go package, e.g.
+	// "github.com/acme/orders/gen/ordersv1". It is a SINGLE directory segment
+	// under gen/ ("gen/<svc>v1"), NOT "gen/<svc>/v1": protoc-gen-ent (which takes
+	// no module= opt) emits its ent/ schema package as a sibling of the proto's
+	// Go package dir (path.Dir(go_package)+"/ent"), so the generated repository
+	// adapter and the ent client only line up when the proto package is one
+	// segment deep. The same layout is used for both backends so there is a
+	// single convention. (This is why go_package can't be "proto/<svc>/v1", which
+	// is what apx would prefer — see the buf.gen templates + tasks.md T-501 note.)
+	GoImportPath string
 
 	GRPCPort string
 	HTTPPort string
@@ -87,6 +101,9 @@ type Model struct {
 	GRPCVersion           string
 	ProtobufVersion       string
 	GormVersion           string
+	EntVersion            string
+	ModerncSQLiteVersion  string
+	FieldBindingVersion   string
 }
 
 var (
@@ -158,6 +175,7 @@ func (o Options) Validate() (*Model, error) {
 		ProtoPathSuffix: svc + "/v1",
 		ProtoFile:      svc + ".proto",
 		GoPkg:          svc + "v1",
+		GoImportPath:   module + "/gen/" + svc + "v1",
 		GRPCPort:       "9090",
 		HTTPPort:       "8080",
 
@@ -169,6 +187,9 @@ func (o Options) Validate() (*Model, error) {
 		GRPCVersion:           grpcVersion,
 		ProtobufVersion:       protobufVersion,
 		GormVersion:           gormVersion,
+		EntVersion:            entVersion,
+		ModerncSQLiteVersion:  moderncSQLiteVersion,
+		FieldBindingVersion:   fieldBindingVersion,
 	}
 	return m, nil
 }

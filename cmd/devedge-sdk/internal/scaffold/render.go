@@ -43,10 +43,15 @@ func renderTemplates(dir string, m *Model) error {
 		{"proto.proto.tmpl", filepath.Join("proto", m.ProtoPathSuffix, m.ProtoFile), 0o644},
 		{"buf.yaml.tmpl", "buf.yaml", 0o644},
 		{bufGenTemplate(m.Backend), "buf.gen.yaml", 0o644},
-		{"go.mod.tmpl", "go.mod", 0o644},
-		{"main.go.tmpl", filepath.Join("server", "main.go"), 0o644},
+		{goModTemplate(m.Backend), "go.mod", 0o644},
+		{mainTemplate(m.Backend), filepath.Join("server", "main.go"), 0o644},
 		{"smoke_test.go.tmpl", filepath.Join("server", m.ServiceLower+"_smoke_test.go"), 0o644},
 		{"Makefile.tmpl", "Makefile", 0o644},
+	}
+	// The ent backend pins entc (entgo.io/ent/cmd/ent) via a build-tagged tools.go
+	// so `go mod tidy` keeps the entc-only deps for `go generate ./gen/ent`.
+	if m.Backend == BackendEnt {
+		outs = append(outs, out{"tools.go.tmpl", "tools.go", 0o644})
 	}
 	for _, o := range outs {
 		content, err := renderTemplate(o.tmpl, m)
@@ -66,6 +71,27 @@ func bufGenTemplate(b Backend) string {
 		return "buf.gen.ent.yaml.tmpl"
 	default:
 		return "buf.gen.gorm.yaml.tmpl"
+	}
+}
+
+func goModTemplate(b Backend) string {
+	switch b {
+	case BackendEnt:
+		return "go.mod.ent.tmpl"
+	default:
+		return "go.mod.tmpl"
+	}
+}
+
+// mainTemplate selects the hand-owned server entrypoint by backend: the gorm
+// version opens a gorm.DB + AutoMigrate + New<R>Repository; the ent version opens
+// an ent client + Schema.Create + the generated New<R>EntRepository (F027).
+func mainTemplate(b Backend) string {
+	switch b {
+	case BackendEnt:
+		return "main.ent.go.tmpl"
+	default:
+		return "main.go.tmpl"
 	}
 }
 

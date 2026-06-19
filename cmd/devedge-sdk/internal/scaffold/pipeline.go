@@ -24,12 +24,6 @@ func Generate(ctx context.Context, opts Options, out io.Writer) (*Model, error) 
 		return nil, err
 	}
 
-	if m.Backend == BackendEnt {
-		// gorm-only for now; the ent path is gated on F027 (Phase 4). The
-		// templates/buf.gen.ent.yaml.tmpl stub marks where it plugs in.
-		return nil, fmt.Errorf("--backend ent is not yet implemented (gated on F027); use --backend gorm")
-	}
-
 	if err := preflight(ctx, opts.NoGenerate); err != nil {
 		return nil, err
 	}
@@ -76,6 +70,28 @@ func Generate(ctx context.Context, opts Options, out io.Writer) (*Model, error) 
 	if err := runBufGenerate(ctx, abs); err != nil {
 		return nil, fmt.Errorf("buf generate: %w", err)
 	}
+
+	if m.Backend == BackendEnt {
+		// ent is a TWO-STEP generate, and the steps have an ordering hazard: buf
+		// ran protoc-gen-ent (the ent SCHEMAS + the New<R>EntRepository adapter +
+		// main.go), all of which import the ent CLIENT packages (gen/ent/order,
+		// .../predicate, .../runtime) that entc has NOT generated yet. A plain
+		// `go mod tidy` here would try to resolve those not-yet-existing internal
+		// packages as remote modules and fail. So:
+		//   1. `go mod tidy -e` (best-effort: ignore the unresolvable internal
+		//      client-package errors) just to pull the entc toolchain deps into
+		//      go.sum so entc can run;
+		//   2. `go generate ./gen/ent` → entc turns the schemas into the client;
+		//   3. a clean `go mod tidy` now that every package exists.
+		fmt.Fprintf(out, "• go mod tidy -e (seed entc deps)\n")
+		// Errors expected/ignored: the client packages don't exist until step 2.
+		_ = runCmd(ctx, abs, nil, "go", "mod", "tidy", "-e")
+		fmt.Fprintf(out, "• go generate ./gen/ent (entc client)\n")
+		if err := runCmd(ctx, abs, nil, "go", "generate", "./gen/ent"); err != nil {
+			return nil, fmt.Errorf("go generate ./gen/ent (entc): %w", err)
+		}
+	}
+
 	fmt.Fprintf(out, "• go mod tidy\n")
 	if err := runCmd(ctx, abs, nil, "go", "mod", "tidy"); err != nil {
 		return nil, fmt.Errorf("go mod tidy: %w", err)

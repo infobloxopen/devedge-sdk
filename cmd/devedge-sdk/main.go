@@ -99,7 +99,7 @@ apx and buf must be on PATH.`,
 		},
 	}
 	c.Flags().StringVar(&resource, "resource", "", "singular resource type name (e.g. Order); defaults from the service name")
-	c.Flags().StringVar(&backend, "backend", "gorm", "persistence backend: gorm|ent (ent is gated on F027)")
+	c.Flags().StringVar(&backend, "backend", "gorm", "persistence backend: gorm|ent")
 	c.Flags().StringVar(&module, "module", "", "Go module path (e.g. github.com/acme/orders); defaults to github.com/<org>/<name>")
 	c.Flags().StringVar(&org, "org", "infobloxopen", "apx organization")
 	c.Flags().StringVar(&dir, "dir", "", "target directory (defaults to the service name)")

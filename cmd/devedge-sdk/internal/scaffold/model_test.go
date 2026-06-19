@@ -23,6 +23,10 @@ func TestOptionsValidate(t *testing.T) {
 				assertEq(t, "ProtoPackage", m.ProtoPackage, "orders.v1")
 				assertEq(t, "ProtoPathSuffix", m.ProtoPathSuffix, "orders/v1")
 				assertEq(t, "GoPkg", m.GoPkg, "ordersv1")
+				// Single-segment gen path (gen/<svc>v1), NOT gen/<svc>/v1: required
+				// for protoc-gen-ent's sibling ent/ package to line up. Same for
+				// both backends so there is one convention.
+				assertEq(t, "GoImportPath", m.GoImportPath, "github.com/infobloxopen/orders/gen/ordersv1")
 				assertEq(t, "ProtoFile", m.ProtoFile, "orders.proto")
 			},
 		},

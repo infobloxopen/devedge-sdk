@@ -9,7 +9,7 @@ syntax = "proto3";
 // git-ignored, consumer-local code (see .gitignore).
 package {{.ProtoPackage}};
 
-option go_package = "{{.Module}}/gen/{{.ProtoPathSuffix}};{{.GoPkg}}";
+option go_package = "{{.GoImportPath}};{{.GoPkg}}";
 
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";

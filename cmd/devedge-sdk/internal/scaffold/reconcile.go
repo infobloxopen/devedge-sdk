@@ -63,7 +63,10 @@ func hasProtoModuleRoot(s string) bool {
 }
 
 // sdkPluginPATH returns a directory containing the SDK codegen plugins
-// (protoc-gen-{devedge-authz,svc,storage}) for buf to find on PATH.
+// (protoc-gen-{devedge-authz,svc,storage,ent}) for buf to find on PATH. All four
+// are installed regardless of backend; buf only invokes the ones the rendered
+// buf.gen.yaml lists (storage for gorm, ent for ent), so installing the superset
+// is harmless and keeps this resolver backend-agnostic.
 //
 // Resolution order:
 //  1. DEVEDGE_SDK_PLUGIN_BIN — a prebuilt bin dir (used by the in-repo
@@ -92,6 +95,7 @@ func sdkPluginPATH(ctx context.Context, scaffoldDir string) (string, error) {
 		"github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz",
 		"github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-svc",
 		"github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-storage",
+		"github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-ent",
 	}
 	for _, p := range plugins {
 		name := p[strings.LastIndex(p, "/")+1:]
