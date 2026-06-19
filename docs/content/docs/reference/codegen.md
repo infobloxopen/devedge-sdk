@@ -131,12 +131,9 @@ for the handler pattern). The token is opaque — clients must not parse it.
 
 On the **ent** backend you get the same behavior: `protoc-gen-ent` adds the generated `entrepo.EtagMixin`,
 which supplies the `etag` column **and** a mutation hook that stamps a fresh `etag.New()` token on every
-Create/Update — automatically, with no consumer code on the write path. Surface it on reads by copying it
-onto the proto in your `fromEnt<Resource>` mapping, alongside the other fields:
-
-```go
-p.Etag = e.Etag // AIP-154: the EtagMixin-stamped token a client echoes as If-Match
-```
+Create/Update — automatically, with no consumer code on the write path. The **generated**
+`fromEnt<Resource>` projection surfaces it on reads (`p.Etag = e.Etag`), so the AIP-154 round-trip
+works with no consumer code on either path.
 
 The If-Match precondition comparison is the same documented handler pattern on both backends (see
 [middleware → etag](../middleware/#etag--412-preconditions)).
@@ -190,17 +187,40 @@ A message is a **resource** (and gets a schema) when it declares an `id` field �
 (for example a consumer-declared LRO `Operation`) are **skipped**, so they get no ent schema or
 batch wrapper.
 
-`protoc-gen-ent` generates the ent **schema** (under `ent/schema/`) and a batch wrapper; it does
-**not** generate the adapter that satisfies the neutral `persistence.Repository` seam. You write a
-thin one using the SDK's generic `entrepo.EntRepository[T, K]`, supplying closures for
-Get/List/Create/Update/Delete/Undelete over the ent client, behind this constructor:
+`protoc-gen-ent` generates the ent **schema** (under `ent/schema/`), a batch wrapper, **and the
+repository adapter itself** (`<resource>_repo.ent.go`) — so you write **no** hand-written ent wiring.
+The generated `New<Resource>EntRepository` fills the six `entrepo.EntRepository[T, K]` closures
+(Get/List/Create/Update/Delete/Undelete) over the ent client, with tenant guards on mutations,
+`persistence.ConstraintError` classification, `ent.IsNotFound → persistence.ErrNotFound` mapping, the
+secret hash/cipher block, AIP-160 filtering from the generated `<Resource>EntColumns` maps, a
+conditional set for `belongs_to` foreign keys, and the `fromEnt<Resource>` projection. A
+`LookupBy<Field>Hash` is emitted per secret field. Just construct it:
 
 ```go
-func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*APIKey, string]
+repo := apikeyv1.NewAPIKeyEntRepository(client, enc) // persistence.Repository[*APIKey, string]
 ```
 
-A complete, copy-able adapter (tenant guards on mutations, secret hash/cipher on create, soft-delete
-via `delete_time`) lives in the apikey example at `testdata/apikey/apikeyv1/ent_wiring.go`.
+**Customization (the owned seam).** For computed/derived values or columns the generator can't infer,
+register the generated hooks from your own (regen-safe) file — the adapter calls them when set, so
+re-running codegen never disturbs your custom logic:
+
+```go
+func init() {
+    apikeyv1.FromEntAPIKeyCustom  = func(e *ent.APIKey, p *apikeyv1.APIKey)     { /* read projection */ }
+    apikeyv1.ToEntAPIKeyOnCreate  = func(p *apikeyv1.APIKey, b *ent.APIKeyCreate)   { /* extra write columns */ }
+    apikeyv1.ToEntAPIKeyOnUpdate  = func(p *apikeyv1.APIKey, u *ent.APIKeyUpdateOne) { /* extra write columns */ }
+}
+```
+
+**Fail-closed coverage.** If a resource field has no deterministic mapping — a nested
+non-relationship message, a repeated non-relationship field, an enum, or a non-string map —
+generation **fails**, naming the field and the remedy, rather than silently dropping it. Make it a
+relationship, give it a scalar storage type, or mark it `OUTPUT_ONLY`.
+
+**Multi-surface (reserved).** The `(infoblox.storage.v1.model)` message option binds a resource to a
+backing storage model so several API surfaces can project one stored entity. The annotation is the
+locked contract today; the cross-message surface codegen is forthcoming (a value other than the
+message's own name is rejected until then).
 
 ### Relationships in ent
 

@@ -1,7 +1,7 @@
 # F027 — Repository Adapter Codegen (clean cross-backend persistence wiring)
 
 **AIPs**: AIP-132/133/134/135 (CRUD), AIP-148 (soft-delete/TTL), AIP-154 (etag)
-**Status**: in-progress
+**Status**: shipped (core) — phases 1–5 + 7 done; **deferred:** phase 5b (multi-surface codegen) + phase 6 (GORM parity), to build when a real two-surface or GORM-only consumer exists. See tasks.md for the resume plan.
 **Branch**: `feat/027-repo-adapter-codegen`
 **Extends**: F026 (batch codegen — the generated batch wrapper currently *depends on* the
 hand-written adapter this feature generates), F013 (secret fields), F020 (soft-delete)

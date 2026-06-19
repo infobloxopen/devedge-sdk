@@ -41,7 +41,7 @@ Large rewrite; no GORM-only or multi-surface consumer needs it today. To resume:
 - [ ] T601 `[C]` `protoc-gen-storage` adopts the shared `cmd/internal/storagegen` checker (already engine-neutral) + the split-file + the exported owned-hook contract + the neutral `infoblox.storage.v1.model` annotation, matching protoc-gen-ent. FR G-005
 - [ ] T602 `[S]` Regenerate toy/apikey/fleet GORM; `go test ./cmd/protoc-gen-storage/...` + integration green. AC-006
 
-## Phase 7 — docs + ship
-- [ ] T701 `[S]` Update `reference/codegen.md` + `guides/model-a-resource.md`: the ent adapter + projection are generated (no hand-written `ent_wiring.go`); the exported `FromEnt<R>Custom` / `ToEnt<R>On{Create,Update}` hooks; the fail-closed coverage check; the `infoblox.storage.v1.model` annotation (reserved for multi-surface, codegen forthcoming). Remove "hand-write ent wiring" guidance.
+## Phase 7 — docs + ship ✅ done
+- [X] T701 `[S]` Updated `reference/codegen.md` (the ent adapter + projection are generated; the exported `FromEnt<R>Custom` / `ToEnt<R>On{Create,Update}` hooks; fail-closed coverage; the `infoblox.storage.v1.model` annotation), `guides/model-a-resource.md` (etag auto-surfaced; ent tag-filter wired by the generated adapter), and `reference/persistence.md` (ConstraintError is in the generated adapter). Removed "hand-write ent wiring" guidance.
 - [ ] T702 `[C]` (DEFERRED with Phase 6) Re-run the Run 9 `coupond` build docs-only on ent + GORM with zero hand-written adapter; record before/after churn. AC-007
-- [ ] T703 `[S]` Full SDK gates + `make security-check` green; close #53.
+- [X] T703 `[S]` Full SDK gates green: root `build`/`vet`/`test`, `testdata/{apikey,fleet,toy}`, `make security-check`. #53 closed via the shipping PR (`Closes #53`).
