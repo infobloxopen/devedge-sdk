@@ -16,16 +16,21 @@ import (
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
 
-// TestSmoke boots the generated server and runs one tenant-scoped CRUD
-// round-trip over gRPC: Create -> Get -> List -> Update -> Delete ->
-// Get(NotFound). It proves the scaffold builds, boots, authz-gates, and
-// persists with zero hand-edits to generated code (F028 AC-007).
-func TestSmoke(t *testing.T) {
+// devGrant is the dev authorization grant the smoke tests boot the server with:
+// the "admin" group may do everything in any tenant. It mirrors the grant in
+// main.go and, paired with grpcauthz.DevPrincipalFunc (wired in newServer), is
+// satisfied by a caller that sends `account-id: <tenant>` + `groups: admin`.
+func devGrant() authz.Grant {
+	return authz.Grant{Tenant: "*", Subjects: []string{"group:admin"}, Verbs: []authz.Verb{"*"}, Resource: "*"}
+}
+
+// startServer boots a generated server on kernel-assigned ports (":0") and
+// returns a connected client. The server is torn down via t.Cleanup.
+func startServer(t *testing.T) {{.GoPkg}}.{{.ServiceType}}Client {
+	t.Helper()
 	// ":0" => kernel-assigned ports, so the test never collides with a real
 	// listener or another test run.
-	s, err := newServer(authz.NewDevAuthorizer(authz.Grant{
-		Tenant: "*", Subjects: []string{"*"}, Verbs: []authz.Verb{"*"}, Resource: "*",
-	}), ":0", ":0")
+	s, err := newServer(authz.NewDevAuthorizer(devGrant()), ":0", ":0")
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
@@ -51,11 +56,20 @@ func TestSmoke(t *testing.T) {
 		t.Fatalf("dial %q: %v", addr, err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	client := {{.GoPkg}}.New{{.ServiceType}}Client(conn)
+	return {{.GoPkg}}.New{{.ServiceType}}Client(conn)
+}
 
-	// Pass account-id so the TenantID middleware is satisfied and the resource
-	// is scoped to "tenant1".
-	mdCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("account-id", "tenant1"))
+// TestSmoke boots the generated server and runs one tenant-scoped CRUD
+// round-trip over gRPC: Create -> Get -> List -> Update -> Delete ->
+// Get(NotFound). It proves the scaffold builds, boots, authz-gates, and
+// persists with zero hand-edits to generated code (F028 AC-007).
+func TestSmoke(t *testing.T) {
+	client := startServer(t)
+
+	// Present the dev identity the grant authorizes: account-id satisfies the
+	// TenantID middleware (and scopes the resource), groups:admin satisfies the
+	// group:admin grant via grpcauthz.DevPrincipalFunc.
+	mdCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("account-id", "tenant1", "groups", "admin"))
 
 	created, err := client.Create{{.Resource}}(mdCtx, &{{.GoPkg}}.Create{{.Resource}}Request{
 		{{.Resource}}: &{{.GoPkg}}.{{.Resource}}{Id: "{{.ResourceSnake}}-1", DisplayName: "first {{.ResourceSnake}}"},
@@ -101,5 +115,22 @@ func TestSmoke(t *testing.T) {
 	_, err = client.Get{{.Resource}}(mdCtx, &{{.GoPkg}}.Get{{.Resource}}Request{Id: "{{.ResourceSnake}}-1"})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("Get{{.Resource}} after delete: want NotFound, got %v (err=%v)", status.Code(err), err)
+	}
+}
+
+// TestSmoke_DeniedForUnknownPrincipal proves the authz gate fails closed: a
+// caller that does NOT present the granted identity (no groups:admin) is denied
+// with PermissionDenied, even though the RPC is declared. This is the negative
+// counterpart to TestSmoke — together they show authz is enforced, not bypassed.
+func TestSmoke_DeniedForUnknownPrincipal(t *testing.T) {
+	client := startServer(t)
+
+	// account-id alone satisfies the TenantID middleware but yields a principal
+	// with no groups, so the group:admin grant does NOT match -> default deny.
+	mdCtx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("account-id", "tenant1"))
+
+	_, err := client.Get{{.Resource}}(mdCtx, &{{.GoPkg}}.Get{{.Resource}}Request{Id: "nope"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Get{{.Resource}} without grant: want PermissionDenied, got %v (err=%v)", status.Code(err), err)
 	}
 }

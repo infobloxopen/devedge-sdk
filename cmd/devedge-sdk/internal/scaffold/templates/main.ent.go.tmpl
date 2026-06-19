@@ -20,6 +20,7 @@ import (
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
@@ -114,6 +115,10 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 		HTTPAddr:   httpAddr,
 		Rules:      {{.GoPkg}}.{{.ServiceType}}AuthzRules,
 		Authorizer: authorizer,
+		// Derive the caller's authz.Principal from request metadata (account-id ->
+		// tenant, groups -> group:<name>). Without it the principal is empty and
+		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
+		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 	})
 	if err != nil {
 		return nil, err
@@ -129,10 +134,14 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 }
 
 func main() {
-	// Dev authorizer: grants everything. Replace with a real Authorizer in prod.
+	// Dev authorizer: grants the "admin" group every verb on every resource in any
+	// tenant. Paired with grpcauthz.DevPrincipalFunc (wired in newServer), a caller
+	// is authorized when it sends `account-id: <tenant>` and `groups: admin`; anyone
+	// else fails closed (PermissionDenied). Replace BOTH the grant and the
+	// PrincipalFunc with a real policy + verified-token func in production.
 	authorizer := authz.NewDevAuthorizer(authz.Grant{
 		Tenant:   "*",
-		Subjects: []string{"*"},
+		Subjects: []string{"group:admin"},
 		Verbs:    []authz.Verb{"*"},
 		Resource: "*",
 	})
