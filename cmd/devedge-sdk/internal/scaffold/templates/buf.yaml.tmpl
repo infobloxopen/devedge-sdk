@@ -1,0 +1,25 @@
+version: v2
+# One buf module rooted at `proto`, matching apx.yaml's module_roots: [proto].
+# It contains BOTH your service proto (proto/{{.ProtoPathSuffix}}) and the vendored
+# infoblox annotation mirrors (proto/infoblox/...). The mirrors are codegen inputs
+# only — they are git-ignored under apx's surface and excluded from lint/breaking
+# so apx governs only YOUR public proto. (F028 reality #1.)
+modules:
+  - path: proto
+deps:
+  - buf.build/googleapis/googleapis
+lint:
+  use:
+    - STANDARD
+  # The AIP CRUD shape returns the resource message directly and reuses it across
+  # RPCs; these two STANDARD rules conflict with that idiomatic shape.
+  except:
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+  ignore:
+    - proto/infoblox
+breaking:
+  use:
+    - WIRE_JSON
+  ignore:
+    - proto/infoblox

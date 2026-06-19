@@ -1,0 +1,121 @@
+// Command {{.BinName}} runs the {{.ServiceType}}.
+//
+// The server is wired by construction:
+//   - server.New configures the gRPC + HTTP-gateway stack and the authz interceptor;
+//   - {{.GoPkg}}.Register{{.ServiceType}} asserts at boot that every RPC has an authz
+//     rule (fail-closed) and refuses to start otherwise;
+//   - the resource is persisted through the generated GORM repository over SQLite.
+//
+// This file is hand-owned (NOT generated) — edit it to change the handler logic.
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+
+	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/server"
+
+	{{.GoPkg}} "{{.GoImportPath}}"
+)
+
+// handler implements the generated {{.GoPkg}}.{{.ServiceType}}Server interface.
+type handler struct {
+	{{.GoPkg}}.Unimplemented{{.ServiceType}}Server
+	repo *{{.GoPkg}}.{{.Resource}}Repository
+}
+
+func (h *handler) Create{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Create{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+	// Stamp the resource with the caller's tenant so it is scoped to their account.
+	if tid := middleware.TenantIDFromContext(ctx); tid != "" {
+		req.{{.Resource}}.AccountId = tid
+	}
+	return h.repo.Create(ctx, req.{{.Resource}})
+}
+
+func (h *handler) Get{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Get{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+	return h.repo.Get(ctx, req.Id)
+}
+
+func (h *handler) List{{.Resource}}s(ctx context.Context, req *{{.GoPkg}}.List{{.Resource}}sRequest) (*{{.GoPkg}}.List{{.Resource}}sResponse, error) {
+	items, next, err := h.repo.List(ctx, persistence.ListOptions{
+		PageSize:    int(req.PageSize),
+		PageToken:   req.PageToken,
+		ShowDeleted: req.ShowDeleted,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &{{.GoPkg}}.List{{.Resource}}sResponse{{"{"}}{{.Resource}}s: items, NextPageToken: next}, nil
+}
+
+func (h *handler) Update{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Update{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+	return h.repo.Update(ctx, req.{{.Resource}}.Id, req.{{.Resource}}, req.UpdateMask...)
+}
+
+func (h *handler) Delete{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Delete{{.Resource}}Request) (*{{.GoPkg}}.Delete{{.Resource}}Response, error) {
+	if err := h.repo.Delete(ctx, req.Id); err != nil {
+		return nil, err
+	}
+	return &{{.GoPkg}}.Delete{{.Resource}}Response{}, nil
+}
+
+// newHandler opens the database, migrates the generated model, and returns a
+// handler. SQLite (pure-Go, no CGo) keeps the scaffold runnable out of the box;
+// swap the dialector for postgres/mysql in production.
+func newHandler() (*handler, error) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		return nil, err
+	}
+	if err := db.AutoMigrate(&{{.GoPkg}}.{{.Resource}}Model{}); err != nil {
+		return nil, err
+	}
+	return &handler{repo: {{.GoPkg}}.New{{.Resource}}Repository(db)}, nil
+}
+
+// newServer builds a fully wired server with the given authorizer and listen
+// addresses. Returns an error (rather than panicking) so tests can assert the
+// fail-closed authz gate. The smoke test passes ":0" for kernel-assigned ports.
+func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.Server, error) {
+	s, err := server.New(server.Config{
+		GRPCAddr:   grpcAddr,
+		HTTPAddr:   httpAddr,
+		Rules:      {{.GoPkg}}.{{.ServiceType}}AuthzRules,
+		Authorizer: authorizer,
+	})
+	if err != nil {
+		return nil, err
+	}
+	h, err := newHandler()
+	if err != nil {
+		return nil, err
+	}
+	if err := {{.GoPkg}}.Register{{.ServiceType}}(s, h); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func main() {
+	// Dev authorizer: grants everything. Replace with a real Authorizer in prod.
+	authorizer := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	s, err := newServer(authorizer, ":{{.GRPCPort}}", ":{{.HTTPPort}}")
+	if err != nil {
+		log.Fatalf("{{.BinName}}: init: %v", err)
+	}
+	log.Printf("{{.BinName}}: serving gRPC on :{{.GRPCPort}}, HTTP on :{{.HTTPPort}}")
+	if err := s.Serve(context.Background()); err != nil {
+		log.Fatalf("{{.BinName}}: serve: %v", err)
+	}
+}

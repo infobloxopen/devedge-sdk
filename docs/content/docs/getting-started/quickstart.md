@@ -6,6 +6,38 @@ weight: 2
 Stand up a fail-closed gRPC service in five minutes. By the end you will have a proto with an
 authz annotation, generated rules, a running server, and a passing test.
 
+## The one-command path (recommended)
+
+The fastest way to a running service is the scaffold generator. One command produces an
+**apx-governed**, **authz-gated**, **persisting** project that builds and passes its smoke test
+with **zero files hand-edited**:
+
+```bash
+go install github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk@latest
+
+devedge-sdk new service orders --resource Order --backend gorm
+cd orders
+make test            # boots the server + one tenant-scoped CRUD round-trip — green
+```
+
+What you get, wired together: the public `proto/orders/v1/orders.proto` (a CRUD `OrderService`
+with an `(infoblox.authz.v1.rule)` on every RPC); the apx app-repo files (`apx.yaml`,
+`.github/workflows/apx-release.yml`); the `buf.yaml`/`buf.gen.yaml` with the six SDK codegen
+plugins pre-wired; the vendored `infoblox/{authz,field}` annotation mirrors; `server/main.go`
+already calling `server.New(...)` with the generated `OrderServiceAuthzRules`; a generated GORM
+model + repository (git-ignored, engine deps in *your* go.mod only); and a passing smoke test.
+
+The generator requires `apx` and `buf` on PATH and shells out to `apx init app` so the app layout
+stays current with apx. Flags: `--backend gorm|ent` (both produce a building, persisting service
+with zero hand-written persistence wiring — `ent` runs the buf→entc two-step for you), `--module`,
+`--org`, `--no-generate` (skip the first `buf generate`), `--force` (scaffold into a non-empty dir).
+
+> **Before / after.** The manual sequence below is ~10 hand-authored, error-prone artifacts (a
+> two-module `buf.yaml`, a seven-plugin `buf.gen.yaml` where one plugin takes no `module=` and
+> another an optional `dialect=`, byte-identical annotation mirrors, the `server.New(...)` wiring,
+> …). The scaffold collapses that to **one command and zero hand-edits**. The rest of this page
+> walks the manual flow so you understand what the scaffold generates.
+
 ## 1. Prerequisites
 
 Install the SDK and the codegen plugins (see [Installation](../installation/)):

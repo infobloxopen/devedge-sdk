@@ -6,6 +6,12 @@ weight: 1
 The full loop: author a proto, run `buf generate`, and get a service scaffold, a repository, and
 an authz rule table. The proto is the single source of truth.
 
+> **Starting a new service?** Don't hand-wire any of this. Run
+> `devedge-sdk new service <name> --resource <Resource> --backend gorm` (see the
+> [Quickstart](../../getting-started/quickstart/#the-one-command-path-recommended)) — it generates
+> a building, authz-gated, persisting project with zero hand-edits. This guide explains what that
+> scaffold produces, for when you customize it.
+
 ## 1. Author the proto
 
 Declare your resource, the RPCs, the HTTP mappings, and the authz rule per method. This is the

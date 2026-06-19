@@ -1,0 +1,14 @@
+module {{.Module}}
+
+go 1.25
+
+require (
+	github.com/glebarez/sqlite {{.GlebarezSQLiteVersion}}
+	github.com/grpc-ecosystem/grpc-gateway/v2 {{.GRPCGatewayVersion}}
+	github.com/infobloxopen/apis/proto/infoblox/authz {{.AuthzBindingVersion}}
+	github.com/infobloxopen/devedge-sdk {{.SDKVersion}}
+	google.golang.org/genproto/googleapis/api {{.GenprotoAPIVersion}}
+	google.golang.org/grpc {{.GRPCVersion}}
+	google.golang.org/protobuf {{.ProtobufVersion}}
+	gorm.io/gorm {{.GormVersion}}
+)

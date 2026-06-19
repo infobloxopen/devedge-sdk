@@ -1,0 +1,147 @@
+// Command {{.BinName}} runs the {{.ServiceType}} (ent backend).
+//
+// The server is wired by construction:
+//   - server.New configures the gRPC + HTTP-gateway stack and the authz interceptor;
+//   - {{.GoPkg}}.Register{{.ServiceType}} asserts at boot that every RPC has an authz
+//     rule (fail-closed) and refuses to start otherwise;
+//   - the resource is persisted through the GENERATED ent repository adapter
+//     ({{.GoPkg}}.New{{.Resource}}EntRepository — produced by protoc-gen-ent, F027:
+//     no hand-written ent wiring) over SQLite.
+//
+// This file is hand-owned (NOT generated) — edit it to change the handler logic.
+package main
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"log"
+
+	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
+
+	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/server"
+
+	entclient "{{.Module}}/gen/ent"
+	_ "{{.Module}}/gen/ent/runtime" // required by ent schema hooks (mixins)
+	{{.GoPkg}} "{{.GoImportPath}}"
+)
+
+// handler implements the generated {{.GoPkg}}.{{.ServiceType}}Server interface.
+type handler struct {
+	{{.GoPkg}}.Unimplemented{{.ServiceType}}Server
+	repo persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string]
+}
+
+func (h *handler) Create{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Create{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+	// Stamp the resource with the caller's tenant so it is scoped to their account.
+	if tid := middleware.TenantIDFromContext(ctx); tid != "" {
+		req.{{.Resource}}.AccountId = tid
+	}
+	return h.repo.Create(ctx, req.{{.Resource}})
+}
+
+func (h *handler) Get{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Get{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+	return h.repo.Get(ctx, req.Id)
+}
+
+func (h *handler) List{{.Resource}}s(ctx context.Context, req *{{.GoPkg}}.List{{.Resource}}sRequest) (*{{.GoPkg}}.List{{.Resource}}sResponse, error) {
+	items, next, err := h.repo.List(ctx, persistence.ListOptions{
+		PageSize:    int(req.PageSize),
+		PageToken:   req.PageToken,
+		ShowDeleted: req.ShowDeleted,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &{{.GoPkg}}.List{{.Resource}}sResponse{{"{"}}{{.Resource}}s: items, NextPageToken: next}, nil
+}
+
+func (h *handler) Update{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Update{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+	return h.repo.Update(ctx, req.{{.Resource}}.Id, req.{{.Resource}}, req.UpdateMask...)
+}
+
+func (h *handler) Delete{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Delete{{.Resource}}Request) (*{{.GoPkg}}.Delete{{.Resource}}Response, error) {
+	if err := h.repo.Delete(ctx, req.Id); err != nil {
+		return nil, err
+	}
+	return &{{.GoPkg}}.Delete{{.Resource}}Response{}, nil
+}
+
+// registerSQLite3 aliases the pure-Go "sqlite" driver (modernc.org/sqlite) under
+// the name "sqlite3" that ent's dialect.SQLite expects. SQLite (no CGo) keeps the
+// scaffold runnable out of the box; point ent.Open at postgres/mysql in production.
+func registerSQLite3() error {
+	for _, name := range sql.Drivers() {
+		if name == "sqlite3" {
+			return nil // already registered (e.g. mattn/go-sqlite3)
+		}
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return err
+	}
+	drv := db.Driver()
+	_ = db.Close()
+	sql.Register("sqlite3", drv.(driver.Driver))
+	return nil
+}
+
+// newHandler opens the ent client, runs the schema migration, and returns a
+// handler backed by the GENERATED ent repository adapter (no hand-written wiring).
+func newHandler() (*handler, error) {
+	if err := registerSQLite3(); err != nil {
+		return nil, err
+	}
+	client, err := entclient.Open("sqlite3", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, err
+	}
+	if err := client.Schema.Create(context.Background()); err != nil {
+		return nil, err
+	}
+	return &handler{repo: {{.GoPkg}}.New{{.Resource}}EntRepository(client)}, nil
+}
+
+// newServer builds a fully wired server with the given authorizer and listen
+// addresses. Returns an error (rather than panicking) so tests can assert the
+// fail-closed authz gate. The smoke test passes ":0" for kernel-assigned ports.
+func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.Server, error) {
+	s, err := server.New(server.Config{
+		GRPCAddr:   grpcAddr,
+		HTTPAddr:   httpAddr,
+		Rules:      {{.GoPkg}}.{{.ServiceType}}AuthzRules,
+		Authorizer: authorizer,
+	})
+	if err != nil {
+		return nil, err
+	}
+	h, err := newHandler()
+	if err != nil {
+		return nil, err
+	}
+	if err := {{.GoPkg}}.Register{{.ServiceType}}(s, h); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func main() {
+	// Dev authorizer: grants everything. Replace with a real Authorizer in prod.
+	authorizer := authz.NewDevAuthorizer(authz.Grant{
+		Tenant:   "*",
+		Subjects: []string{"*"},
+		Verbs:    []authz.Verb{"*"},
+		Resource: "*",
+	})
+	s, err := newServer(authorizer, ":{{.GRPCPort}}", ":{{.HTTPPort}}")
+	if err != nil {
+		log.Fatalf("{{.BinName}}: init: %v", err)
+	}
+	log.Printf("{{.BinName}}: serving gRPC on :{{.GRPCPort}}, HTTP on :{{.HTTPPort}}")
+	if err := s.Serve(context.Background()); err != nil {
+		log.Fatalf("{{.BinName}}: serve: %v", err)
+	}
+}

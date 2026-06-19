@@ -1,0 +1,80 @@
+// MIRROR — codegen input only. The canonical schema lives at
+// github.com/infobloxopen/apis/proto/infoblox/field/v1/field.proto
+// (released via apx). This copy exists solely so buf can resolve the import
+// when generating test fixtures. Keep byte-identical to the canonical file.
+syntax = "proto3";
+
+package infoblox.field.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/infobloxopen/apis/proto/infoblox/field/v1;fieldv1";
+
+// FieldOptions declares field-level data-modeling properties: sensitivity,
+// storage constraints, and relationships. This is intentionally separate from
+// the authz package — secret fields and ORM associations are data concerns,
+// not authorization concerns.
+message FieldOptions {
+  // secret marks a field as sensitive. The framework will:
+  //   - never store the plaintext value (hash + optional cipher only),
+  //   - redact the value in logs ("[REDACTED]"),
+  //   - reject any Get/List response that returns a non-empty value.
+  bool secret = 1;
+
+  // Storage constraints.
+  bool   not_null    = 2;  // DB NOT NULL constraint
+  bool   unique      = 3;  // DB UNIQUE constraint / uniqueIndex
+  bool   index       = 4;  // DB index (non-unique)
+  string column_name = 5;  // override the default snake_case column name
+  string column_type = 6;  // override the DB column type (e.g. "varchar(255)")
+
+  // Relationships. Declare on the proto field that holds the related resource.
+  // The codegen plugins generate the appropriate ORM association or graph edge.
+  HasOne     has_one      = 20;
+  HasMany    has_many     = 21;
+  BelongsTo  belongs_to   = 22;
+  ManyToMany many_to_many = 23;
+}
+
+// HasOne declares a one-to-one relationship where the foreign key lives on the
+// associated model's table. Annotate the message-typed field that holds the
+// associated resource (e.g. User.CreditCard where credit_cards.user_id is the FK).
+message HasOne {
+  // foreign_key is the column name on the associated table.
+  string foreign_key = 1;
+  // association_foreign_key is the column on this table (default: primary key).
+  string association_foreign_key = 2;
+}
+
+// HasMany declares a one-to-many relationship where the FK is on the
+// associated table. Annotate the repeated message-typed field.
+message HasMany {
+  string foreign_key             = 1;
+  string association_foreign_key = 2;
+  // position_field enables ordered has_many (e.g. for ranked items).
+  string position_field          = 3;
+}
+
+// BelongsTo declares the inverse side of a has_one or has_many: the FK lives
+// on this table. Annotate the message-typed field that holds the parent.
+message BelongsTo {
+  // foreign_key is the column on THIS table (e.g. "user_id" on orders).
+  string foreign_key             = 1;
+  string association_foreign_key = 2;
+}
+
+// ManyToMany declares a many-to-many relationship via an explicit join table.
+message ManyToMany {
+  // join_table is the name of the join table.
+  string join_table = 1;
+  // foreign_key is this model's FK column in the join table.
+  string foreign_key = 2;
+  // association_foreign_key is the other model's FK column in the join table.
+  string association_foreign_key = 3;
+}
+
+extend google.protobuf.FieldOptions {
+  // opts carries all field-level data-modeling properties.
+  // Extension number 50003 (alongside method-level rule = 50001 in authz).
+  FieldOptions opts = 50003;
+}

@@ -1,0 +1,45 @@
+// MIRROR — codegen input only. The canonical schema lives at
+// github.com/infobloxopen/apis/proto/infoblox/authz/v1/authz.proto
+// (released via apx; the SDK depends on its generated Go module —
+// see go.mod). This copy exists solely so buf can resolve the import
+// when generating the test fixture; no Go code is generated from it
+// here (go_package points at the canonical module). Keep byte-identical
+// to the canonical file.
+syntax = "proto3";
+
+package infoblox.authz.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/infobloxopen/apis/proto/infoblox/authz/v1;authzv1";
+
+// Rule declares the authorization requirement for an RPC. Attach it to a method;
+// the framework builds the per-method rule table from these annotations, enforces
+// them (fail-closed), and generates the permission catalog from them.
+//
+// The declaration is ENGINE-NEUTRAL: it names WHAT is required (a verb on a
+// resource), not HOW it is evaluated. It carries no engine- or policy-specific
+// fields — those belong in adapters outside this SDK.
+message Rule {
+  // The canonical permission verb. Standard set: get, list, watch, create,
+  // update, delete. Custom verbs (e.g. "download") are allowed as free strings.
+  // ("read" is intentionally not canonical; it maps to the View group =
+  // get + list + watch.)
+  string verb = 1;
+
+  // The resource the verb applies to, as a type or a template over request
+  // fields, e.g. "zone" or "zone:{zone_id}".
+  string resource = 2;
+
+  // If true, the method requires no authorization — the explicit, auditable
+  // opt-out. A method with neither a verb nor public=true is denied at runtime
+  // and fails the boot-time completeness gate.
+  bool public = 3;
+}
+
+extend google.protobuf.MethodOptions {
+  // Extension number is in the 50000-99999 "internal use" range; obtain a
+  // globally-unique number from the protobuf registry before any cross-org
+  // publication.
+  Rule rule = 50001;
+}
