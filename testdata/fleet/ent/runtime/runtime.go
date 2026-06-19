@@ -14,7 +14,9 @@ import (
 func init() {
 	fleetMixin := schema.Fleet{}.Mixin()
 	fleetMixinInters0 := fleetMixin[0].Interceptors()
+	fleetMixinInters1 := fleetMixin[1].Interceptors()
 	fleet.Interceptors[0] = fleetMixinInters0[0]
+	fleet.Interceptors[1] = fleetMixinInters1[0]
 	fleetMixinFields0 := fleetMixin[0].Fields()
 	_ = fleetMixinFields0
 	fleetFields := schema.Fleet{}.Fields()

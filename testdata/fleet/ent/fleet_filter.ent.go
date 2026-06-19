@@ -9,3 +9,10 @@ import entfleet "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent/fleet"
 func (q *FleetQuery) WhereAccountID(id string) {
 	q.Where(entfleet.AccountID(id))
 }
+
+// WhereDeleteTimeIsNil restricts the query to live (not soft-deleted) rows. It
+// satisfies entrepo.SoftDeleteFilterer, which the SoftDeleteMixin interceptor
+// calls to hide soft-deleted rows unless the context opts in via show_deleted.
+func (q *FleetQuery) WhereDeleteTimeIsNil() {
+	q.Where(entfleet.DeleteTimeIsNil())
+}

@@ -17,8 +17,10 @@ package fleetv1
 
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -39,7 +41,13 @@ type Fleet struct {
 	AccountId   string                 `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	DisplayName string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	// has_many: the child Vehicles, keyed by the fleet_id FK on the Vehicle side.
-	Vehicles      []*Vehicle `protobuf:"bytes,4,rep,name=vehicles,proto3" json:"vehicles,omitempty"`
+	Vehicles []*Vehicle `protobuf:"bytes,4,rep,name=vehicles,proto3" json:"vehicles,omitempty"`
+	// Soft-delete opt-in (AIP-148). Combined with the per-tenant unique
+	// display_name above, this is the soft-delete + unique shape from the #49
+	// follow-up: display_name must be re-creatable once a Fleet is soft-deleted
+	// (partial unique index on PostgreSQL/SQLite; a soft_delete_key discriminator
+	// on MySQL).
+	DeleteTime    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -98,6 +106,13 @@ func (x *Fleet) GetDisplayName() string {
 func (x *Fleet) GetVehicles() []*Vehicle {
 	if x != nil {
 		return x.Vehicles
+	}
+	return nil
+}
+
+func (x *Fleet) GetDeleteTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeleteTime
 	}
 	return nil
 }
@@ -187,7 +202,7 @@ var File_fleet_proto protoreflect.FileDescriptor
 
 const file_fleet_proto_rawDesc = "" +
 	"\n" +
-	"\vfleet.proto\x12\bfleet.v1\x1a\x1dinfoblox/field/v1/field.proto\"\xa3\x01\n" +
+	"\vfleet.proto\x12\bfleet.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xe5\x01\n" +
 	"\x05Fleet\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -195,7 +210,9 @@ const file_fleet_proto_rawDesc = "" +
 	"\fdisplay_name\x18\x03 \x01(\tB\x06\x9a\xb5\x18\x02\x18\x01R\vdisplayName\x12@\n" +
 	"\bvehicles\x18\x04 \x03(\v2\x11.fleet.v1.VehicleB\x11\x9a\xb5\x18\r\xaa\x01\n" +
 	"\n" +
-	"\bfleet_idR\bvehicles\"\xa7\x01\n" +
+	"\bfleet_idR\bvehicles\x12@\n" +
+	"\vdelete_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
+	"deleteTime\"\xa7\x01\n" +
 	"\aVehicle\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -220,17 +237,19 @@ func file_fleet_proto_rawDescGZIP() []byte {
 
 var file_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_fleet_proto_goTypes = []any{
-	(*Fleet)(nil),   // 0: fleet.v1.Fleet
-	(*Vehicle)(nil), // 1: fleet.v1.Vehicle
+	(*Fleet)(nil),                 // 0: fleet.v1.Fleet
+	(*Vehicle)(nil),               // 1: fleet.v1.Vehicle
+	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
 }
 var file_fleet_proto_depIdxs = []int32{
 	1, // 0: fleet.v1.Fleet.vehicles:type_name -> fleet.v1.Vehicle
-	0, // 1: fleet.v1.Vehicle.fleet:type_name -> fleet.v1.Fleet
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 1: fleet.v1.Fleet.delete_time:type_name -> google.protobuf.Timestamp
+	0, // 2: fleet.v1.Vehicle.fleet:type_name -> fleet.v1.Fleet
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_fleet_proto_init() }

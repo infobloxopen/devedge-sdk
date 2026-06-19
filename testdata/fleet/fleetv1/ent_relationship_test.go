@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite" // register SQLite driver for enttest
 
@@ -137,5 +138,36 @@ func TestEntPerTenantUnique(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "constraint failed") {
 		t.Errorf("error leaks raw SQL constraint text: %v", err)
+	}
+}
+
+// #49 follow-up (partial unique index, PostgreSQL/SQLite): on a soft-delete +
+// per-tenant-unique resource, a unique display_name must be re-creatable once
+// the holding Fleet is soft-deleted — while two LIVE fleets still can't share
+// it. The generated schema carries entsql.IndexWhere("delete_time IS NULL") on
+// the (account_id, display_name) composite; this proves it works end-to-end on
+// SQLite (same partial-index path as PostgreSQL). Exec is used for the
+// soft-delete so the post-update hydrate SELECT (which the soft-delete
+// interceptor would filter) is skipped.
+func TestEntFleet_PartialUnique_RecreateAfterSoftDelete(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:fleet_partial?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+	ctx := context.Background()
+
+	if err := client.Fleet.Create().SetID("f1").SetAccountID("t1").SetDisplayName("ops").Exec(ctx); err != nil {
+		t.Fatalf("create f1: %v", err)
+	}
+	// Two LIVE fleets with the same (account_id, display_name) must still conflict.
+	if err := client.Fleet.Create().SetID("f1b").SetAccountID("t1").SetDisplayName("ops").Exec(ctx); err == nil {
+		t.Fatal("two live fleets sharing display_name must violate the unique index")
+	}
+	// Soft-delete f1 → its row leaves the partial index.
+	if err := client.Fleet.UpdateOneID("f1").SetDeleteTime(time.Now()).Exec(ctx); err != nil {
+		t.Fatalf("soft-delete f1: %v", err)
+	}
+	// The key is now free: a fresh live fleet may reuse display_name "ops".
+	// Before the fix this failed with a unique violation (the dead row kept it).
+	if err := client.Fleet.Create().SetID("f2").SetAccountID("t1").SetDisplayName("ops").Exec(ctx); err != nil {
+		t.Fatalf("re-create display_name=ops after soft-delete must succeed (partial unique index): %v", err)
 	}
 }

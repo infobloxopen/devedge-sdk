@@ -4,6 +4,7 @@ package fleetv1
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
@@ -74,6 +75,7 @@ func (r *FleetEntRepository) BatchUpdate(ctx context.Context, items []persistenc
 		if tenantID != "" {
 			u = u.Where(entfleet.AccountID(tenantID))
 		}
+		u = u.Where(entfleet.DeleteTimeIsNil())
 		if fleetInMask(it.FieldMask, "display_name") {
 			u = u.SetDisplayName(it.Entity.GetDisplayName())
 		}
@@ -111,11 +113,12 @@ func (r *FleetEntRepository) BatchDelete(ctx context.Context, keys []string) err
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	del := tx.Fleet.Delete().Where(entfleet.IDIn(uniq...))
+	upd := tx.Fleet.Update().Where(entfleet.IDIn(uniq...))
 	if tenantID != "" {
-		del = del.Where(entfleet.AccountID(tenantID))
+		upd = upd.Where(entfleet.AccountID(tenantID))
 	}
-	n, derr := del.Exec(ctx)
+	upd = upd.Where(entfleet.DeleteTimeIsNil())
+	n, derr := upd.SetDeleteTime(time.Now()).Save(ctx)
 	if derr != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("batch delete fleet: %w", derr)

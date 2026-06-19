@@ -12,6 +12,7 @@
 package main
 
 import (
+	"flag"
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
@@ -23,7 +24,13 @@ import (
 )
 
 func main() {
-	protogen.Options{}.Run(func(gen *protogen.Plugin) error {
+	var flags flag.FlagSet
+	// dialect selects the per-tenant-unique + soft-delete strategy (see
+	// render.go targetDialect): "mysql" → a soft_delete_key discriminator column;
+	// "postgres"/"sqlite" → a partial unique index (WHERE deleted_at IS NULL).
+	dialect := flags.String("dialect", "postgres", "target SQL dialect: postgres|sqlite|mysql")
+	protogen.Options{ParamFunc: flags.Set}.Run(func(gen *protogen.Plugin) error {
+		targetDialect = *dialect
 		gen.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 		for _, f := range gen.Files {
 			if f.Generate {

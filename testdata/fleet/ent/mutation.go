@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
@@ -35,6 +36,7 @@ type FleetMutation struct {
 	typ             string
 	id              *string
 	account_id      *string
+	delete_time     *time.Time
 	display_name    *string
 	clearedFields   map[string]struct{}
 	vehicles        map[string]struct{}
@@ -185,6 +187,55 @@ func (m *FleetMutation) ResetAccountID() {
 	m.account_id = nil
 }
 
+// SetDeleteTime sets the "delete_time" field.
+func (m *FleetMutation) SetDeleteTime(t time.Time) {
+	m.delete_time = &t
+}
+
+// DeleteTime returns the value of the "delete_time" field in the mutation.
+func (m *FleetMutation) DeleteTime() (r time.Time, exists bool) {
+	v := m.delete_time
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeleteTime returns the old "delete_time" field's value of the Fleet entity.
+// If the Fleet object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMutation) OldDeleteTime(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeleteTime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeleteTime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeleteTime: %w", err)
+	}
+	return oldValue.DeleteTime, nil
+}
+
+// ClearDeleteTime clears the value of the "delete_time" field.
+func (m *FleetMutation) ClearDeleteTime() {
+	m.delete_time = nil
+	m.clearedFields[fleet.FieldDeleteTime] = struct{}{}
+}
+
+// DeleteTimeCleared returns if the "delete_time" field was cleared in this mutation.
+func (m *FleetMutation) DeleteTimeCleared() bool {
+	_, ok := m.clearedFields[fleet.FieldDeleteTime]
+	return ok
+}
+
+// ResetDeleteTime resets all changes to the "delete_time" field.
+func (m *FleetMutation) ResetDeleteTime() {
+	m.delete_time = nil
+	delete(m.clearedFields, fleet.FieldDeleteTime)
+}
+
 // SetDisplayName sets the "display_name" field.
 func (m *FleetMutation) SetDisplayName(s string) {
 	m.display_name = &s
@@ -322,9 +373,12 @@ func (m *FleetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *FleetMutation) Fields() []string {
-	fields := make([]string, 0, 2)
+	fields := make([]string, 0, 3)
 	if m.account_id != nil {
 		fields = append(fields, fleet.FieldAccountID)
+	}
+	if m.delete_time != nil {
+		fields = append(fields, fleet.FieldDeleteTime)
 	}
 	if m.display_name != nil {
 		fields = append(fields, fleet.FieldDisplayName)
@@ -339,6 +393,8 @@ func (m *FleetMutation) Field(name string) (ent.Value, bool) {
 	switch name {
 	case fleet.FieldAccountID:
 		return m.AccountID()
+	case fleet.FieldDeleteTime:
+		return m.DeleteTime()
 	case fleet.FieldDisplayName:
 		return m.DisplayName()
 	}
@@ -352,6 +408,8 @@ func (m *FleetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 	switch name {
 	case fleet.FieldAccountID:
 		return m.OldAccountID(ctx)
+	case fleet.FieldDeleteTime:
+		return m.OldDeleteTime(ctx)
 	case fleet.FieldDisplayName:
 		return m.OldDisplayName(ctx)
 	}
@@ -369,6 +427,13 @@ func (m *FleetMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAccountID(v)
+		return nil
+	case fleet.FieldDeleteTime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeleteTime(v)
 		return nil
 	case fleet.FieldDisplayName:
 		v, ok := value.(string)
@@ -407,6 +472,9 @@ func (m *FleetMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *FleetMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(fleet.FieldDeleteTime) {
+		fields = append(fields, fleet.FieldDeleteTime)
+	}
 	if m.FieldCleared(fleet.FieldDisplayName) {
 		fields = append(fields, fleet.FieldDisplayName)
 	}
@@ -424,6 +492,9 @@ func (m *FleetMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *FleetMutation) ClearField(name string) error {
 	switch name {
+	case fleet.FieldDeleteTime:
+		m.ClearDeleteTime()
+		return nil
 	case fleet.FieldDisplayName:
 		m.ClearDisplayName()
 		return nil
@@ -437,6 +508,9 @@ func (m *FleetMutation) ResetField(name string) error {
 	switch name {
 	case fleet.FieldAccountID:
 		m.ResetAccountID()
+		return nil
+	case fleet.FieldDeleteTime:
+		m.ResetDeleteTime()
 		return nil
 	case fleet.FieldDisplayName:
 		m.ResetDisplayName()

@@ -72,6 +72,34 @@ the row, `List` has no deleted-row filter, and `Undelete` is a stub that always 
 `persistence.ErrNotFound` (so the `Repository` interface stays uniform). Adding the `delete_time`
 field is the only switch — there is no separate annotation or option.
 
+#### Soft-delete + `unique`: re-creating a key, and the `dialect` option
+
+When a resource is **both** soft-delete **and** has a per-tenant `unique` field (e.g. `source_ref`),
+the per-tenant composite unique `(account_id, <field>)` must not let a *soft-deleted* row keep the key
+reserved — you must be able to create a fresh resource with the same value after the old one is
+soft-deleted (and `Undelete` correctly fails with a conflict if the key was taken meanwhile). The
+codegen handles this for you, with a strategy chosen by the **`dialect`** plugin option (passed to both
+`protoc-gen-ent` and `protoc-gen-storage`):
+
+| `dialect` | Strategy | Mechanism |
+|---|---|---|
+| `postgres` (default), `sqlite` | **Partial unique index** | the composite carries `WHERE delete_time IS NULL` (ent) / `WHERE deleted_at IS NULL` (GORM), so only live rows participate in uniqueness. No extra column. |
+| `mysql` | **Discriminator column** | MySQL has no partial indexes, so a `soft_delete_key` column joins the composite as its trailing column — `""` while the row is live (uniqueness holds among live rows), a unique marker once soft-deleted (so it never blocks re-creation). The framework stamps it on soft-delete and clears it on undelete; no consumer code. |
+
+Set it in `buf.gen.yaml` to match your **production** database (dev on SQLite still works either way):
+
+```yaml
+plugins:
+  - local: protoc-gen-storage
+    opt: [module=…, dialect=mysql]   # omit for postgres/sqlite (the default)
+  - local: protoc-gen-ent
+    opt: [dialect=mysql]
+```
+
+The behavior is identical across backends and dialects; only the physical schema differs. A per-tenant
+`unique` field on a resource **without** soft-delete is unaffected (a plain composite unique index, as
+before).
+
 A sibling marker, `google.protobuf.Timestamp expire_time = N [(google.api.field_behavior) = OUTPUT_ONLY]`,
 additionally emits a `PurgeExpired(ctx, before)` method that hard-deletes rows past their TTL.
 `expire_time` is OUTPUT_ONLY, so your **Create handler stamps it** (e.g.

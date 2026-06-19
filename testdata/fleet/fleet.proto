@@ -12,6 +12,8 @@ package fleet.v1;
 
 option go_package = "github.com/infobloxopen/devedge-sdk/testdata/fleet/fleetv1;fleetv1";
 
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
 import "infoblox/field/v1/field.proto";
 
 // Fleet is the parent resource: a tenant-scoped collection of Vehicles with a
@@ -22,6 +24,12 @@ message Fleet {
   string display_name = 3 [(infoblox.field.v1.opts) = {unique: true}];
   // has_many: the child Vehicles, keyed by the fleet_id FK on the Vehicle side.
   repeated Vehicle vehicles = 4 [(infoblox.field.v1.opts) = {has_many: {foreign_key: "fleet_id"}}];
+  // Soft-delete opt-in (AIP-148). Combined with the per-tenant unique
+  // display_name above, this is the soft-delete + unique shape from the #49
+  // follow-up: display_name must be re-creatable once a Fleet is soft-deleted
+  // (partial unique index on PostgreSQL/SQLite; a soft_delete_key discriminator
+  // on MySQL).
+  google.protobuf.Timestamp delete_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Vehicle is the child resource: it belongs_to a Fleet. fleet_id is exposed as

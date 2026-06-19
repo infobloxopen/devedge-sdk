@@ -5,6 +5,7 @@ package ent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
@@ -18,6 +19,8 @@ type Fleet struct {
 	ID string `json:"id,omitempty"`
 	// Tenant discriminator — all queries are automatically scoped to this value.
 	AccountID string `json:"account_id,omitempty"`
+	// AIP-148 soft-delete timestamp; nil for live entities.
+	DeleteTime *time.Time `json:"delete_time,omitempty"`
 	// DisplayName holds the value of the "display_name" field.
 	DisplayName string `json:"display_name,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -51,6 +54,8 @@ func (*Fleet) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case fleet.FieldID, fleet.FieldAccountID, fleet.FieldDisplayName:
 			values[i] = new(sql.NullString)
+		case fleet.FieldDeleteTime:
+			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
 		}
@@ -77,6 +82,13 @@ func (_m *Fleet) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field account_id", values[i])
 			} else if value.Valid {
 				_m.AccountID = value.String
+			}
+		case fleet.FieldDeleteTime:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field delete_time", values[i])
+			} else if value.Valid {
+				_m.DeleteTime = new(time.Time)
+				*_m.DeleteTime = value.Time
 			}
 		case fleet.FieldDisplayName:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -127,6 +139,11 @@ func (_m *Fleet) String() string {
 	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
 	builder.WriteString("account_id=")
 	builder.WriteString(_m.AccountID)
+	builder.WriteString(", ")
+	if v := _m.DeleteTime; v != nil {
+		builder.WriteString("delete_time=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("display_name=")
 	builder.WriteString(_m.DisplayName)

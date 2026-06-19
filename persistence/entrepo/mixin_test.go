@@ -98,3 +98,31 @@ func TestEtagMixin_HasHook(t *testing.T) {
 
 // Compile-time check that EtagMixin implements ent.Mixin.
 var _ ent.Mixin = entrepo.EtagMixin{}
+
+// SoftDeleteUniqueMixin tests — the MySQL-backend discriminator that lets a
+// per-tenant unique field be re-created after the holding row is soft-deleted.
+
+func TestSoftDeleteUniqueMixin_HasKeyField(t *testing.T) {
+	m := entrepo.SoftDeleteUniqueMixin{}
+	found := false
+	for _, f := range m.Fields() {
+		if f.Descriptor().Name == "soft_delete_key" {
+			found = true
+			if f.Descriptor().Default == nil {
+				t.Error("soft_delete_key must have a default (\"\") so live rows share the unique namespace")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("SoftDeleteUniqueMixin.Fields() must include soft_delete_key")
+	}
+}
+
+func TestSoftDeleteUniqueMixin_HasHook(t *testing.T) {
+	if len(entrepo.SoftDeleteUniqueMixin{}.Hooks()) == 0 {
+		t.Fatal("SoftDeleteUniqueMixin must have a mutation hook to maintain soft_delete_key")
+	}
+}
+
+// Compile-time check that SoftDeleteUniqueMixin implements ent.Mixin.
+var _ ent.Mixin = entrepo.SoftDeleteUniqueMixin{}

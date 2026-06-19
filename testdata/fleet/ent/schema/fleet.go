@@ -6,6 +6,7 @@ import (
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/index"
+	"entgo.io/ent/dialect/entsql"
 
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 )
@@ -19,6 +20,7 @@ type Fleet struct {
 func (Fleet) Mixin() []ent.Mixin {
 	return []ent.Mixin{
 		entrepo.TenantMixin{},
+		entrepo.SoftDeleteMixin{},
 	}
 }
 
@@ -40,6 +42,7 @@ func (Fleet) Edges() []ent.Edge {
 // Indexes defines the indexes of Fleet.
 func (Fleet) Indexes() []ent.Index {
 	return []ent.Index{
-		index.Fields("account_id", "display_name").Unique().StorageKey("ux_fleet_account_display_name"),
+		index.Fields("account_id", "display_name").Unique().
+			Annotations(entsql.IndexWhere("delete_time IS NULL")).StorageKey("ux_fleet_account_display_name"),
 	}
 }

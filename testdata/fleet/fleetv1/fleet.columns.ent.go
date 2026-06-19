@@ -7,4 +7,5 @@ var FleetEntColumns = map[string]string{
 	"id":           "id",
 	"account_id":   "account_id",
 	"display_name": "display_name",
+	"delete_time":  "delete_time",
 }

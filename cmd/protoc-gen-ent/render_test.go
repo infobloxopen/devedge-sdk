@@ -412,6 +412,62 @@ func TestRenderEntSchema_noEtagNoMixin(t *testing.T) {
 	mustNotContain(t, out, "EtagMixin")
 }
 
+// softDeleteUniqueMsg is a soft-delete, per-tenant-unique resource: the exact
+// shape where a unique key must be re-creatable after the holder is soft-deleted.
+func softDeleteUniqueMsg() entMessageInfo {
+	return entMessageInfo{
+		MessageName: "Order",
+		SoftDelete:  true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "source_ref", SnakeName: "source_ref", EntType: "String", Unique: true},
+		},
+	}
+}
+
+// Default dialect (postgres/sqlite): the per-tenant unique on a soft-delete
+// resource is a PARTIAL index (WHERE delete_time IS NULL) — no sentinel column.
+func TestRenderEntSchema_softDeleteUnique_partial(t *testing.T) {
+	targetDialect = "postgres"
+	out := renderEntSchema(softDeleteUniqueMsg(), nil)
+
+	mustContain(t, out, `entsql.IndexWhere("delete_time IS NULL")`)
+	mustContain(t, out, `"entgo.io/ent/dialect/entsql"`)
+	mustContain(t, out, `index.Fields("account_id", "source_ref").Unique()`)
+	mustNotContain(t, out, "soft_delete_key")
+	mustNotContain(t, out, "SoftDeleteUniqueMixin")
+}
+
+// dialect=mysql: no partial index — a soft_delete_key discriminator joins the
+// composite unique, and SoftDeleteUniqueMixin maintains it.
+func TestRenderEntSchema_softDeleteUnique_sentinel(t *testing.T) {
+	targetDialect = "mysql"
+	defer func() { targetDialect = "postgres" }()
+	out := renderEntSchema(softDeleteUniqueMsg(), nil)
+
+	mustContain(t, out, `index.Fields("account_id", "source_ref", "soft_delete_key").Unique()`)
+	mustContain(t, out, "entrepo.SoftDeleteUniqueMixin{},")
+	mustNotContain(t, out, "IndexWhere")
+	mustNotContain(t, out, "entgo.io/ent/dialect/entsql")
+}
+
+// A per-tenant unique on a resource WITHOUT soft-delete is unchanged on every
+// dialect: a plain composite unique, no partial clause, no sentinel column.
+func TestRenderEntSchema_uniqueNoSoftDelete_unchanged(t *testing.T) {
+	msg := softDeleteUniqueMsg()
+	msg.SoftDelete = false
+	for _, d := range []string{"postgres", "mysql"} {
+		targetDialect = d
+		out := renderEntSchema(msg, nil)
+		mustContain(t, out, `index.Fields("account_id", "source_ref").Unique().StorageKey("ux_order_account_source_ref")`)
+		mustNotContain(t, out, "soft_delete_key")
+		mustNotContain(t, out, "IndexWhere")
+		mustNotContain(t, out, "SoftDeleteUniqueMixin")
+	}
+	targetDialect = "postgres"
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {

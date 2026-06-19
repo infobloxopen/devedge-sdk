@@ -3,6 +3,8 @@
 package fleet
 
 import (
+	"time"
+
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/infobloxopen/devedge-sdk/testdata/fleet/ent/predicate"
@@ -66,6 +68,11 @@ func IDContainsFold(id string) predicate.Fleet {
 // AccountID applies equality check predicate on the "account_id" field. It's identical to AccountIDEQ.
 func AccountID(v string) predicate.Fleet {
 	return predicate.Fleet(sql.FieldEQ(FieldAccountID, v))
+}
+
+// DeleteTime applies equality check predicate on the "delete_time" field. It's identical to DeleteTimeEQ.
+func DeleteTime(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldEQ(FieldDeleteTime, v))
 }
 
 // DisplayName applies equality check predicate on the "display_name" field. It's identical to DisplayNameEQ.
@@ -136,6 +143,56 @@ func AccountIDEqualFold(v string) predicate.Fleet {
 // AccountIDContainsFold applies the ContainsFold predicate on the "account_id" field.
 func AccountIDContainsFold(v string) predicate.Fleet {
 	return predicate.Fleet(sql.FieldContainsFold(FieldAccountID, v))
+}
+
+// DeleteTimeEQ applies the EQ predicate on the "delete_time" field.
+func DeleteTimeEQ(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldEQ(FieldDeleteTime, v))
+}
+
+// DeleteTimeNEQ applies the NEQ predicate on the "delete_time" field.
+func DeleteTimeNEQ(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldNEQ(FieldDeleteTime, v))
+}
+
+// DeleteTimeIn applies the In predicate on the "delete_time" field.
+func DeleteTimeIn(vs ...time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldIn(FieldDeleteTime, vs...))
+}
+
+// DeleteTimeNotIn applies the NotIn predicate on the "delete_time" field.
+func DeleteTimeNotIn(vs ...time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldNotIn(FieldDeleteTime, vs...))
+}
+
+// DeleteTimeGT applies the GT predicate on the "delete_time" field.
+func DeleteTimeGT(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldGT(FieldDeleteTime, v))
+}
+
+// DeleteTimeGTE applies the GTE predicate on the "delete_time" field.
+func DeleteTimeGTE(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldGTE(FieldDeleteTime, v))
+}
+
+// DeleteTimeLT applies the LT predicate on the "delete_time" field.
+func DeleteTimeLT(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldLT(FieldDeleteTime, v))
+}
+
+// DeleteTimeLTE applies the LTE predicate on the "delete_time" field.
+func DeleteTimeLTE(v time.Time) predicate.Fleet {
+	return predicate.Fleet(sql.FieldLTE(FieldDeleteTime, v))
+}
+
+// DeleteTimeIsNil applies the IsNil predicate on the "delete_time" field.
+func DeleteTimeIsNil() predicate.Fleet {
+	return predicate.Fleet(sql.FieldIsNull(FieldDeleteTime))
+}
+
+// DeleteTimeNotNil applies the NotNil predicate on the "delete_time" field.
+func DeleteTimeNotNil() predicate.Fleet {
+	return predicate.Fleet(sql.FieldNotNull(FieldDeleteTime))
 }
 
 // DisplayNameEQ applies the EQ predicate on the "display_name" field.
