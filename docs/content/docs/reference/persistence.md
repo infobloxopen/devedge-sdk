@@ -197,12 +197,11 @@ clean sentinel — never the raw SQL — so the client sees `AlreadyExists`/`Fai
 than a 500 leaking the table and column names. The [`ErrorMapper`](../middleware/) interceptor then
 turns the sentinel into the gRPC status; you do not write that mapping by hand.
 
-On the **ent backend** the storage layer is your hand-written adapter, so it should call
-`persistence.ConstraintError` on every `Save`/mutation error to produce the same sentinels (the
-`testdata/*/ent_wiring.go` examples show this). As a safety net, `ErrorMapperUnary` **also** runs
-`persistence.ConstraintError` on any otherwise-unclassified error, so even an adapter that forgets the
-call still returns a clean `AlreadyExists`/`FailedPrecondition` with no raw SQL — never a 500 leaking
-the constraint text.
+On the **ent backend** the **generated** adapter (`<resource>_repo.ent.go`, from `protoc-gen-ent`)
+calls `persistence.ConstraintError` on every `Save`/mutation error to produce the same sentinels — no
+consumer code. As a safety net, `ErrorMapperUnary` **also** runs `persistence.ConstraintError` on any
+otherwise-unclassified error, so even a custom adapter that forgets the call still returns a clean
+`AlreadyExists`/`FailedPrecondition` with no raw SQL — never a 500 leaking the constraint text.
 
 ```go
 // ConstraintError returns ErrConflict / ErrPreconditionFailed for a recognized

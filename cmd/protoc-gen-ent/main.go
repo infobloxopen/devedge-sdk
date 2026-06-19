@@ -16,8 +16,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	storagev1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
@@ -69,6 +72,19 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		}
 		if !hasID {
 			continue
+		}
+		// F027 Phase 5 (contract): the (infoblox.storage.v1.model) annotation binds a
+		// message to a backing storage model so multiple API surfaces can share one
+		// table. The option is the locked contract, but the cross-message surface
+		// codegen is not yet generated (Phase 5b) — so reject model != the message's
+		// own name rather than silently emit a duplicate schema/table. An absent
+		// option, or model == the message name, is the normal single-surface case.
+		if opts := m.Desc.Options(); opts != nil && proto.HasExtension(opts, storagev1.E_Model) {
+			model, _ := proto.GetExtension(opts, storagev1.E_Model).(string)
+			if model != "" && model != name && model != string(m.Desc.Name()) {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s: (infoblox.storage.v1.model)=%q — multi-surface model binding is not yet generated (F027 Phase 5b: specs/027-repo-adapter-codegen); remove the annotation or set it to the message's own name", name, model))
+				continue
+			}
 		}
 		msg := entMessageInfo{MessageName: name}
 		for _, field := range m.Fields {
@@ -150,6 +166,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				IsID:        string(field.Desc.Name()) == "id",
 				IsRepeated:  field.Desc.IsList(),
 				IsMessage:   field.Desc.Kind() == protoreflect.MessageKind && !isStringMap,
+				IsEnum:      field.Desc.Kind() == protoreflect.EnumKind,
 				IsTags:      isStringMap,
 				IsSecret:    isSecret,
 				OutputOnly:  isOutputOnly,
@@ -167,6 +184,24 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	}
 
 	if len(messages) == 0 {
+		return
+	}
+
+	// F027 fail-closed (G-002): every resource field must be deterministically
+	// wirable into the generated repository adapter. A field with no mapping — a
+	// nested non-relationship message, a repeated non-relationship field, an enum,
+	// a non-string map — would otherwise be silently dropped from the schema and
+	// the adapter. Fail generation instead, naming the field and the remedy, using
+	// the engine-neutral classifier shared with protoc-gen-storage (G-005).
+	failed := false
+	for _, msg := range messages {
+		_, unmapped := storagegen.Classify(toStorageFields(msg))
+		for _, uf := range unmapped {
+			gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: %s", msg.MessageName, uf.Name, storagegen.Reason(uf)))
+			failed = true
+		}
+	}
+	if failed {
 		return
 	}
 
@@ -229,6 +264,21 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		outPath := pkgName + "/" + toSnake(msg.MessageName) + ".columns.ent.go"
 		cg := gen.NewGeneratedFile(outPath, f.GoImportPath)
 		cg.P(content)
+	}
+
+	// F027: per-resource repository adapter (<pkg>/<snake>_repo.ent.go) — the
+	// New<R>EntRepository constructor (the six persistence.Repository closures),
+	// the fromEnt<R> projection, and a LookupBy<Secret>Hash per secret field.
+	// Generated so an ent service needs NO hand-written ent_wiring.go; the batch
+	// wrapper above embeds the New<R>EntRepository this emits.
+	for _, msg := range messages {
+		content := renderEntRepoAdapter(msg, pkgName, string(f.GoImportPath))
+		if content == "" {
+			continue
+		}
+		outPath := pkgName + "/" + toSnake(msg.MessageName) + "_repo.ent.go"
+		rg := gen.NewGeneratedFile(outPath, f.GoImportPath)
+		rg.P(content)
 	}
 }
 

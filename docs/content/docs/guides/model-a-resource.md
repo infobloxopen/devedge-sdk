@@ -88,7 +88,7 @@ storage and lifecycle; you never write the plumbing.
 | Field (proto) | Type | What it gives you |
 |---|---|---|
 | `account_id` | `string` | **Tenant scope.** Every query is automatically filtered by `account_id` from `middleware.TenantIDFromContext(ctx)` — see [Tenant Isolation](../../concepts/tenant-isolation/). It also makes `unique` per-tenant (below). |
-| `etag` | `string` `OUTPUT_ONLY` | **AIP-154 concurrency.** Stamped on every write, surfaced on read; a client echoes it as `If-Match` for a 412-guarded conditional update. Auto-stamped on **both** backends (ent via the generated `EtagMixin`); on ent, surface it with `p.Etag = e.Etag` in your `fromEnt` mapping — see [codegen → ETag](../../reference/codegen/). |
+| `etag` | `string` `OUTPUT_ONLY` | **AIP-154 concurrency.** Stamped on every write, surfaced on read; a client echoes it as `If-Match` for a 412-guarded conditional update. Auto-stamped and surfaced on **both** backends with no consumer code — ent via the generated `EtagMixin` plus the generated `fromEnt` projection — see [codegen → ETag](../../reference/codegen/). |
 | `delete_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 soft-delete.** Opts the resource into soft-delete (a `DeletedAt` column); `Delete` sets it, `Undelete` clears it, `List` hides soft-deleted rows unless `show_deleted`. Omit the field for hard-delete. A per-tenant `unique` key on a soft-delete resource is **re-creatable** once the holder is soft-deleted — see [codegen → Soft-delete + unique](../../reference/codegen/) (`dialect=mysql` for the MySQL strategy). |
 | `expire_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 TTL.** Adds an `expire_time` column and a `PurgeExpired` method to the repository. |
 | `created_at`, `updated_at` | — | Added to every model automatically; you don't declare them. |
@@ -291,7 +291,8 @@ for tag paths, kept out of the scalar `<Message>Columns` map.
   SQLite `json_extract`), with `List` passing the live dialect via `r.db.Dialector.Name()`.
 - **ent** uses `entrepo.FilterPredicate`, which translates the parsed filter into ent predicates via
   `sqljson` — ent emits the dialect-correct JSON SQL when the query is built, so no dialect string
-  is needed. Wire it in the hand-written `List` of the ent adapter (see `testdata/apikey/ent_wiring.go`).
+  is needed. The **generated** ent adapter (`<resource>_repo.ent.go`) already wires this in `List`
+  from the generated `<Message>EntColumns` / `<Message>EntJSONColumns` maps — no consumer code.
 
 {{< callout type="info" >}}
 **Still out of scope**, tracked as follow-ups: ordering by a tag key (`order_by=tags.env`);

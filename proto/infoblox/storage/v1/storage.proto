@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// Package infoblox.storage.v1 declares storage-layer, engine-neutral options
+// consumed by the devedge-sdk code generators (protoc-gen-ent / protoc-gen-storage).
+package infoblox.storage.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1;storagev1";
+
+extend google.protobuf.MessageOptions {
+  // model binds this resource message to a backing storage model, so several API
+  // surfaces can project the SAME stored entity (e.g. v1.Coupon, v2.Coupon and an
+  // admin view all backed by one "Coupon" table). When the value differs from the
+  // message name, this message is a *projection/surface* over that model rather
+  // than its own table: the generator emits a repository adapter + projection over
+  // the named model's storage type and does NOT emit a second schema/table for it.
+  // Absent (the common case) => the model is the message name itself.
+  //
+  // NOTE (F027): the option is the locked contract; the cross-message surface
+  // codegen is not yet generated (see specs/027-repo-adapter-codegen/tasks.md
+  // Phase 5b). Using it with a value other than the message's own name is rejected
+  // by protoc-gen-ent today so it cannot silently mis-generate.
+  string model = 50050;
+}
