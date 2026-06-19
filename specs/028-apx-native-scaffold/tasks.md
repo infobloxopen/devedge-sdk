@@ -6,6 +6,15 @@ the `--backend ent` path consumes the generated ent adapter.
 
 Reference layout to template from: `testdata/apikey/`. Decisions: see spec `## Design decisions` (D-1..D-5).
 
+**Status (gorm path):** Phases 1, 2, 3 SHIPPED on `feat/028-apx-native-scaffold`
+(`cmd/devedge-sdk`); docs T-601/T-602 done. AC-001/002/004/005-gorm/006/007 proven by the
+in-repo integration tests; AC-003 (`apx lint`/`config validate`) asserted in the pipeline.
+**Deferred:** Phase 4 (ent, 🔒F027), and Phase 5's *CI-embedded* `apx breaking`/`release
+prepare --dry-run`/`policy check` assertions (manually verified during dev; not yet wired as a
+generator test). Known follow-up: align the proto `go_package` with apx's expected
+`<mod>/proto/<svc>/v1` so `apx release prepare --dry-run` is warning-free (currently a soft
+non-`--strict` warning because generated Go lands under `gen/`).
+
 ---
 
 ## Phase 1 — Templates + the example annotated resource (no generator yet)
