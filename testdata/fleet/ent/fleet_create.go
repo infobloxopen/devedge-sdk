@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
@@ -23,6 +24,20 @@ type FleetCreate struct {
 // SetAccountID sets the "account_id" field.
 func (_c *FleetCreate) SetAccountID(v string) *FleetCreate {
 	_c.mutation.SetAccountID(v)
+	return _c
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (_c *FleetCreate) SetDeleteTime(v time.Time) *FleetCreate {
+	_c.mutation.SetDeleteTime(v)
+	return _c
+}
+
+// SetNillableDeleteTime sets the "delete_time" field if the given value is not nil.
+func (_c *FleetCreate) SetNillableDeleteTime(v *time.Time) *FleetCreate {
+	if v != nil {
+		_c.SetDeleteTime(*v)
+	}
 	return _c
 }
 
@@ -141,6 +156,10 @@ func (_c *FleetCreate) createSpec() (*Fleet, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AccountID(); ok {
 		_spec.SetField(fleet.FieldAccountID, field.TypeString, value)
 		_node.AccountID = value
+	}
+	if value, ok := _c.mutation.DeleteTime(); ok {
+		_spec.SetField(fleet.FieldDeleteTime, field.TypeTime, value)
+		_node.DeleteTime = &value
 	}
 	if value, ok := _c.mutation.DisplayName(); ok {
 		_spec.SetField(fleet.FieldDisplayName, field.TypeString, value)

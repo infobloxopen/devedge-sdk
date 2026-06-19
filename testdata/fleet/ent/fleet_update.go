@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
@@ -25,6 +26,26 @@ type FleetUpdate struct {
 // Where appends a list predicates to the FleetUpdate builder.
 func (_u *FleetUpdate) Where(ps ...predicate.Fleet) *FleetUpdate {
 	_u.mutation.Where(ps...)
+	return _u
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (_u *FleetUpdate) SetDeleteTime(v time.Time) *FleetUpdate {
+	_u.mutation.SetDeleteTime(v)
+	return _u
+}
+
+// SetNillableDeleteTime sets the "delete_time" field if the given value is not nil.
+func (_u *FleetUpdate) SetNillableDeleteTime(v *time.Time) *FleetUpdate {
+	if v != nil {
+		_u.SetDeleteTime(*v)
+	}
+	return _u
+}
+
+// ClearDeleteTime clears the value of the "delete_time" field.
+func (_u *FleetUpdate) ClearDeleteTime() *FleetUpdate {
+	_u.mutation.ClearDeleteTime()
 	return _u
 }
 
@@ -125,6 +146,12 @@ func (_u *FleetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			}
 		}
 	}
+	if value, ok := _u.mutation.DeleteTime(); ok {
+		_spec.SetField(fleet.FieldDeleteTime, field.TypeTime, value)
+	}
+	if _u.mutation.DeleteTimeCleared() {
+		_spec.ClearField(fleet.FieldDeleteTime, field.TypeTime)
+	}
 	if value, ok := _u.mutation.DisplayName(); ok {
 		_spec.SetField(fleet.FieldDisplayName, field.TypeString, value)
 	}
@@ -194,6 +221,26 @@ type FleetUpdateOne struct {
 	fields   []string
 	hooks    []Hook
 	mutation *FleetMutation
+}
+
+// SetDeleteTime sets the "delete_time" field.
+func (_u *FleetUpdateOne) SetDeleteTime(v time.Time) *FleetUpdateOne {
+	_u.mutation.SetDeleteTime(v)
+	return _u
+}
+
+// SetNillableDeleteTime sets the "delete_time" field if the given value is not nil.
+func (_u *FleetUpdateOne) SetNillableDeleteTime(v *time.Time) *FleetUpdateOne {
+	if v != nil {
+		_u.SetDeleteTime(*v)
+	}
+	return _u
+}
+
+// ClearDeleteTime clears the value of the "delete_time" field.
+func (_u *FleetUpdateOne) ClearDeleteTime() *FleetUpdateOne {
+	_u.mutation.ClearDeleteTime()
+	return _u
 }
 
 // SetDisplayName sets the "display_name" field.
@@ -322,6 +369,12 @@ func (_u *FleetUpdateOne) sqlSave(ctx context.Context) (_node *Fleet, err error)
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.DeleteTime(); ok {
+		_spec.SetField(fleet.FieldDeleteTime, field.TypeTime, value)
+	}
+	if _u.mutation.DeleteTimeCleared() {
+		_spec.ClearField(fleet.FieldDeleteTime, field.TypeTime)
 	}
 	if value, ok := _u.mutation.DisplayName(); ok {
 		_spec.SetField(fleet.FieldDisplayName, field.TypeString, value)

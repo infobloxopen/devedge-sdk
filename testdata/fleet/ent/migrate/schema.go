@@ -3,6 +3,7 @@
 package migrate
 
 import (
+	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/dialect/sql/schema"
 	"entgo.io/ent/schema/field"
 )
@@ -12,6 +13,7 @@ var (
 	FleetsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
 		{Name: "account_id", Type: field.TypeString},
+		{Name: "delete_time", Type: field.TypeTime, Nullable: true},
 		{Name: "display_name", Type: field.TypeString, Nullable: true},
 	}
 	// FleetsTable holds the schema information for the "fleets" table.
@@ -23,7 +25,10 @@ var (
 			{
 				Name:    "ux_fleet_account_display_name",
 				Unique:  true,
-				Columns: []*schema.Column{FleetsColumns[1], FleetsColumns[2]},
+				Columns: []*schema.Column{FleetsColumns[1], FleetsColumns[3]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "delete_time IS NULL",
+				},
 			},
 		},
 	}

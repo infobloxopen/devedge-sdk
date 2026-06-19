@@ -326,6 +326,59 @@ func TestRenderStorageFile_uniqueFieldIsPerTenant(t *testing.T) {
 	mustNotContain(t, out, "column:name;not null;uniqueIndex\"")
 }
 
+// #49 follow-up: on a soft-delete + per-tenant-unique resource the unique key
+// must be re-creatable after the holder is soft-deleted.
+func softDeleteUniqueStorageMsg() messageInfo {
+	return messageInfo{
+		MessageName: "Order",
+		PbPkgName:   "orderv1",
+		SoftDelete:  true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "source_ref", GoFieldName: "SourceRef", GoType: "string", SnakeName: "source_ref", Unique: true},
+		},
+	}
+}
+
+// Default dialect (postgres/sqlite): the composite unique is PARTIAL
+// (WHERE deleted_at IS NULL) — no discriminator column.
+func TestRenderStorageFile_softDeleteUnique_partial(t *testing.T) {
+	targetDialect = "postgres"
+	out := renderStorageFile("orderv1", []messageInfo{softDeleteUniqueStorageMsg()})
+	// The partial predicate rides the GORM index `option` (the `where` tag is
+	// dropped by GORM's migrator), on the leading account_id (priority 1) tag.
+	mustContain(t, out, "uniqueIndex:ux_order_account_source_ref,priority:1,option:WHERE deleted_at IS NULL")
+	mustNotContain(t, out, "soft_delete_key")
+}
+
+// dialect=mysql: a soft_delete_key column joins the composite (priority 3),
+// Delete stamps the row id into it, Undelete clears it; no partial clause.
+func TestRenderStorageFile_softDeleteUnique_sentinel(t *testing.T) {
+	targetDialect = "mysql"
+	defer func() { targetDialect = "postgres" }()
+	out := renderStorageFile("orderv1", []messageInfo{softDeleteUniqueStorageMsg()})
+	mustContain(t, out, "column:soft_delete_key")
+	mustContain(t, out, "uniqueIndex:ux_order_account_source_ref,priority:3")
+	mustContain(t, out, `"soft_delete_key": key`)  // Delete stamps the id
+	mustContain(t, out, `"soft_delete_key": ""`)    // Undelete clears it
+	mustNotContain(t, out, "option:WHERE deleted_at IS NULL")
+}
+
+// A per-tenant unique WITHOUT soft-delete is unchanged on every dialect.
+func TestRenderStorageFile_uniqueNoSoftDelete_unchanged(t *testing.T) {
+	msg := softDeleteUniqueStorageMsg()
+	msg.SoftDelete = false
+	for _, d := range []string{"postgres", "mysql"} {
+		targetDialect = d
+		out := renderStorageFile("orderv1", []messageInfo{msg})
+		mustContain(t, out, "uniqueIndex:ux_order_account_source_ref,priority:2")
+		mustNotContain(t, out, "soft_delete_key")
+		mustNotContain(t, out, "option:WHERE deleted_at IS NULL")
+	}
+	targetDialect = "postgres"
+}
+
 // Issue 017: generated Create/Update must translate driver constraint errors
 // to clean persistence sentinels (so a unique violation becomes AlreadyExists,
 // not a 500 leaking raw SQL).

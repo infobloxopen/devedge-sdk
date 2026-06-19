@@ -6,6 +6,7 @@ require (
 	entgo.io/ent v0.14.6
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
 	github.com/infobloxopen/devedge-sdk v0.0.0
+	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	gorm.io/gorm v1.31.1

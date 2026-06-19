@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
@@ -26,17 +27,19 @@ var (
 	_ = filter.Parse
 	_ = codes.OK
 	_ = status.Error
+	_ = timestamppb.New
 )
 
 // FleetModel is the GORM model for Fleet.
 type FleetModel struct {
 	ID          string          `gorm:"primaryKey;type:varchar(36)"`
-	AccountId   string          `gorm:"column:account_id;uniqueIndex:ux_fleet_account_display_name,priority:1"`
+	AccountId   string          `gorm:"column:account_id;uniqueIndex:ux_fleet_account_display_name,priority:1,option:WHERE deleted_at IS NULL"`
 	DisplayName string          `gorm:"column:display_name;uniqueIndex:ux_fleet_account_display_name,priority:2"`
 	Vehicles    []*VehicleModel `gorm:"foreignKey:FleetId"`
 	ETag        string          `gorm:"column:etag"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	DeletedAt   gorm.DeletedAt `gorm:"index"`
 }
 
 func toModel_Fleet(p *Fleet) *FleetModel {
@@ -56,6 +59,9 @@ func fromModel_Fleet(m *FleetModel) *Fleet {
 	p := &Fleet{Id: m.ID}
 	p.AccountId = m.AccountId
 	p.DisplayName = m.DisplayName
+	if m.DeletedAt.Valid {
+		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
+	}
 	return p
 }
 
@@ -64,6 +70,7 @@ var FleetColumns = map[string]string{
 	"id":           "id",
 	"account_id":   "account_id",
 	"display_name": "display_name",
+	"delete_time":  "deleted_at",
 }
 
 // FleetRepository is a GORM-backed persistence.Repository for *Fleet.
@@ -93,6 +100,9 @@ func (r *FleetRepository) Get(ctx context.Context, key string) (*Fleet, error) {
 func (r *FleetRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Fleet, string, error) {
 	var models []FleetModel
 	q := r.db.WithContext(ctx)
+	if opts.ShowDeleted {
+		q = q.Unscoped()
+	}
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -202,7 +212,7 @@ func (r *FleetRepository) Delete(ctx context.Context, key string) error {
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
-	res := q.Unscoped().Delete(&FleetModel{})
+	res := q.Delete(&FleetModel{})
 	if res.Error != nil {
 		return fmt.Errorf("delete Fleet: %w", res.Error)
 	}
@@ -212,8 +222,21 @@ func (r *FleetRepository) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-func (r *FleetRepository) Undelete(_ context.Context, _ string) (*Fleet, error) {
-	return nil, persistence.ErrNotFound
+func (r *FleetRepository) Undelete(ctx context.Context, key string) (*Fleet, error) {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Unscoped().Model(&FleetModel{}).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	q = q.Where("deleted_at IS NOT NULL")
+	res := q.Update("deleted_at", nil)
+	if res.Error != nil {
+		return nil, fmt.Errorf("undelete Fleet: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, persistence.ErrNotFound
+	}
+	return r.Get(ctx, key)
 }
 
 func (r *FleetRepository) BatchGet(ctx context.Context, keys []string) ([]*Fleet, error) {
@@ -285,7 +308,7 @@ func (r *FleetRepository) BatchDelete(ctx context.Context, keys []string) error 
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
-		res := q.Unscoped().Delete(&FleetModel{})
+		res := q.Delete(&FleetModel{})
 		if res.Error != nil {
 			return fmt.Errorf("batch delete Fleet: %w", res.Error)
 		}

@@ -7,6 +7,35 @@ import (
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
+// targetDialect is the SQL dialect selected via the `dialect` plugin option (see
+// main.go). For a resource that is BOTH soft-delete and per-tenant `unique`, it
+// picks how the key is freed on soft-delete: "mysql" → a soft_delete_key
+// discriminator column joins the composite unique (MySQL has no partial
+// indexes); any other value ("postgres"/"sqlite") → a partial unique index
+// (WHERE deleted_at IS NULL). "postgres" by default.
+var targetDialect = "postgres"
+
+// useSoftDeleteSentinel reports whether the sentinel-column strategy (MySQL) is
+// in effect rather than the partial-index strategy (PostgreSQL/SQLite).
+func useSoftDeleteSentinel() bool { return targetDialect == "mysql" }
+
+// msgHasTenantUnique reports whether the message has account_id AND at least one
+// persisted per-tenant `unique` field (so a composite unique index is emitted).
+func msgHasTenantUnique(msg messageInfo) bool {
+	if !msgHasTenantField(msg) {
+		return false
+	}
+	for _, f := range msg.Fields {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
+			continue
+		}
+		if f.Unique {
+			return true
+		}
+	}
+	return false
+}
+
 // hasSecretFields returns true if any field across all messages is marked secret.
 func hasSecretFields(messages []messageInfo) bool {
 	for _, msg := range messages {
@@ -239,6 +268,13 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 
 func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	hasTenant := msgHasTenantField(msg)
+	// A soft-delete + per-tenant-unique resource needs the unique key freed when
+	// the holder is soft-deleted. PostgreSQL/SQLite use a partial unique index
+	// (WHERE deleted_at IS NULL); MySQL (no partial indexes) joins a
+	// soft_delete_key discriminator column into the composite instead.
+	softDeleteUnique := msg.SoftDelete && msgHasTenantUnique(msg)
+	useSentinel := softDeleteUnique && useSoftDeleteSentinel()
+	usePartial := softDeleteUnique && !useSoftDeleteSentinel()
 	// Set of Go field names backed by a proto-declared scalar column. Used to
 	// avoid emitting a duplicate belongs_to FK field when the proto already
 	// exposes the FK as a scalar (the natural AIP shape).
@@ -350,6 +386,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 					// Tenant-scoped: the unique constraint must be per-account, so
 					// the field joins account_id in a composite unique index
 					// (priority 2 — account_id is the leading column, priority 1).
+					// The partial-index predicate (usePartial) is carried on the
+					// account_id (priority 1) tag below, not here.
 					tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(col)+",priority:2")
 				} else {
 					// No tenant column: a plain global unique index is correct.
@@ -369,7 +407,15 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 					if uf.ColumnName != "" {
 						ucol = uf.ColumnName
 					}
-					tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(ucol)+",priority:1")
+					ux := "uniqueIndex:" + uniqueIndexName(ucol) + ",priority:1"
+					if usePartial {
+						// Partial unique index so the key frees on soft-delete. GORM's
+						// migrator drops the `where` index tag but appends `option`
+						// verbatim after the column list, so the predicate rides there:
+						// CREATE UNIQUE INDEX ux ON t (account_id, <field>) WHERE deleted_at IS NULL.
+						ux += ",option:WHERE deleted_at IS NULL"
+					}
+					tagParts = append(tagParts, ux)
 				}
 			}
 			tag := strings.Join(tagParts, ";")
@@ -382,6 +428,24 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\tUpdatedAt time.Time\n")
 	if msg.SoftDelete {
 		b.WriteString("\tDeletedAt gorm.DeletedAt `gorm:\"index\"`\n")
+	}
+	if useSentinel {
+		// MySQL soft-delete-unique discriminator: "" while live, the row id once
+		// soft-deleted, so a per-tenant unique key can be re-created after the
+		// holder is soft-deleted. Joins every per-tenant composite unique as the
+		// trailing (priority 3) column. Maintained by Delete/Undelete below.
+		parts := []string{"column:soft_delete_key"}
+		for _, uf := range msg.Fields {
+			if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique {
+				continue
+			}
+			ucol := uf.SnakeName
+			if uf.ColumnName != "" {
+				ucol = uf.ColumnName
+			}
+			parts = append(parts, "uniqueIndex:"+uniqueIndexName(ucol)+",priority:3")
+		}
+		fmt.Fprintf(b, "\tSoftDeleteKey string `gorm:\"%s\"`\n", strings.Join(parts, ";"))
 	}
 	if msg.HasExpireTime {
 		b.WriteString("\tExpireTime sql.NullTime `gorm:\"column:expire_time;index\"`\n")
@@ -775,9 +839,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
-		if msg.SoftDelete {
+		switch {
+		case useSentinel:
+			// Soft-delete AND stamp the row id into soft_delete_key in one update so
+			// the freed key leaves the live (account_id, <field>, "") namespace
+			// atomically (MySQL has no partial index). The default soft-delete scope
+			// limits this to a currently-live row, so RowsAffected==0 → NotFound.
+			fmt.Fprintf(b, "\tres := q.Model(&%sModel{}).Updates(map[string]interface{}{\"deleted_at\": time.Now().UTC(), \"soft_delete_key\": key})\n", msg.MessageName)
+		case msg.SoftDelete:
 			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", msg.MessageName)
-		} else {
+		default:
 			fmt.Fprintf(b, "\tres := q.Unscoped().Delete(&%sModel{})\n", msg.MessageName)
 		}
 	} else {
@@ -805,7 +876,14 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).\n", msg.MessageName)
 			b.WriteString("\t\tWhere(\"id = ?\", key).Where(\"deleted_at IS NOT NULL\")\n")
 		}
-		b.WriteString("\tres := q.Update(\"deleted_at\", nil)\n")
+		if useSentinel {
+			// Clear the discriminator so the row re-enters the live unique namespace
+			// (a 409 here, via the unique index, correctly means the key was taken
+			// by another live row while this one was soft-deleted).
+			b.WriteString("\tres := q.Updates(map[string]interface{}{\"deleted_at\": nil, \"soft_delete_key\": \"\"})\n")
+		} else {
+			b.WriteString("\tres := q.Update(\"deleted_at\", nil)\n")
+		}
 		b.WriteString("\tif res.Error != nil {\n")
 		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", res.Error)\n", msg.MessageName)
 		b.WriteString("\t}\n")

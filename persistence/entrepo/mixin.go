@@ -2,6 +2,7 @@ package entrepo
 
 import (
 	"context"
+	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/schema/field"
@@ -166,6 +167,78 @@ func (EtagMixin) Hooks() []ent.Hook {
 					if s, ok := m.(etagSetter); ok {
 						s.SetEtag(etag.New())
 					}
+				}
+				return next.Mutate(ctx, m)
+			})
+		},
+	}
+}
+
+// softDeleteKeyMutation is the narrow slice of a generated soft-delete mutation
+// that SoftDeleteUniqueMixin's hook needs: read the delete_time transition and
+// write the soft_delete_key marker. Keeping it narrow (vs the full ent.Mutation)
+// makes the maintenance logic unit-testable without a generated client.
+type softDeleteKeyMutation interface {
+	Op() ent.Op
+	SetSoftDeleteKey(string)
+	DeleteTime() (time.Time, bool) // (value, set-in-this-mutation)
+	DeleteTimeCleared() bool       // ClearDeleteTime() was called (undelete)
+}
+
+// applySoftDeleteKey is the maintenance rule behind SoftDeleteUniqueMixin: on
+// soft-delete (delete_time set) it stamps a unique tombstone marker so the row
+// leaves the live (account_id, <field>, "") unique namespace; on undelete
+// (delete_time cleared) it resets the marker to "" so the row re-enters it.
+// Other mutations leave the marker untouched.
+func applySoftDeleteKey(m softDeleteKeyMutation) {
+	if !m.Op().Is(ent.OpUpdate | ent.OpUpdateOne) {
+		return // create defaults to "" (live); deletes/queries are irrelevant
+	}
+	if m.DeleteTimeCleared() {
+		m.SetSoftDeleteKey("") // undelete → back into the live unique namespace
+		return
+	}
+	if _, set := m.DeleteTime(); set {
+		// Soft-delete → a fresh opaque, per-tombstone marker. Any two rows that
+		// could collide on (account_id, <field>) were necessarily soft-deleted in
+		// distinct operations (only one can be live at a time), so a fresh token
+		// per soft-delete is collision-free. etag.New() is reused purely as an
+		// opaque-token source.
+		m.SetSoftDeleteKey(etag.New())
+	}
+}
+
+// SoftDeleteUniqueMixin adds a `soft_delete_key` discriminator column and a
+// mutation hook that maintains it, so a per-tenant `unique` field can be
+// re-created after the holding row is soft-deleted. It is the MySQL-backend
+// analogue of the partial unique index (`WHERE delete_time IS NULL`) used on
+// PostgreSQL/SQLite: MySQL has no partial indexes, so uniqueness is enforced by
+// the composite `(account_id, <field>, soft_delete_key)` instead — live rows all
+// share `soft_delete_key=""` (uniqueness holds among live rows), soft-deleted
+// rows each carry a distinct marker (so they never block re-creation).
+//
+// protoc-gen-ent embeds this mixin (alongside SoftDeleteMixin) only when
+// generating for the MySQL dialect on a resource that is BOTH soft-delete AND
+// per-tenant `unique`. On PostgreSQL/SQLite the partial index is used and this
+// mixin is not emitted.
+type SoftDeleteUniqueMixin struct {
+	mixin.Schema
+}
+
+func (SoftDeleteUniqueMixin) Fields() []ent.Field {
+	return []ent.Field{
+		field.String("soft_delete_key").
+			Default("").
+			Comment("Soft-delete discriminator for per-tenant uniqueness on MySQL: \"\" while live, a unique marker once soft-deleted."),
+	}
+}
+
+func (SoftDeleteUniqueMixin) Hooks() []ent.Hook {
+	return []ent.Hook{
+		func(next ent.Mutator) ent.Mutator {
+			return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+				if sm, ok := m.(softDeleteKeyMutation); ok {
+					applySoftDeleteKey(sm)
 				}
 				return next.Mutate(ctx, m)
 			})
