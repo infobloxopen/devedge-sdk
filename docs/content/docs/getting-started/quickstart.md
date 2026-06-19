@@ -28,8 +28,9 @@ already calling `server.New(...)` with the generated `OrderServiceAuthzRules`; a
 model + repository (git-ignored, engine deps in *your* go.mod only); and a passing smoke test.
 
 The generator requires `apx` and `buf` on PATH and shells out to `apx init app` so the app layout
-stays current with apx. Flags: `--backend gorm|ent` (ent is in progress), `--module`, `--org`,
-`--no-generate` (skip the first `buf generate`), `--force` (scaffold into a non-empty dir).
+stays current with apx. Flags: `--backend gorm|ent` (both produce a building, persisting service
+with zero hand-written persistence wiring — `ent` runs the buf→entc two-step for you), `--module`,
+`--org`, `--no-generate` (skip the first `buf generate`), `--force` (scaffold into a non-empty dir).
 
 > **Before / after.** The manual sequence below is ~10 hand-authored, error-prone artifacts (a
 > two-module `buf.yaml`, a seven-plugin `buf.gen.yaml` where one plugin takes no `module=` and
