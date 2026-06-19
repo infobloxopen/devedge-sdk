@@ -372,6 +372,46 @@ func TestToSnake(t *testing.T) {
 	}
 }
 
+// A message with a string `etag` field (HasETag, set in main.go) must embed
+// entrepo.EtagMixin so the etag column + auto-stamping hook are generated — and
+// must NOT emit a stray field.String("etag") (the mixin owns it). This is the
+// ent-backend half of the AIP-154 ETag parity with the GORM storage layer (#49).
+func TestRenderEntSchema_etagMixin(t *testing.T) {
+	// main.go detects the etag field, sets HasETag, and does NOT add it to
+	// Fields — so the mixin owns it. Model that here (no etag entFieldInfo).
+	msg := entMessageInfo{
+		MessageName: "APIKey",
+		HasETag:     true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "label", SnakeName: "label", EntType: "String"},
+		},
+	}
+	out := renderEntSchema(msg, nil)
+
+	mustContain(t, out, "func (APIKey) Mixin() []ent.Mixin {")
+	mustContain(t, out, "entrepo.TenantMixin{},")
+	mustContain(t, out, "entrepo.EtagMixin{},")
+	mustContain(t, out, "github.com/infobloxopen/devedge-sdk/persistence/entrepo")
+	// The mixin owns the column — no stray etag field in Fields().
+	mustNotContain(t, out, `field.String("etag")`)
+}
+
+// EtagMixin must only appear when the message actually has an etag field; a
+// resource without one gets neither the mixin nor (absent a tenant) the import.
+func TestRenderEntSchema_noEtagNoMixin(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Widget",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "name", SnakeName: "name", EntType: "String"},
+		},
+	}
+	out := renderEntSchema(msg, nil)
+	mustNotContain(t, out, "EtagMixin")
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {

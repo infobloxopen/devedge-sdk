@@ -306,7 +306,8 @@ func (c *APIKeyClient) GetX(ctx context.Context, id string) *APIKey {
 
 // Hooks returns the client hooks.
 func (c *APIKeyClient) Hooks() []Hook {
-	return c.hooks.APIKey
+	hooks := c.hooks.APIKey
+	return append(hooks[:len(hooks):len(hooks)], apikey.Hooks[:]...)
 }
 
 // Interceptors returns the client interceptors.

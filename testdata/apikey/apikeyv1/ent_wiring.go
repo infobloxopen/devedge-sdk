@@ -186,6 +186,9 @@ func fromEntAPIKey(e *ent.APIKey) *APIKey {
 		AccountId: e.AccountID,
 		KeyPrefix: e.KeyPrefix,
 		Tags:      e.Tags,
+		Etag:      e.Etag, // AIP-154 (#49): surface the EtagMixin-stamped token so a
+		// Get returns a stable value a client echoes as If-Match. The mixin stamps
+		// and persists it automatically; this one line carries it onto the proto.
 		// KeyValue intentionally omitted — never returned from storage
 	}
 	if e.DeleteTime != nil {

@@ -122,9 +122,11 @@ func (s *server) GetWidget(ctx context.Context, req *pb.GetWidgetRequest) (*pb.W
 }
 ```
 
-The token is opaque (AIP-154) — clients must not parse it. On the **ent** backend the `etag` field
-is not auto-stamped; compute it in your ent wiring if you need it. `etag.New()` is the helper the
-generated GORM storage uses, available for hand-written code.
+The token is opaque (AIP-154) — clients must not parse it. On the **ent** backend you get the same
+auto-stamping: the generated `entrepo.EtagMixin` supplies the `etag` column and a mutation hook that
+stamps `etag.New()` on every Create/Update. Surface it on reads with `p.Etag = e.Etag` in your
+`fromEnt<Resource>` mapping; the handler pattern above (reading `w.GetEtag()`) is then identical on both
+backends.
 
 ## ReadMaskUnary — partial responses (AIP-157)
 

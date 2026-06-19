@@ -12,6 +12,8 @@ import (
 // to their package variables.
 func init() {
 	apikeyMixin := schema.APIKey{}.Mixin()
+	apikeyMixinHooks2 := apikeyMixin[2].Hooks()
+	apikey.Hooks[0] = apikeyMixinHooks2[0]
 	apikeyMixinInters0 := apikeyMixin[0].Interceptors()
 	apikeyMixinInters1 := apikeyMixin[1].Interceptors()
 	apikey.Interceptors[0] = apikeyMixinInters0[0]

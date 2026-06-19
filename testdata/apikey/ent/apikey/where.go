@@ -74,6 +74,11 @@ func DeleteTime(v time.Time) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldDeleteTime, v))
 }
 
+// Etag applies equality check predicate on the "etag" field. It's identical to EtagEQ.
+func Etag(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldEtag, v))
+}
+
 // Name applies equality check predicate on the "name" field. It's identical to NameEQ.
 func Name(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldName, v))
@@ -212,6 +217,81 @@ func DeleteTimeIsNil() predicate.APIKey {
 // DeleteTimeNotNil applies the NotNil predicate on the "delete_time" field.
 func DeleteTimeNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldDeleteTime))
+}
+
+// EtagEQ applies the EQ predicate on the "etag" field.
+func EtagEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldEtag, v))
+}
+
+// EtagNEQ applies the NEQ predicate on the "etag" field.
+func EtagNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldEtag, v))
+}
+
+// EtagIn applies the In predicate on the "etag" field.
+func EtagIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldEtag, vs...))
+}
+
+// EtagNotIn applies the NotIn predicate on the "etag" field.
+func EtagNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldEtag, vs...))
+}
+
+// EtagGT applies the GT predicate on the "etag" field.
+func EtagGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldEtag, v))
+}
+
+// EtagGTE applies the GTE predicate on the "etag" field.
+func EtagGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldEtag, v))
+}
+
+// EtagLT applies the LT predicate on the "etag" field.
+func EtagLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldEtag, v))
+}
+
+// EtagLTE applies the LTE predicate on the "etag" field.
+func EtagLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldEtag, v))
+}
+
+// EtagContains applies the Contains predicate on the "etag" field.
+func EtagContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldEtag, v))
+}
+
+// EtagHasPrefix applies the HasPrefix predicate on the "etag" field.
+func EtagHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldEtag, v))
+}
+
+// EtagHasSuffix applies the HasSuffix predicate on the "etag" field.
+func EtagHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldEtag, v))
+}
+
+// EtagIsNil applies the IsNil predicate on the "etag" field.
+func EtagIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldEtag))
+}
+
+// EtagNotNil applies the NotNil predicate on the "etag" field.
+func EtagNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldEtag))
+}
+
+// EtagEqualFold applies the EqualFold predicate on the "etag" field.
+func EtagEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldEtag, v))
+}
+
+// EtagContainsFold applies the ContainsFold predicate on the "etag" field.
+func EtagContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldEtag, v))
 }
 
 // NameEQ applies the EQ predicate on the "name" field.

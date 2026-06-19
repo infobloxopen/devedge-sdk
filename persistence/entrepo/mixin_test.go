@@ -65,3 +65,36 @@ func TestSoftDeleteMixin_HasInterceptor(t *testing.T) {
 
 // Compile-time check that SoftDeleteMixin implements ent.Mixin.
 var _ ent.Mixin = entrepo.SoftDeleteMixin{}
+
+// #49: EtagMixin tests — supplies the AIP-154 etag column and a mutation hook
+// that stamps a fresh token on Create/Update (parity with the GORM backend).
+
+func TestEtagMixin_HasEtagField(t *testing.T) {
+	m := entrepo.EtagMixin{}
+	found := false
+	for _, f := range m.Fields() {
+		if f.Descriptor().Name == "etag" {
+			found = true
+			if !f.Descriptor().Optional {
+				t.Error("EtagMixin etag field must be optional")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("EtagMixin.Fields() must include etag")
+	}
+}
+
+// The hook is the write-path stamping mechanism — without it the etag is never
+// populated and the If-Match/412 loop is inert (the GORM analogue stamps in the
+// storage layer). ent query interceptors do not run for mutations, so this must
+// be a hook, not an interceptor.
+func TestEtagMixin_HasHook(t *testing.T) {
+	m := entrepo.EtagMixin{}
+	if len(m.Hooks()) == 0 {
+		t.Fatal("EtagMixin must have at least one mutation hook to stamp the etag")
+	}
+}
+
+// Compile-time check that EtagMixin implements ent.Mixin.
+var _ ent.Mixin = entrepo.EtagMixin{}
