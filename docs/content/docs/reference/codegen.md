@@ -207,10 +207,12 @@ lives in `testdata/fleet/`.
   (`generated file does not match prefix`).
 - **Cold-start order matters.** `buf generate` writes the schema *and* generated files that import
   the not-yet-generated ent *client* packages (`<module>/ent/<resource>`): the `*.batch.ent.go` batch
-  wrappers and the `ent/*_filter.ent.go` tenant / soft-delete filterers. In a fresh module a plain
-  `go mod tidy` therefore **fails** — it treats `<module>/ent/<resource>` as a remote dependency and
-  reports `Repository not found` for your own module path, aborting before it can pull the ent codegen
-  toolchain that `go generate ./ent` then needs in `go.sum`. Break the deadlock once, in this order:
+  wrappers and the `ent/*_filter.ent.go` tenant / soft-delete filterers. The generated **schema** also
+  imports `persistence/entrepo` (for `TenantMixin` / `SoftDeleteMixin`), and `entc` *compiles the schema
+  package* during `go generate`, so `entrepo`'s transitive deps (grpc, protobuf) must already be in
+  `go.sum` before you generate. The two hazards: a plain `go mod tidy` may choke on the not-yet-existing
+  `<module>/ent/<resource>` imports, and `go generate ./ent` fails with `missing go.sum entry … imported
+  by …/persistence/entrepo` if those deps aren't seeded yet. Break the deadlock once, **in this order**:
 
   1. Pin the ent codegen tool so it stays in `go.mod` across future tidies — add a `tools.go`:
      ```go
@@ -220,18 +222,23 @@ lives in `testdata/fleet/`.
 
      import _ "entgo.io/ent/cmd/ent"
      ```
-  2. Pull the codegen toolchain into `go.sum` **without** a full `go mod tidy` (which would choke on
-     the not-yet-generated client packages above) — `go get` resolves the tool and its deps without
-     building your module:
+  2. Seed `go.sum` with the ent codegen tool **and** the SDK packages the generated schema, filterers,
+     and batch wrappers import — `go get` resolves them and their transitive deps **without building
+     your module** (so it does not choke on the not-yet-generated client packages):
      ```
-     go get entgo.io/ent/cmd/ent
+     go get entgo.io/ent/cmd/ent \
+            github.com/infobloxopen/devedge-sdk/persistence/entrepo \
+            github.com/infobloxopen/devedge-sdk/middleware
      ```
-  3. `go generate ./ent` — this produces the client, so the `<module>/ent/<resource>` packages the
-     wrappers and filterers import now exist.
+  3. `go generate ./ent` — `entc` can now compile the schema (its `entrepo` deps are in `go.sum`) and
+     produces the client, so the `<module>/ent/<resource>` packages the wrappers and filterers import
+     now exist.
   4. `go mod tidy` — everything resolves now that the client is generated.
 
   After this, regenerating is just `buf generate` → `go generate ./ent`. `testdata/fleet/tools.go`
-  shows the pin.
+  shows the pin. (If you skip step 2, `go generate` aborts on the missing `entrepo` go.sum entries; if
+  you run a bare `go mod tidy` before generating, it may fail to resolve your own not-yet-generated
+  `<module>/ent/<resource>` packages — step 2 avoids both.)
 
 **Testing the ent client (SQLite driver name).** ent's SQLite dialect is `"sqlite3"`
 (`dialect.SQLite`), but the pure-Go driver `modernc.org/sqlite` registers itself under the name
@@ -266,6 +273,24 @@ GORM backend), it already registers `"sqlite3"` — the guard above skips the al
 foreign-key pragma as `_fk=1`, so use a DSN that satisfies both drivers:
 `file:ent?mode=memory&_pragma=foreign_keys(1)&_fk=1`. `testdata/fleet/fleetv1/sqlite_test.go` is the
 canonical shim.
+{{< /callout >}}
+
+{{< callout type="error" >}}
+**Your server `main` MUST blank-import the generated `ent/runtime` — this is security-relevant.** entc
+emits an `ent/runtime/runtime.go` whose `init()` installs the schema's field validators **and the
+`TenantMixin` / `SoftDeleteMixin` query interceptors** (the ones that call the generated
+`WhereAccountID` / `WhereDeleteTimeIsNil` filterers). The generated `ent/client.go` does **not** import
+it, so unless you blank-import it in every non-test entrypoint the client compiles but:
+
+- panics with a nil-pointer on the first write (a nil field validator), and
+- runs **no tenant / soft-delete scoping** — the generated filterers exist but are never called.
+
+`enttest` imports it for you, so tests pass and the gap only shows up when you run a real server. Add it
+to your server `main` (and any other non-test entrypoint):
+
+```go
+import _ "<your-module>/ent/runtime" // installs mixin validators + tenant/soft-delete interceptors
+```
 {{< /callout >}}
 
 ## Putting them in `buf.gen.yaml`

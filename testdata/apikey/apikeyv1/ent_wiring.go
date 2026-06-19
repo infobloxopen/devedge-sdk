@@ -49,6 +49,11 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 			}
 			created, err := b.Save(ctx)
 			if err != nil {
+				// Classify driver errors so a unique/FK/not-null violation becomes a
+				// clean ErrConflict/ErrPreconditionFailed (409/412) with no raw SQL.
+				if ce := persistence.ConstraintError(err); ce != nil {
+					return nil, ce
+				}
 				return nil, fmt.Errorf("create apikey: %w", err)
 			}
 			return fromEntAPIKey(created), nil

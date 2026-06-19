@@ -2,6 +2,8 @@ package fleetv1_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite" // register SQLite driver for enttest
@@ -101,5 +103,39 @@ func TestEntTenantIsolation(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Id != "v-acme" {
 		t.Fatalf("acme sees %d vehicles (%v), want just v-acme", len(list), list)
+	}
+}
+
+// TestEntPerTenantUnique is the regression guard for GH #44 and #45: a `unique`
+// business field on a tenant-scoped ent resource must be unique PER TENANT
+// (composite (account_id, vin)), not globally — and a same-tenant duplicate must
+// surface as a clean persistence.ErrConflict with NO raw SQL, not a 500 leaking
+// the constraint text.
+func TestEntPerTenantUnique(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:fleet_unique?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	vehicles := fleetv1.NewVehicleEntRepository(client)
+
+	// #44: the SAME vin is reusable across tenants — a global unique index would
+	// (wrongly) reject the second tenant.
+	if _, err := vehicles.Create(tenantCtx("acme"), &fleetv1.Vehicle{Id: "v-acme", Vin: "DUP-VIN"}); err != nil {
+		t.Fatalf("acme create vin=DUP-VIN: %v", err)
+	}
+	if _, err := vehicles.Create(tenantCtx("globex"), &fleetv1.Vehicle{Id: "v-globex", Vin: "DUP-VIN"}); err != nil {
+		t.Fatalf("globex reuse of vin=DUP-VIN must be allowed (per-tenant unique), got: %v", err)
+	}
+
+	// Within one tenant the vin is still unique → a duplicate must be a clean
+	// ErrConflict (#45), and the error must not leak the raw driver constraint text.
+	_, err := vehicles.Create(tenantCtx("acme"), &fleetv1.Vehicle{Id: "v-acme-2", Vin: "DUP-VIN"})
+	if err == nil {
+		t.Fatal("same-tenant duplicate vin must fail")
+	}
+	if !errors.Is(err, persistence.ErrConflict) {
+		t.Errorf("same-tenant duplicate: want ErrConflict, got %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "constraint failed") {
+		t.Errorf("error leaks raw SQL constraint text: %v", err)
 	}
 }

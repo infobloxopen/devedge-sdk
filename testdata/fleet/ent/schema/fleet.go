@@ -5,6 +5,7 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
+	"entgo.io/ent/schema/index"
 
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 )
@@ -25,7 +26,7 @@ func (Fleet) Mixin() []ent.Mixin {
 func (Fleet) Fields() []ent.Field {
 	return []ent.Field{
 		field.String("id").StorageKey("id").Immutable(),
-		field.String("display_name").Optional().Unique(),
+		field.String("display_name").Optional(),
 	}
 }
 
@@ -33,5 +34,12 @@ func (Fleet) Fields() []ent.Field {
 func (Fleet) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("vehicles", Vehicle.Type),
+	}
+}
+
+// Indexes defines the indexes of Fleet.
+func (Fleet) Indexes() []ent.Index {
+	return []ent.Index{
+		index.Fields("account_id", "display_name").Unique().StorageKey("ux_fleet_account_display_name"),
 	}
 }

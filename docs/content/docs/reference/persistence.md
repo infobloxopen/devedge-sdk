@@ -109,6 +109,12 @@ this map with `codes.InvalidArgument`. This is what you point API clients at: on
 `<Msg>Columns` are valid in `filter` / `order_by` strings. Secret and output-only fields are
 deliberately excluded.
 
+On the **ent backend**, `protoc-gen-ent` emits the equivalent `var <Msg>EntColumns` (and, for a
+`tags` field, `var <Msg>EntJSONColumns`) into the proto's Go package — the ent column names differ
+from GORM's (ent stores soft-delete as `delete_time`, GORM as `deleted_at`), and the ent-suffixed
+names let both coexist when a service generates both backends. An ent-only service wires filtering
+with these maps, e.g. `entrepo.FilterPredicate(opts.Filter, <Msg>EntColumns, <Msg>EntJSONColumns)`.
+
 ## Generated repository helpers
 
 Beyond the `Repository` interface, `protoc-gen-storage` emits per-resource helpers when the proto
@@ -190,6 +196,13 @@ this via `persistence.ConstraintError`, which classifies a driver error and retu
 clean sentinel — never the raw SQL — so the client sees `AlreadyExists`/`FailedPrecondition` rather
 than a 500 leaking the table and column names. The [`ErrorMapper`](../middleware/) interceptor then
 turns the sentinel into the gRPC status; you do not write that mapping by hand.
+
+On the **ent backend** the storage layer is your hand-written adapter, so it should call
+`persistence.ConstraintError` on every `Save`/mutation error to produce the same sentinels (the
+`testdata/*/ent_wiring.go` examples show this). As a safety net, `ErrorMapperUnary` **also** runs
+`persistence.ConstraintError` on any otherwise-unclassified error, so even an adapter that forgets the
+call still returns a clean `AlreadyExists`/`FailedPrecondition` with no raw SQL — never a 500 leaking
+the constraint text.
 
 ```go
 // ConstraintError returns ErrConflict / ErrPreconditionFailed for a recognized

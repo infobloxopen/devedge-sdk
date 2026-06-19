@@ -30,6 +30,11 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 				SetDisplayName(entity.DisplayName).
 				Save(ctx)
 			if err != nil {
+				// Classify driver errors so a unique/FK/not-null violation becomes a
+				// clean ErrConflict/ErrPreconditionFailed (409/412) with no raw SQL.
+				if ce := persistence.ConstraintError(err); ce != nil {
+					return nil, ce
+				}
 				return nil, fmt.Errorf("create fleet: %w", err)
 			}
 			return fromEntFleet(created), nil
@@ -128,6 +133,9 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			}
 			created, err := b.Save(ctx)
 			if err != nil {
+				if ce := persistence.ConstraintError(err); ce != nil {
+					return nil, ce
+				}
 				return nil, fmt.Errorf("create vehicle: %w", err)
 			}
 			return fromEntVehicle(created), nil
