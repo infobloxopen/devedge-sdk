@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
@@ -114,6 +115,7 @@ func msgHasTags(msg messageInfo) bool {
 // messageInfo describes a proto message for storage code generation.
 type messageInfo struct {
 	MessageName     string
+	Model           string // resolved (infoblox.storage.v1.model): the backing storage model name (== MessageName for owner/single-surface; owner's name for a surface)
 	PbPkgName       string // Go package name of the generated proto package (e.g. "widgetsv1")
 	PbImportPath    string // Go import path of the generated proto package
 	Fields          []fieldInfo
@@ -125,6 +127,24 @@ type messageInfo struct {
 	// AIP-154 ETag: set when the message has a string `etag` field. The storage
 	// layer stamps a fresh token on every write and surfaces it on read.
 	HasETag bool
+}
+
+// isSurface reports whether msg is a projection over ANOTHER message's storage
+// model — its (infoblox.storage.v1.model) names a different message (F027 Phase
+// 5b). A surface emits a repository adapter + projection over the owner's GORM
+// type but no GORM model struct / table of its own.
+func (msg messageInfo) isSurface() bool {
+	return msg.Model != "" && msg.Model != msg.MessageName
+}
+
+// modelType returns the GORM model type name backing msg. For an owner /
+// single-surface resource this is its own name; for a surface it is the owner
+// message's name — the GORM struct it projects.
+func (msg messageInfo) modelType() string {
+	if msg.Model == "" {
+		return msg.MessageName
+	}
+	return msg.Model
 }
 
 // fieldInfo describes a single proto message field.
@@ -140,6 +160,7 @@ type fieldInfo struct {
 	IsID          bool // this field is the resource primary key
 	IsRepeated    bool // repeated field — skipped in GORM model with a TODO
 	IsMessage     bool // nested message field — skipped with a TODO
+	IsEnum        bool // enum field — not auto-wired (F027 fail-closed)
 	IsTags        bool // map<string,string> field — persisted as a types.Tags JSONB column
 	IsSecret      bool // secret field — stored as hash+cipher columns; plaintext never persisted
 	IsOutputOnly  bool // OUTPUT_ONLY field (google.api.field_behavior) — computed, not persisted
@@ -156,11 +177,60 @@ type fieldInfo struct {
 	ManyToMany *fieldv1.ManyToMany
 }
 
+// msgForeignKeyFields returns the set of snake_case scalar field names that are
+// the foreign key of a belongs_to edge on this message. Used by toStorageFields
+// to mark them IsScalarFK so the fail-closed classifier passes them.
+func msgForeignKeyFields(msg messageInfo) map[string]bool {
+	fks := map[string]bool{}
+	for _, f := range msg.Fields {
+		if f.BelongsTo != nil {
+			if fk := f.BelongsTo.GetForeignKey(); fk != "" {
+				fks[fk] = true
+			}
+		}
+	}
+	return fks
+}
+
+// toStorageFields projects a message's fields onto the engine-neutral
+// storagegen.Field view used by the fail-closed coverage check (F027 G-002/G-005).
+func toStorageFields(msg messageInfo) []storagegen.Field {
+	fks := msgForeignKeyFields(msg)
+	out := make([]storagegen.Field, 0, len(msg.Fields))
+	for _, f := range msg.Fields {
+		out = append(out, storagegen.Field{
+			Name:           f.Name,
+			IsID:           f.IsID,
+			IsTenant:       f.Name == "account_id" || f.SnakeName == "account_id",
+			IsSecret:       f.IsSecret,
+			IsTags:         f.IsTags,
+			OutputOnly:     f.IsOutputOnly,
+			IsRepeated:     f.IsRepeated,
+			IsMessage:      f.IsMessage,
+			IsEnum:         f.IsEnum,
+			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil,
+			IsScalarFK:     fks[f.SnakeName] || fks[f.Name],
+			HasColumnType:  f.GoType != "" && f.GoType != "interface{}",
+		})
+	}
+	return out
+}
+
 // renderStorageFile generates the .storage.go content for the given storage
-// package and messages. Returns an empty string when messages is empty.
-func renderStorageFile(storagePkgName string, messages []messageInfo) string {
+// package and messages. ownerByName maps each message name to itself (for
+// owners/single-surface) so renderMessage can look up the owner for surfaces.
+// Returns an empty string when messages is empty.
+func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByName map[string]messageInfo) string {
 	if len(messages) == 0 {
 		return ""
+	}
+	if ownerByName == nil {
+		// Build a default owner map (all owners are themselves) for callers that
+		// pre-date the multi-surface parameter (unit tests, etc.).
+		ownerByName = make(map[string]messageInfo, len(messages))
+		for _, m := range messages {
+			ownerByName[m.MessageName] = m
+		}
 	}
 
 	var b strings.Builder
@@ -169,9 +239,28 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString("// source: (proto input)\n\n")
 	fmt.Fprintf(&b, "package %s\n\n", storagePkgName)
 	withSecrets := hasSecretFields(messages)
+	// For import decisions, check both message flags and their owner's flags: a surface
+	// inherits its owner's soft-delete/expire/etag behaviour in the generated code even
+	// though the surface messageInfo itself may not have those flags set.
 	withSoftDelete := hasSoftDeleteMsg(messages)
 	withExpireTime := hasExpireTimeMsg(messages)
 	withETag := hasETagMsg(messages)
+	if !withSoftDelete || !withExpireTime || !withETag {
+		for _, msg := range messages {
+			if msg.isSurface() {
+				owner := ownerByName[msg.modelType()]
+				if owner.SoftDelete {
+					withSoftDelete = true
+				}
+				if owner.HasExpireTime {
+					withExpireTime = true
+				}
+				if owner.HasETag {
+					withETag = true
+				}
+			}
+		}
+	}
 	withTags := hasTagsFields(messages)
 
 	// Determine if any message needs the middleware import (tenant or secret lookup).
@@ -260,26 +349,34 @@ func renderStorageFile(storagePkgName string, messages []messageInfo) string {
 	b.WriteString(")\n\n")
 
 	for _, msg := range messages {
-		renderMessage(&b, msg, withSecrets)
+		owner := ownerByName[msg.modelType()]
+		renderMessage(&b, msg, owner, withSecrets)
 	}
 
 	return b.String()
 }
 
-func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
-	hasTenant := msgHasTenantField(msg)
+func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withSecrets bool) {
+	// model is the GORM model TYPE name (the owner's name). For an owner /
+	// single-surface resource this equals msg.MessageName; for a surface it is
+	// the owner's name — the struct, table, and query builder the surface reuses.
+	model := owner.MessageName
+
+	// Mutation and framework flags follow the OWNER's schema.
+	hasTenant := msgHasTenantField(owner)
 	// A soft-delete + per-tenant-unique resource needs the unique key freed when
 	// the holder is soft-deleted. PostgreSQL/SQLite use a partial unique index
 	// (WHERE deleted_at IS NULL); MySQL (no partial indexes) joins a
 	// soft_delete_key discriminator column into the composite instead.
-	softDeleteUnique := msg.SoftDelete && msgHasTenantUnique(msg)
+	softDeleteUnique := owner.SoftDelete && msgHasTenantUnique(owner)
 	useSentinel := softDeleteUnique && useSoftDeleteSentinel()
 	usePartial := softDeleteUnique && !useSoftDeleteSentinel()
 	// Set of Go field names backed by a proto-declared scalar column. Used to
 	// avoid emitting a duplicate belongs_to FK field when the proto already
-	// exposes the FK as a scalar (the natural AIP shape).
+	// exposes the FK as a scalar (the natural AIP shape). The struct is emitted
+	// from owner.Fields so we check the owner's fields here.
 	scalarGoNames := map[string]bool{}
-	for _, f := range msg.Fields {
+	for _, f := range owner.Fields {
 		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
 			continue
 		}
@@ -289,168 +386,172 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	// unique field, so the index spans (account_id, <col>) rather than <col>
 	// alone — preserving per-tenant uniqueness in a multi-tenant framework.
 	uniqueIndexName := func(col string) string {
-		return "ux_" + strings.ToLower(msg.MessageName) + "_account_" + col
-	}
-	// GORM model struct.
-	fmt.Fprintf(b, "// %sModel is the GORM model for %s.\n", msg.MessageName, msg.MessageName)
-	fmt.Fprintf(b, "type %sModel struct {\n", msg.MessageName)
-	fmt.Fprintf(b, "\tID        string         `gorm:\"primaryKey;type:varchar(36)\"`\n")
-
-	for _, f := range msg.Fields {
-		if f.IsID {
-			continue // ID is already emitted above
-		}
-		if f.IsOutputOnly {
-			continue // computed field, not stored in DB
-		}
-		if f.IsTags {
-			// Tags (map<string,string>) persist as a single JSONB column via the
-			// ORM-agnostic types.Tags (driver.Valuer/sql.Scanner). jsonb works on
-			// Postgres natively and on SQLite via type affinity (stores the JSON
-			// text); a column_type annotation overrides the default.
-			col := f.SnakeName
-			if f.ColumnName != "" {
-				col = f.ColumnName
-			}
-			colType := "jsonb"
-			if f.ColumnType != "" {
-				colType = f.ColumnType
-			}
-			fmt.Fprintf(b, "\t%s types.Tags `gorm:\"column:%s;type:%s\"`\n", goFieldName(f), col, colType)
-			continue
-		}
-		if f.IsRepeated {
-			if f.HasMany != nil {
-				// has_many: a slice of the related GORM model. GORM resolves the
-				// association from the concrete element type; foreignKey names the
-				// Go field on the related model that holds this resource's key.
-				gfn := goFieldName(f)
-				fmt.Fprintf(b, "\t%s []*%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasMany.GetForeignKey()))
-				continue
-			}
-			if f.ManyToMany != nil {
-				gfn := goFieldName(f)
-				fmt.Fprintf(b, "\t%s []*%s `gorm:\"many2many:%s\"`\n", gfn, assocModelType(f), f.ManyToMany.GetJoinTable())
-				continue
-			}
-			fmt.Fprintf(b, "\t// TODO: repeated field %s skipped — JSONB serialization needed (W5-6)\n", f.Name)
-			continue
-		}
-		if f.IsMessage {
-			if f.HasOne != nil {
-				gfn := goFieldName(f)
-				fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasOne.GetForeignKey()))
-				continue
-			}
-			if f.BelongsTo != nil {
-				// belongs_to: the FK lives on THIS table. Emit a concrete pointer
-				// association keyed by the FK's Go field name.
-				gfn := goFieldName(f)
-				fk := f.BelongsTo.GetForeignKey()
-				fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(fk))
-				// Emit the FK column field only when the proto does not already
-				// expose it as a scalar field — otherwise the field is duplicated
-				// and the generated package fails to compile.
-				if fk != "" {
-					fkGoName := snakeToCamel(fk)
-					if !scalarGoNames[fkGoName] {
-						fmt.Fprintf(b, "\t%s string `gorm:\"column:%s\"`\n", fkGoName, fk)
-					}
-				}
-				continue
-			}
-			fmt.Fprintf(b, "\t// TODO: nested message %s skipped — serialization strategy TBD (W5-6)\n", f.Name)
-			continue
-		}
-		gfn := goFieldName(f)
-		if f.IsSecret {
-			// Secret fields are never stored as plaintext; emit hash + cipher columns.
-			fmt.Fprintf(b, "\t%sHash   string `gorm:\"column:%s_hash;index\"`\n", gfn, f.SnakeName)
-			fmt.Fprintf(b, "\t%sCipher string `gorm:\"column:%s_cipher\"`\n", gfn, f.SnakeName)
-		} else {
-			// Build the GORM tag.
-			col := f.SnakeName
-			if f.ColumnName != "" {
-				col = f.ColumnName
-			}
-			var tagParts []string
-			tagParts = append(tagParts, "column:"+col)
-			if f.ColumnType != "" {
-				tagParts = append(tagParts, "type:"+f.ColumnType)
-			}
-			if f.NotNull {
-				tagParts = append(tagParts, "not null")
-			}
-			if f.Unique {
-				if hasTenant {
-					// Tenant-scoped: the unique constraint must be per-account, so
-					// the field joins account_id in a composite unique index
-					// (priority 2 — account_id is the leading column, priority 1).
-					// The partial-index predicate (usePartial) is carried on the
-					// account_id (priority 1) tag below, not here.
-					tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(col)+",priority:2")
-				} else {
-					// No tenant column: a plain global unique index is correct.
-					tagParts = append(tagParts, "uniqueIndex")
-				}
-			} else if f.Index {
-				tagParts = append(tagParts, "index")
-			}
-			// account_id is the leading column of every per-tenant composite unique
-			// index, so a name unique within one tenant can be reused by another.
-			if hasTenant && (f.Name == "account_id" || f.SnakeName == "account_id") {
-				for _, uf := range msg.Fields {
-					if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique {
-						continue
-					}
-					ucol := uf.SnakeName
-					if uf.ColumnName != "" {
-						ucol = uf.ColumnName
-					}
-					ux := "uniqueIndex:" + uniqueIndexName(ucol) + ",priority:1"
-					if usePartial {
-						// Partial unique index so the key frees on soft-delete. GORM's
-						// migrator drops the `where` index tag but appends `option`
-						// verbatim after the column list, so the predicate rides there:
-						// CREATE UNIQUE INDEX ux ON t (account_id, <field>) WHERE deleted_at IS NULL.
-						ux += ",option:WHERE deleted_at IS NULL"
-					}
-					tagParts = append(tagParts, ux)
-				}
-			}
-			tag := strings.Join(tagParts, ";")
-			fmt.Fprintf(b, "\t%s %s `gorm:\"%s\"`\n", gfn, f.GoType, tag)
-		}
+		return "ux_" + strings.ToLower(model) + "_account_" + col
 	}
 
-	b.WriteString("\tETag      string         `gorm:\"column:etag\"`\n")
-	b.WriteString("\tCreatedAt time.Time\n")
-	b.WriteString("\tUpdatedAt time.Time\n")
-	if msg.SoftDelete {
-		b.WriteString("\tDeletedAt gorm.DeletedAt `gorm:\"index\"`\n")
-	}
-	if useSentinel {
-		// MySQL soft-delete-unique discriminator: "" while live, the row id once
-		// soft-deleted, so a per-tenant unique key can be re-created after the
-		// holder is soft-deleted. Joins every per-tenant composite unique as the
-		// trailing (priority 3) column. Maintained by Delete/Undelete below.
-		parts := []string{"column:soft_delete_key"}
-		for _, uf := range msg.Fields {
-			if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique {
+	// GORM model struct: emitted only for owners (a surface has no table of its own
+	// — it reuses <model>Model). Skip the entire struct block for surfaces.
+	if !msg.isSurface() {
+		fmt.Fprintf(b, "// %sModel is the GORM model for %s.\n", model, model)
+		fmt.Fprintf(b, "type %sModel struct {\n", model)
+		fmt.Fprintf(b, "\tID        string         `gorm:\"primaryKey;type:varchar(36)\"`\n")
+
+		for _, f := range owner.Fields {
+			if f.IsID {
+				continue // ID is already emitted above
+			}
+			if f.IsOutputOnly {
+				continue // computed field, not stored in DB
+			}
+			if f.IsTags {
+				// Tags (map<string,string>) persist as a single JSONB column via the
+				// ORM-agnostic types.Tags (driver.Valuer/sql.Scanner). jsonb works on
+				// Postgres natively and on SQLite via type affinity (stores the JSON
+				// text); a column_type annotation overrides the default.
+				col := f.SnakeName
+				if f.ColumnName != "" {
+					col = f.ColumnName
+				}
+				colType := "jsonb"
+				if f.ColumnType != "" {
+					colType = f.ColumnType
+				}
+				fmt.Fprintf(b, "\t%s types.Tags `gorm:\"column:%s;type:%s\"`\n", goFieldName(f), col, colType)
 				continue
 			}
-			ucol := uf.SnakeName
-			if uf.ColumnName != "" {
-				ucol = uf.ColumnName
+			if f.IsRepeated {
+				if f.HasMany != nil {
+					// has_many: a slice of the related GORM model. GORM resolves the
+					// association from the concrete element type; foreignKey names the
+					// Go field on the related model that holds this resource's key.
+					gfn := goFieldName(f)
+					fmt.Fprintf(b, "\t%s []*%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasMany.GetForeignKey()))
+					continue
+				}
+				if f.ManyToMany != nil {
+					gfn := goFieldName(f)
+					fmt.Fprintf(b, "\t%s []*%s `gorm:\"many2many:%s\"`\n", gfn, assocModelType(f), f.ManyToMany.GetJoinTable())
+					continue
+				}
+				fmt.Fprintf(b, "\t// TODO: repeated field %s skipped — JSONB serialization needed (W5-6)\n", f.Name)
+				continue
 			}
-			parts = append(parts, "uniqueIndex:"+uniqueIndexName(ucol)+",priority:3")
+			if f.IsMessage {
+				if f.HasOne != nil {
+					gfn := goFieldName(f)
+					fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasOne.GetForeignKey()))
+					continue
+				}
+				if f.BelongsTo != nil {
+					// belongs_to: the FK lives on THIS table. Emit a concrete pointer
+					// association keyed by the FK's Go field name.
+					gfn := goFieldName(f)
+					fk := f.BelongsTo.GetForeignKey()
+					fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(fk))
+					// Emit the FK column field only when the proto does not already
+					// expose it as a scalar field — otherwise the field is duplicated
+					// and the generated package fails to compile.
+					if fk != "" {
+						fkGoName := snakeToCamel(fk)
+						if !scalarGoNames[fkGoName] {
+							fmt.Fprintf(b, "\t%s string `gorm:\"column:%s\"`\n", fkGoName, fk)
+						}
+					}
+					continue
+				}
+				fmt.Fprintf(b, "\t// TODO: nested message %s skipped — serialization strategy TBD (W5-6)\n", f.Name)
+				continue
+			}
+			gfn := goFieldName(f)
+			if f.IsSecret {
+				// Secret fields are never stored as plaintext; emit hash + cipher columns.
+				fmt.Fprintf(b, "\t%sHash   string `gorm:\"column:%s_hash;index\"`\n", gfn, f.SnakeName)
+				fmt.Fprintf(b, "\t%sCipher string `gorm:\"column:%s_cipher\"`\n", gfn, f.SnakeName)
+			} else {
+				// Build the GORM tag.
+				col := f.SnakeName
+				if f.ColumnName != "" {
+					col = f.ColumnName
+				}
+				var tagParts []string
+				tagParts = append(tagParts, "column:"+col)
+				if f.ColumnType != "" {
+					tagParts = append(tagParts, "type:"+f.ColumnType)
+				}
+				if f.NotNull {
+					tagParts = append(tagParts, "not null")
+				}
+				if f.Unique {
+					if hasTenant {
+						// Tenant-scoped: the unique constraint must be per-account, so
+						// the field joins account_id in a composite unique index
+						// (priority 2 — account_id is the leading column, priority 1).
+						// The partial-index predicate (usePartial) is carried on the
+						// account_id (priority 1) tag below, not here.
+						tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(col)+",priority:2")
+					} else {
+						// No tenant column: a plain global unique index is correct.
+						tagParts = append(tagParts, "uniqueIndex")
+					}
+				} else if f.Index {
+					tagParts = append(tagParts, "index")
+				}
+				// account_id is the leading column of every per-tenant composite unique
+				// index, so a name unique within one tenant can be reused by another.
+				if hasTenant && (f.Name == "account_id" || f.SnakeName == "account_id") {
+					for _, uf := range owner.Fields {
+						if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique {
+							continue
+						}
+						ucol := uf.SnakeName
+						if uf.ColumnName != "" {
+							ucol = uf.ColumnName
+						}
+						ux := "uniqueIndex:" + uniqueIndexName(ucol) + ",priority:1"
+						if usePartial {
+							// Partial unique index so the key frees on soft-delete. GORM's
+							// migrator drops the `where` index tag but appends `option`
+							// verbatim after the column list, so the predicate rides there:
+							// CREATE UNIQUE INDEX ux ON t (account_id, <field>) WHERE deleted_at IS NULL.
+							ux += ",option:WHERE deleted_at IS NULL"
+						}
+						tagParts = append(tagParts, ux)
+					}
+				}
+				tag := strings.Join(tagParts, ";")
+				fmt.Fprintf(b, "\t%s %s `gorm:\"%s\"`\n", gfn, f.GoType, tag)
+			}
 		}
-		fmt.Fprintf(b, "\tSoftDeleteKey string `gorm:\"%s\"`\n", strings.Join(parts, ";"))
+
+		b.WriteString("\tETag      string         `gorm:\"column:etag\"`\n")
+		b.WriteString("\tCreatedAt time.Time\n")
+		b.WriteString("\tUpdatedAt time.Time\n")
+		if owner.SoftDelete {
+			b.WriteString("\tDeletedAt gorm.DeletedAt `gorm:\"index\"`\n")
+		}
+		if useSentinel {
+			// MySQL soft-delete-unique discriminator: "" while live, the row id once
+			// soft-deleted, so a per-tenant unique key can be re-created after the
+			// holder is soft-deleted. Joins every per-tenant composite unique as the
+			// trailing (priority 3) column. Maintained by Delete/Undelete below.
+			parts := []string{"column:soft_delete_key"}
+			for _, uf := range owner.Fields {
+				if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique {
+					continue
+				}
+				ucol := uf.SnakeName
+				if uf.ColumnName != "" {
+					ucol = uf.ColumnName
+				}
+				parts = append(parts, "uniqueIndex:"+uniqueIndexName(ucol)+",priority:3")
+			}
+			fmt.Fprintf(b, "\tSoftDeleteKey string `gorm:\"%s\"`\n", strings.Join(parts, ";"))
+		}
+		if owner.HasExpireTime {
+			b.WriteString("\tExpireTime sql.NullTime `gorm:\"column:expire_time;index\"`\n")
+		}
+		b.WriteString("}\n\n")
 	}
-	if msg.HasExpireTime {
-		b.WriteString("\tExpireTime sql.NullTime `gorm:\"column:expire_time;index\"`\n")
-	}
-	b.WriteString("}\n\n")
 
 	pbType := fmt.Sprintf("*%s", msg.MessageName)
 	pbPkg := msg.PbPkgName
@@ -458,10 +559,12 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		pbType = fmt.Sprintf("*%s.%s", pbPkg, msg.MessageName)
 	}
 
-	// toModel helper.
-	fmt.Fprintf(b, "func toModel_%s(p %s) *%sModel {\n", msg.MessageName, pbType, msg.MessageName)
+	// toModel helper: function name uses the SURFACE name (msg.MessageName), but
+	// the return type uses the OWNER model name (model) — a surface writes the same
+	// row as its owner. Field iteration uses msg.Fields (the surface's projection).
+	fmt.Fprintf(b, "func toModel_%s(p %s) *%sModel {\n", msg.MessageName, pbType, model)
 	b.WriteString("\tif p == nil {\n\t\treturn nil\n\t}\n")
-	fmt.Fprintf(b, "\tm := &%sModel{ID: p.Id}\n", msg.MessageName)
+	fmt.Fprintf(b, "\tm := &%sModel{ID: p.Id}\n", model)
 	for _, f := range msg.Fields {
 		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
 			continue // output-only and secret fields are not persisted via toModel
@@ -476,7 +579,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	// AIP-148 TTL: expire_time is OUTPUT_ONLY (server-managed), so it is not in the
 	// loop above — but it must be carried onto the model so a Create handler that
 	// stamps it persists a real expiry. Without this, seam-created rows always store
-	// expire_time = NULL and PurgeExpired has nothing to reap.
+	// expire_time = NULL and PurgeExpired has nothing to reap. Gated on the SURFACE's
+	// own field set (msg): a surface that does not expose expire_time has no
+	// p.ExpireTime to read, and its writes simply do not carry it.
 	if msg.HasExpireTime {
 		b.WriteString("\tif p.ExpireTime != nil {\n")
 		b.WriteString("\t\tm.ExpireTime = sql.NullTime{Time: p.ExpireTime.AsTime(), Valid: true}\n")
@@ -484,15 +589,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 	b.WriteString("\treturn m\n}\n\n")
 
-	// fromModel helper.
-	fmt.Fprintf(b, "func fromModel_%s(m *%sModel) %s {\n", msg.MessageName, msg.MessageName, pbType)
+	// fromModel helper: function name uses the SURFACE name (msg.MessageName), and
+	// input type uses the OWNER model name (model). Field projection follows msg.Fields.
+	fmt.Fprintf(b, "func fromModel_%s(m *%sModel) %s {\n", msg.MessageName, model, pbType)
 	b.WriteString("\tif m == nil {\n\t\treturn nil\n\t}\n")
 	if pbPkg != "" {
 		fmt.Fprintf(b, "\tp := &%s.%s{Id: m.ID}\n", pbPkg, msg.MessageName)
 	} else {
 		fmt.Fprintf(b, "\tp := &%s{Id: m.ID}\n", msg.MessageName)
 	}
-	// Populate AIP-122 resource name field if present.
+	// Populate AIP-122 resource name field if present (keyed on the surface's own pattern).
 	if msg.ResourcePattern != "" {
 		for _, f := range msg.Fields {
 			if f.IsOutputOnly && f.Name == "name" {
@@ -513,6 +619,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\tp.%s = m.%s\n", gfn, gfn)
 	}
 	// AIP-148: populate delete_time / expire_time from GORM columns.
+	// For a surface these follow the surface's own declaration (it may omit them).
 	if msg.SoftDelete {
 		b.WriteString("\tif m.DeletedAt.Valid {\n")
 		b.WriteString("\t\tp.DeleteTime = timestamppb.New(m.DeletedAt.Time)\n")
@@ -528,9 +635,26 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	if msg.HasETag {
 		b.WriteString("\tp.Etag = m.ETag\n")
 	}
+	// Owned customization hook: called after all automatic projection is done.
+	fmt.Fprintf(b, "\tif FromModel%sCustom != nil {\n\t\tFromModel%sCustom(m, p)\n\t}\n", msg.MessageName, msg.MessageName)
 	b.WriteString("\treturn p\n}\n\n")
 
+	// Owned customization hooks (F027 split-files override seam).
+	// Nil by default; the developer registers them from their OWN (regen-safe)
+	// file. The generated file only declares and calls them, so re-running codegen
+	// never disturbs custom logic.
+	fmt.Fprintf(b, "// FromModel%sCustom, if set, runs at the end of fromModel_%s to populate\n", msg.MessageName, msg.MessageName)
+	b.WriteString("// fields the generator cannot derive (computed/derived values). Register it\n")
+	b.WriteString("// from your own (regen-safe) file — e.g. in an init(); never assigned here.\n")
+	fmt.Fprintf(b, "var FromModel%sCustom func(m *%sModel, p %s)\n\n", msg.MessageName, model, pbType)
+	fmt.Fprintf(b, "// ToModel%sOnCreate, if set, runs in Create just before the database write,\n", msg.MessageName)
+	b.WriteString("// to set columns the generator does not (e.g. a custom-encoded field).\n")
+	fmt.Fprintf(b, "var ToModel%sOnCreate func(p %s, m *%sModel)\n\n", msg.MessageName, pbType, model)
+	fmt.Fprintf(b, "// ToModel%sOnUpdate, if set, runs in Update just before the database write.\n", msg.MessageName)
+	fmt.Fprintf(b, "var ToModel%sOnUpdate func(p %s, m *%sModel)\n\n", msg.MessageName, pbType, model)
+
 	// Column map for safe filter/order_by parsing (AIP-160/132).
+	// Column names are keyed on the surface's own field set (msg.Fields).
 	fmt.Fprintf(b, "// %sColumns maps proto field names to DB column names for safe filter/order_by parsing.\n", msg.MessageName)
 	fmt.Fprintf(b, "var %sColumns = map[string]string{\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\"id\": \"id\",\n")
@@ -548,10 +672,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\t%q: %q,\n", f.Name, col)
 	}
 	// AIP-148: soft-delete timestamps admitted into the column map for filter/order_by.
-	if msg.SoftDelete {
+	// Follow the OWNER for column existence; surface declaration may differ.
+	if owner.SoftDelete {
 		fmt.Fprintf(b, "\t\"delete_time\": \"deleted_at\",\n")
 	}
-	if msg.HasExpireTime {
+	if owner.HasExpireTime {
 		fmt.Fprintf(b, "\t\"expire_time\": \"expire_time\",\n")
 	}
 	b.WriteString("}\n\n")
@@ -574,7 +699,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("}\n\n")
 	}
 
-	// AIP-122 resource name helpers.
+	// AIP-122 resource name helpers — keyed on the surface's own resource pattern.
 	if msg.ResourcePattern != "" {
 		idVar := resourcenameIDVarName(msg.ResourcePattern)
 		fmt.Fprintf(b, "// %sNamePattern is the AIP-122 resource name pattern for %s.\n", msg.MessageName, msg.MessageName)
@@ -597,7 +722,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		}
 	}
 
-	// Repository struct + constructor.
+	// Repository struct + constructor. Named for the SURFACE (msg.MessageName) so each
+	// surface gets its own constructor; the struct's db field operates on the owner's table.
 	fmt.Fprintf(b, "// %sRepository is a GORM-backed persistence.Repository for %s.\n", msg.MessageName, pbType)
 	if msgHasSecrets {
 		fmt.Fprintf(b, "type %sRepository struct {\n\tdb  *gorm.DB\n\tenc secret.Encryptor\n}\n\n", msg.MessageName)
@@ -611,9 +737,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		fmt.Fprintf(b, "\treturn &%sRepository{db: db}\n}\n\n", msg.MessageName)
 	}
 
-	// Get.
+	// Get. Model type follows the OWNER.
 	fmt.Fprintf(b, "func (r *%sRepository) Get(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
-	fmt.Fprintf(b, "\tvar m %sModel\n", msg.MessageName)
+	fmt.Fprintf(b, "\tvar m %sModel\n", model)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
@@ -629,12 +755,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn fromModel_%s(&m), nil\n}\n\n", msg.MessageName)
 
-	// List.
+	// List. Model type and soft-delete scope follow the OWNER; column map uses the SURFACE.
 	fmt.Fprintf(b, "func (r *%sRepository) List(ctx context.Context, opts persistence.ListOptions) ([]%s, string, error) {\n", msg.MessageName, pbType)
-	fmt.Fprintf(b, "\tvar models []%sModel\n", msg.MessageName)
+	fmt.Fprintf(b, "\tvar models []%sModel\n", model)
 	b.WriteString("\tq := r.db.WithContext(ctx)\n")
 	// AIP-148: lift soft-delete scope BEFORE tenant predicate (FR-008, FR-014).
-	if msg.SoftDelete {
+	// Scope follows the OWNER's soft-delete setting.
+	if owner.SoftDelete {
 		b.WriteString("\tif opts.ShowDeleted {\n\t\tq = q.Unscoped()\n\t}\n")
 	}
 	if hasTenant {
@@ -684,7 +811,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn out, nextToken, nil\n}\n\n")
 
-	// Create.
+	// Create. Model type follows the OWNER; hooks use the SURFACE name.
 	fmt.Fprintf(b, "func (r *%sRepository) Create(ctx context.Context, entity %s) (%s, error) {\n", msg.MessageName, pbType, pbType)
 	fmt.Fprintf(b, "\tm := toModel_%s(entity)\n", msg.MessageName)
 	if msgHasSecrets {
@@ -703,9 +830,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			b.WriteString("\t}\n")
 		}
 	}
-	if msg.HasETag {
+	if owner.HasETag {
 		b.WriteString("\tm.ETag = etag.New() // AIP-154: fresh ETag on create\n")
 	}
+	// ToModel hook before write.
+	fmt.Fprintf(b, "\tif ToModel%sOnCreate != nil {\n\t\tToModel%sOnCreate(entity, m)\n\t}\n", msg.MessageName, msg.MessageName)
 	b.WriteString("\tif err := r.db.WithContext(ctx).Create(m).Error; err != nil {\n")
 	b.WriteString("\t\t// Map driver constraint violations to clean sentinels so callers see\n")
 	b.WriteString("\t\t// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.\n")
@@ -714,11 +843,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn fromModel_%s(m), nil\n}\n\n", msg.MessageName)
 
-	// Update.
+	// Update. Model type and ETag follow the OWNER; field columns follow the SURFACE.
 	fmt.Fprintf(b, "func (r *%sRepository) Update(ctx context.Context, key string, entity %s, fieldMask ...string) (%s, error) {\n", msg.MessageName, pbType, pbType)
 	fmt.Fprintf(b, "\tm := toModel_%s(entity)\n", msg.MessageName)
 	b.WriteString("\tm.ID = key\n")
-	if msg.HasETag {
+	if owner.HasETag {
 		b.WriteString("\tm.ETag = etag.New() // AIP-154: bump the ETag on every update\n")
 	}
 	if msgHasSecrets {
@@ -737,6 +866,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			b.WriteString("\t}\n")
 		}
 	}
+	// ToModel hook before write.
+	fmt.Fprintf(b, "\tif ToModel%sOnUpdate != nil {\n\t\tToModel%sOnUpdate(entity, m)\n\t}\n", msg.MessageName, msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
@@ -746,10 +877,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 	// Collect the regular (scalar, persisted) columns that a full update writes.
 	// The tenant scoping key (account_id) is deliberately excluded: it is assigned at
-	// create and is only ever a WHERE predicate, never a writable column. Were it in the
-	// no-mask column map, an update that omits it (the common case — it is sourced from
-	// the request context, not the entity) would write account_id="" and orphan the row
-	// from its tenant, after which the method's own tenant-scoped Get returns NotFound.
+	// create and is only ever a WHERE predicate, never a writable column.
 	var regularFields []fieldInfo
 	for _, f := range msg.Fields {
 		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
@@ -776,7 +904,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 	fmt.Fprintf(b, "\t\t\tdbCols = append(dbCols, col)\n")
 	fmt.Fprintf(b, "\t\t}\n")
-	if msg.HasETag {
+	if owner.HasETag {
 		b.WriteString("\t\tdbCols = append(dbCols, \"etag\") // a masked update still changes the resource\n")
 	}
 	fmt.Fprintf(b, "\t\t// Select makes GORM write the named columns even when their value is\n")
@@ -813,7 +941,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 				fmt.Fprintf(b, "\t\t}\n")
 			}
 		}
-		if msg.HasETag {
+		if owner.HasETag {
 			b.WriteString("\t\tupdates[\"etag\"] = m.ETag\n")
 		}
 		fmt.Fprintf(b, "\t\tif err := q.Updates(updates).Error; err != nil {\n")
@@ -833,7 +961,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	}
 	fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n")
 
-	// Delete — soft (AIP-148) or hard depending on opt-in.
+	// Delete — soft (AIP-148) or hard depending on OWNER opt-in.
 	fmt.Fprintf(b, "func (r *%sRepository) Delete(ctx context.Context, key string) error {\n", msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
@@ -845,17 +973,17 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 			// the freed key leaves the live (account_id, <field>, "") namespace
 			// atomically (MySQL has no partial index). The default soft-delete scope
 			// limits this to a currently-live row, so RowsAffected==0 → NotFound.
-			fmt.Fprintf(b, "\tres := q.Model(&%sModel{}).Updates(map[string]interface{}{\"deleted_at\": time.Now().UTC(), \"soft_delete_key\": key})\n", msg.MessageName)
-		case msg.SoftDelete:
-			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", msg.MessageName)
+			fmt.Fprintf(b, "\tres := q.Model(&%sModel{}).Updates(map[string]interface{}{\"deleted_at\": time.Now().UTC(), \"soft_delete_key\": key})\n", model)
+		case owner.SoftDelete:
+			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", model)
 		default:
-			fmt.Fprintf(b, "\tres := q.Unscoped().Delete(&%sModel{})\n", msg.MessageName)
+			fmt.Fprintf(b, "\tres := q.Unscoped().Delete(&%sModel{})\n", model)
 		}
 	} else {
-		if msg.SoftDelete {
-			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{})\n", msg.MessageName)
+		if owner.SoftDelete {
+			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{})\n", model)
 		} else {
-			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Unscoped().Delete(&%sModel{})\n", msg.MessageName)
+			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Unscoped().Delete(&%sModel{})\n", model)
 		}
 	}
 	b.WriteString("\tif res.Error != nil {\n")
@@ -864,16 +992,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	b.WriteString("\tif res.RowsAffected == 0 {\n\t\treturn persistence.ErrNotFound\n\t}\n")
 	b.WriteString("\treturn nil\n}\n\n")
 
-	// Undelete — full implementation when SoftDelete, otherwise a stub satisfying the interface.
-	if msg.SoftDelete {
+	// Undelete — full implementation when OWNER has SoftDelete, otherwise a stub.
+	if owner.SoftDelete {
 		fmt.Fprintf(b, "func (r *%sRepository) Undelete(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).Where(\"id = ?\", key)\n", msg.MessageName)
+			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 			b.WriteString("\tq = q.Where(\"deleted_at IS NOT NULL\")\n")
 		} else {
-			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).\n", msg.MessageName)
+			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).\n", model)
 			b.WriteString("\t\tWhere(\"id = ?\", key).Where(\"deleted_at IS NOT NULL\")\n")
 		}
 		if useSentinel {
@@ -895,22 +1023,22 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\treturn nil, persistence.ErrNotFound\n}\n\n")
 	}
 
-	// PurgeExpired — emitted only when HasExpireTime (AIP-148 TTL hook).
+	// PurgeExpired — emitted only when OWNER HasExpireTime (AIP-148 TTL hook).
 	// The cutoff is normalized to UTC: toModel stores expire_time in UTC (via
 	// timestamppb.AsTime), and on SQLite time columns are TZ-suffixed TEXT whose
 	// comparison is format-sensitive — a local-time cutoff would not match a
 	// UTC-stored value, so PurgeExpired(time.Now()) could silently reap nothing.
-	if msg.HasExpireTime {
+	if owner.HasExpireTime {
 		fmt.Fprintf(b, "func (r *%sRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {\n", msg.MessageName)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 			b.WriteString("\tq := r.db.WithContext(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC())\n")
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
-			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", msg.MessageName)
+			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", model)
 		} else {
 			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Unscoped().\n")
 			b.WriteString("\t\tWhere(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC()).\n")
-			fmt.Fprintf(b, "\t\tDelete(&%sModel{})\n", msg.MessageName)
+			fmt.Fprintf(b, "\t\tDelete(&%sModel{})\n", model)
 		}
 		b.WriteString("\tif res.Error != nil {\n")
 		fmt.Fprintf(b, "\t\treturn 0, fmt.Errorf(\"purge expired %s: %%w\", res.Error)\n", msg.MessageName)
@@ -918,7 +1046,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		b.WriteString("\treturn res.RowsAffected, nil\n}\n\n")
 	}
 
-	// LookupByHash methods for secret fields.
+	// LookupByHash methods for secret fields. Model type follows the OWNER.
 	for _, f := range msg.Fields {
 		if !f.IsSecret {
 			continue
@@ -937,7 +1065,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 		if hasTenant {
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		}
-		fmt.Fprintf(b, "\tvar m %sModel\n", resource)
+		fmt.Fprintf(b, "\tvar m %sModel\n", model)
 		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
 		b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n")
 		b.WriteString("\t\t\treturn nil, persistence.ErrNotFound\n")
@@ -952,7 +1080,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	// soft-deleted key (excluded by the default scope) yields ErrNotFound.
 	fmt.Fprintf(b, "func (r *%sRepository) BatchGet(ctx context.Context, keys []string) ([]%s, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tif len(keys) == 0 {\n\t\treturn []%s{}, nil\n\t}\n", pbType)
-	fmt.Fprintf(b, "\tvar models []%sModel\n", msg.MessageName)
+	fmt.Fprintf(b, "\tvar models []%sModel\n", model)
 	b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id IN ?\", keys)\n")
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
@@ -1015,10 +1143,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, withSecrets bool) {
 	if hasTenant {
 		b.WriteString("\t\tif tenantID != \"\" {\n\t\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t\t}\n")
 	}
-	if msg.SoftDelete {
-		fmt.Fprintf(b, "\t\tres := q.Delete(&%sModel{})\n", msg.MessageName)
+	if owner.SoftDelete {
+		fmt.Fprintf(b, "\t\tres := q.Delete(&%sModel{})\n", model)
 	} else {
-		fmt.Fprintf(b, "\t\tres := q.Unscoped().Delete(&%sModel{})\n", msg.MessageName)
+		fmt.Fprintf(b, "\t\tres := q.Unscoped().Delete(&%sModel{})\n", model)
 	}
 	b.WriteString("\t\tif res.Error != nil {\n")
 	fmt.Fprintf(b, "\t\t\treturn fmt.Errorf(\"batch delete %s: %%w\", res.Error)\n", msg.MessageName)

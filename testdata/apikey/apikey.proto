@@ -13,6 +13,7 @@ import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/authz/v1/authz.proto";
 import "infoblox/field/v1/field.proto";
+import "infoblox/storage/v1/storage.proto";
 
 // APIKey is a customer API key. The raw key_value is never stored as plaintext;
 // the framework stores a hash (for lookup) and optional ciphertext (for recovery).
@@ -44,6 +45,21 @@ message APIKey {
   // single JSONB column (via types.Tags on the GORM model, a JSON field on the
   // ent schema) — no annotation needed.
   map<string, string> tags = 10;
+}
+
+// APIKeySummary is a read-oriented PROJECTION (surface) over the APIKey storage
+// model (F027 Phase 5b multi-surface). (infoblox.storage.v1.model)="APIKey" binds
+// it to APIKey's table, so it shares ONE table: the generators emit a repository
+// adapter + projection over the APIKey model and NO table of its own. It exposes a
+// non-secret subset — never the key_value secret. account_id is required because
+// APIKey is tenant-scoped (the adapter scopes/stamps the tenant).
+message APIKeySummary {
+  option (infoblox.storage.v1.model) = "APIKey";
+
+  string id         = 1;
+  string account_id = 2;
+  string key_prefix = 3;
+  string label      = 4;
 }
 
 service APIKeyService {

@@ -61,7 +61,7 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 			{Name: "tags", SnakeName: "tags", EntType: "JSON", IsTags: true},
 		},
 	}
-	out := renderEntRepoAdapter(msg, "couponv1", "github.com/example/coupond/couponv1")
+	out := renderEntRepoAdapter(msg, msg, "couponv1", "github.com/example/coupond/couponv1")
 	if out == "" {
 		t.Fatal("expected non-empty output")
 	}
@@ -143,7 +143,7 @@ func TestRenderEntRepoAdapter_noTenantNoSecretHardDelete(t *testing.T) {
 			{Name: "body", SnakeName: "body", EntType: "String"},
 		},
 	}
-	out := renderEntRepoAdapter(msg, "notev1", "github.com/example/noted/notev1")
+	out := renderEntRepoAdapter(msg, msg, "notev1", "github.com/example/noted/notev1")
 	if _, err := format.Source([]byte(out)); err != nil {
 		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
 	}
@@ -166,7 +166,96 @@ func TestRenderEntRepoAdapter_noTenantNoSecretHardDelete(t *testing.T) {
 
 // TestRenderEntRepoAdapter_empty returns "" for a fieldless (non-resource) message.
 func TestRenderEntRepoAdapter_empty(t *testing.T) {
-	if out := renderEntRepoAdapter(entMessageInfo{MessageName: "Empty"}, "v1", "m/v1"); out != "" {
+	if out := renderEntRepoAdapter(entMessageInfo{MessageName: "Empty"}, entMessageInfo{MessageName: "Empty"}, "v1", "m/v1"); out != "" {
 		t.Errorf("expected empty output for a fieldless message, got %q", out)
+	}
+}
+
+// TestRenderEntRepoAdapter_multiSurface is the F027 Phase 5b gate at the render
+// level (AC-004): a SURFACE message (CouponSummary, (infoblox.storage.v1.model)=
+// "Coupon") projecting a subset of a tenant + soft-delete + secret owner (Coupon)
+// generates a New<Surface>EntRepository that operates over the OWNER's ent type
+// (client.Coupon, ent.Coupon, the ent/coupon predicate package) while projecting
+// to/from the surface proto — and emits NO table of its own. Mutation semantics
+// (tenant guard, soft-delete, undelete) follow the owner; the written/projected
+// fields follow the surface.
+func TestRenderEntRepoAdapter_multiSurface(t *testing.T) {
+	owner := entMessageInfo{
+		MessageName: "Coupon",
+		Model:       "Coupon",
+		SoftDelete:  true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "code", SnakeName: "code", EntType: "String", Unique: true, NotNull: true},
+			{Name: "discount_bps", SnakeName: "discount_bps", EntType: "Int32"},
+			{Name: "signing_key", SnakeName: "signing_key", EntType: "String", IsSecret: true},
+		},
+	}
+	surface := entMessageInfo{
+		MessageName: "CouponSummary",
+		Model:       "Coupon", // a surface over Coupon — no table of its own
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "code", SnakeName: "code", EntType: "String"},
+		},
+	}
+	out := renderEntRepoAdapter(surface, owner, "couponv1", "github.com/example/coupond/couponv1")
+	if out == "" {
+		t.Fatal("expected non-empty output for a surface adapter")
+	}
+	// Strongest check: the whole file must be syntactically valid Go.
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated surface code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	wants := []string{
+		// Constructor named for the surface, serving the surface domain type; no enc
+		// (the surface projects no secret field).
+		"func NewCouponSummaryEntRepository(client *ent.Client) persistence.Repository[*CouponSummary, string]",
+		"entrepo.EntRepository[*CouponSummary, string]",
+		// Operates over the OWNER's ent type / client / predicate package.
+		"client.Coupon.Create()",
+		"client.Coupon.Get(ctx, key)",
+		"client.Coupon.Query()",
+		`entcoupon "github.com/example/coupond/ent/coupon"`,
+		// Projection input is the owner ent struct; output is the surface proto.
+		"func fromEntCouponSummary(e *ent.Coupon) *CouponSummary",
+		// Mutation semantics follow the owner: tenant guard + soft-delete + undelete.
+		"entcoupon.AccountID(tenantID)",
+		"Undelete_:",
+		"SetDeleteTime(time.Now())",
+		// List filtering uses the surface's own column map.
+		"CouponSummaryEntColumns",
+	}
+	for _, w := range wants {
+		if !strings.Contains(out, w) {
+			t.Errorf("surface adapter missing %q\n--- generated ---\n%s", w, out)
+		}
+	}
+	// A surface must NOT create a table/query type of its own, and must not carry the
+	// secret machinery (it projects no secret field).
+	for _, bad := range []string{"client.CouponSummary.", "secret.Encryptor", "ent.CouponSummary"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("surface adapter must not reference %q (it projects the owner's type)\n--- generated ---\n%s", bad, out)
+		}
+	}
+}
+
+// TestRenderEntFilterers_surfaceSkipped confirms a surface emits no filterers — the
+// WhereAccountID/WhereDeleteTimeIsNil methods live on the OWNER's <Model>Query type,
+// which the owner already emits; re-emitting them for the surface would redeclare
+// the same method and fail to compile (F027 Phase 5b).
+func TestRenderEntFilterers_surfaceSkipped(t *testing.T) {
+	surface := entMessageInfo{
+		MessageName: "CouponSummary",
+		Model:       "Coupon",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+		},
+	}
+	if out := renderEntFilterers(surface, "github.com/example/coupond/couponv1"); out != "" {
+		t.Errorf("expected no filterers for a surface, got:\n%s", out)
 	}
 }

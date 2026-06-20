@@ -1,9 +1,0 @@
-version: v2
-# Generates the Go binding for the engine-neutral storage options
-# (infoblox/storage/v1/storage.proto) into the devedge-sdk root module, so the
-# code generators can read the (infoblox.storage.v1.model) message option.
-# Invoked by `make generate` with --path limited to the storage proto.
-plugins:
-  - local: protoc-gen-go
-    out: .
-    opt: module=github.com/infobloxopen/devedge-sdk

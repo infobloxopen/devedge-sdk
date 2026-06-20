@@ -4,9 +4,10 @@
 # and the <Service>AuthzRules tables. Requires buf + protoc-gen-go on PATH; the
 # devedge-authz plugin is built locally to ./bin and put on PATH for buf.
 generate:
-	# Engine-neutral storage options (infoblox.storage.v1.model). Generated FIRST,
-	# with protoc-gen-go only, because protoc-gen-ent imports the binding below.
-	buf generate --template buf.gen.storage.yaml --path proto/infoblox/storage/v1/storage.proto
+	# Engine-neutral storage options (infoblox.storage.v1.model) are CANONICAL
+	# (github.com/infobloxopen/apis/proto/infoblox/storage/v1) — the Go binding comes
+	# from that module (see go.mod); proto/infoblox/storage/v1/storage.proto is only a
+	# buf import-resolution mirror, never generated here.
 	go build -o bin/protoc-gen-devedge-authz ./cmd/protoc-gen-devedge-authz
 	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
@@ -31,6 +32,7 @@ generate:
 sync-scaffold-mirrors:
 	cp proto/infoblox/authz/v1/authz.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/authz/v1/authz.proto
 	cp proto/infoblox/field/v1/field.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/field/v1/field.proto
+	cp proto/infoblox/storage/v1/storage.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/storage/v1/storage.proto
 
 build:
 	go build ./...

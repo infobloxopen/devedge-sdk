@@ -220,10 +220,37 @@ non-relationship message, a repeated non-relationship field, an enum, or a non-s
 generation **fails**, naming the field and the remedy, rather than silently dropping it. Make it a
 relationship, give it a scalar storage type, or mark it `OUTPUT_ONLY`.
 
-**Multi-surface (reserved).** The `(infoblox.storage.v1.model)` message option binds a resource to a
-backing storage model so several API surfaces can project one stored entity. The annotation is the
-locked contract today; the cross-message surface codegen is forthcoming (a value other than the
-message's own name is rejected until then).
+**Multi-surface.** The `(infoblox.storage.v1.model)` message option (canonical:
+`github.com/infobloxopen/apis/proto/infoblox/storage/v1`) binds a resource message to a backing storage
+model so several API surfaces can project **one** stored entity. Absent — or equal to the message's own
+name — it is an ordinary single-table resource (the common case). When the value names a **different**
+message, this message is a *surface* (projection) over that owner's model:
+
+```proto
+import "infoblox/storage/v1/storage.proto";
+
+message Coupon { string id = 1; string account_id = 2; string code = 3; /* … */ }
+
+message CouponSummary {                                 // a read projection over Coupon
+  option (infoblox.storage.v1.model) = "Coupon";
+  string id = 1; string account_id = 2; string code = 3; // a subset of Coupon's fields
+}
+```
+
+Both `protoc-gen-ent` and `protoc-gen-storage` then emit, for the surface, a `New<Surface>…Repository`
+plus a projection over the **owner's** type — and **no table of its own** (no ent schema, no GORM model
+struct). One model, N repositories/projections. Mutation guards (tenant scope, soft-delete, undelete)
+follow the owner; the written/projected columns follow the surface's own fields. Fail-closed: a surface
+that names a missing/non-base owner, declares a relationship, projects a field the owner has no column
+for (or with a mismatched type/secret/output classification), or omits `account_id` for a tenant-scoped
+model is **rejected** at generation time. A surface field set must be a subset of its owner's.
+
+> **Churn (Run 9 `coupond`, before/after — F027 AC-007).** Before F027, the single largest build cost of
+> a new ent service was hand-transcribing the ~300-line `ent_wiring.go` adapter + its test harness (~85%
+> of the effort; devedge-sdk #53). After F027 + multi-surface, an owner **and** its surfaces are fully
+> generated on **both** backends with **zero** hand-written adapter — the apikey fixture's `APIKeySummary`
+> surface (a tenant-scoped projection over `APIKey`) round-trips owner-write → surface-read on ent and
+> GORM with no hand-written persistence code at all (`testdata/apikey/.../multisurface_test.go`).
 
 ### Resource names on ent (AIP-122)
 

@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
-	storagev1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1"
+	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
@@ -80,20 +80,20 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		if !hasID {
 			continue
 		}
-		// F027 Phase 5 (contract): the (infoblox.storage.v1.model) annotation binds a
-		// message to a backing storage model so multiple API surfaces can share one
-		// table. The option is the locked contract, but the cross-message surface
-		// codegen is not yet generated (Phase 5b) — so reject model != the message's
-		// own name rather than silently emit a duplicate schema/table. An absent
-		// option, or model == the message name, is the normal single-surface case.
+		// F027 Phase 5b multi-surface: (infoblox.storage.v1.model) binds a message to
+		// a backing storage model so several API surfaces can project ONE table.
+		// Resolve the model name now (absent/empty => the message's own name, the
+		// normal single-surface case). A surface (model != name) emits a repository
+		// adapter + projection over its owner's ent type but NO table of its own;
+		// surfaces are validated against their owner and skipped for schema emission
+		// below (validateSurfaces / the renderEntSchema loop).
+		resolvedModel := name
 		if opts := m.Desc.Options(); opts != nil && proto.HasExtension(opts, storagev1.E_Model) {
-			model, _ := proto.GetExtension(opts, storagev1.E_Model).(string)
-			if model != "" && model != name && model != string(m.Desc.Name()) {
-				gen.Error(fmt.Errorf("protoc-gen-ent: %s: (infoblox.storage.v1.model)=%q — multi-surface model binding is not yet generated (F027 Phase 5b: specs/027-repo-adapter-codegen); remove the annotation or set it to the message's own name", name, model))
-				continue
+			if mv, _ := proto.GetExtension(opts, storagev1.E_Model).(string); mv != "" {
+				resolvedModel = mv
 			}
 		}
-		msg := entMessageInfo{MessageName: name}
+		msg := entMessageInfo{MessageName: name, Model: resolvedModel}
 		// AIP-122: capture the (google.api.resource) pattern so an OUTPUT_ONLY `name`
 		// field can be DERIVED from id (Format<R>Name) rather than stored — matching
 		// protoc-gen-storage. Without the pattern there is nothing to format from.
@@ -222,10 +222,27 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		return
 	}
 
-	// One schema file per resource message: ent/schema/<snake_resource>.go.
+	// F027 Phase 5b multi-surface: index every message by name so a surface can be
+	// matched to its owner, then validate the surfaces fail-closed. A surface that
+	// references a missing/invalid owner, projects a field the owner cannot back, or
+	// disagrees with the owner on a column's type/secret/output classification would
+	// otherwise generate code that does not compile — fail with an actionable error.
+	ownerByName := make(map[string]entMessageInfo, len(messages))
+	for _, msg := range messages {
+		ownerByName[msg.MessageName] = msg
+	}
+	if !validateSurfaces(gen, messages, ownerByName) {
+		return
+	}
+
+	// One schema file per OWNER resource message: ent/schema/<snake_resource>.go.
+	// A surface (model != name) gets no table of its own — it projects the owner's.
 	// Pass the full message set so a belongs_to can be paired with its parent's
 	// has_many as a proper ent inverse edge (edge.From(...).Ref(...)).
 	for _, msg := range messages {
+		if msg.isSurface() {
+			continue
+		}
 		content := renderEntSchema(msg, messages)
 		if content == "" {
 			continue
@@ -244,7 +261,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	// ent-backed repository atomic AIP-137 BatchGet/BatchUpdate/BatchDelete.
 	pkgName := string(f.GoPackageName)
 	for _, msg := range messages {
-		content := renderEntRepository(msg, pkgName, string(f.GoImportPath))
+		content := renderEntRepository(msg, ownerByName[msg.modelType()], pkgName, string(f.GoImportPath))
 		if content == "" {
 			continue
 		}
@@ -289,7 +306,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	// Generated so an ent service needs NO hand-written ent_wiring.go; the batch
 	// wrapper above embeds the New<R>EntRepository this emits.
 	for _, msg := range messages {
-		content := renderEntRepoAdapter(msg, pkgName, string(f.GoImportPath))
+		content := renderEntRepoAdapter(msg, ownerByName[msg.modelType()], pkgName, string(f.GoImportPath))
 		if content == "" {
 			continue
 		}
@@ -297,6 +314,65 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		rg := gen.NewGeneratedFile(outPath, f.GoImportPath)
 		rg.P(content)
 	}
+}
+
+// validateSurfaces enforces the F027 Phase 5b multi-surface contract fail-closed.
+// A SURFACE message (one whose (infoblox.storage.v1.model) names a different
+// message) projects an OWNER's table, so the generated adapter writes/reads the
+// owner's ent columns. Every way that could produce non-compiling or silently
+// wrong code is rejected here with an actionable error, before any file is
+// emitted: a missing or non-base owner, a surface that declares a relationship /
+// nested message, a surface field the owner has no column for, a column whose
+// type or secret/output classification disagrees with the owner, and a surface of
+// a tenant-scoped model that omits account_id (the adapter must be able to scope
+// and stamp the tenant). Returns true when all surfaces are valid.
+func validateSurfaces(gen *protogen.Plugin, messages []entMessageInfo, ownerByName map[string]entMessageInfo) bool {
+	ok := true
+	for _, msg := range messages {
+		if !msg.isSurface() {
+			continue
+		}
+		owner, found := ownerByName[msg.Model]
+		if !found {
+			gen.Error(fmt.Errorf("protoc-gen-ent: %s: (infoblox.storage.v1.model)=%q names a model with no message in this proto; declare a message %s or correct the annotation", msg.MessageName, msg.Model, msg.Model))
+			ok = false
+			continue
+		}
+		if owner.isSurface() {
+			gen.Error(fmt.Errorf("protoc-gen-ent: %s: (infoblox.storage.v1.model)=%q points at another surface; a surface must name a base model (a message whose name equals its own model)", msg.MessageName, msg.Model))
+			ok = false
+			continue
+		}
+		ownerFields := make(map[string]entFieldInfo, len(owner.Fields))
+		for _, of := range owner.Fields {
+			ownerFields[of.SnakeName] = of
+		}
+		if msgHasTenantField(owner) && !msgHasTenantField(msg) {
+			gen.Error(fmt.Errorf("protoc-gen-ent: %s: a surface of the tenant-scoped model %s must include the account_id field so the adapter can scope and stamp the tenant", msg.MessageName, msg.Model))
+			ok = false
+		}
+		for _, f := range msg.Fields {
+			if f.IsID {
+				continue // every model has the id primary key
+			}
+			if f.IsRepeated || f.IsMessage {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: relationships/nested messages are not supported on a model surface; declare them on the model %s", msg.MessageName, f.Name, msg.Model))
+				ok = false
+				continue
+			}
+			of, has := ownerFields[f.SnakeName]
+			if !has {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: a surface must project a subset of model %s's fields, but %s has no field %q", msg.MessageName, f.Name, msg.Model, msg.Model, f.SnakeName))
+				ok = false
+				continue
+			}
+			if f.EntType != of.EntType || f.IsSecret != of.IsSecret || f.OutputOnly != of.OutputOnly {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s conflicts with model %s.%s: a surface field must match the model column's type and secret/output classification", msg.MessageName, f.Name, msg.Model, of.Name))
+				ok = false
+			}
+		}
+	}
+	return ok
 }
 
 // protoKindToEntType maps a proto field kind to the ent field constructor name

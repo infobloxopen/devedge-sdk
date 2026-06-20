@@ -85,8 +85,23 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 		p.ExpireTime = timestamppb.New(m.ExpireTime.Time)
 	}
 	p.Etag = m.ETag
+	if FromModelAPIKeyCustom != nil {
+		FromModelAPIKeyCustom(m, p)
+	}
 	return p
 }
+
+// FromModelAPIKeyCustom, if set, runs at the end of fromModel_APIKey to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelAPIKeyCustom func(m *APIKeyModel, p *APIKey)
+
+// ToModelAPIKeyOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelAPIKeyOnCreate func(p *APIKey, m *APIKeyModel)
+
+// ToModelAPIKeyOnUpdate, if set, runs in Update just before the database write.
+var ToModelAPIKeyOnUpdate func(p *APIKey, m *APIKeyModel)
 
 // APIKeyColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var APIKeyColumns = map[string]string{
@@ -210,6 +225,9 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 		m.KeyValueCipher = c
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
+	if ToModelAPIKeyOnCreate != nil {
+		ToModelAPIKeyOnCreate(entity, m)
+	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -236,6 +254,9 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		}
 		m.KeyValueHash = h
 		m.KeyValueCipher = c
+	}
+	if ToModelAPIKeyOnUpdate != nil {
+		ToModelAPIKeyOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
@@ -436,3 +457,323 @@ func (r *APIKeyRepository) BatchDelete(ctx context.Context, keys []string) error
 
 // compile-time check.
 var _ persistence.BatchRepository[*APIKey, string] = (*APIKeyRepository)(nil)
+
+func toModel_APIKeySummary(p *APIKeySummary) *APIKeyModel {
+	if p == nil {
+		return nil
+	}
+	m := &APIKeyModel{ID: p.Id}
+	m.AccountId = p.AccountId
+	m.KeyPrefix = p.KeyPrefix
+	m.Label = p.Label
+	return m
+}
+
+func fromModel_APIKeySummary(m *APIKeyModel) *APIKeySummary {
+	if m == nil {
+		return nil
+	}
+	p := &APIKeySummary{Id: m.ID}
+	p.AccountId = m.AccountId
+	p.KeyPrefix = m.KeyPrefix
+	p.Label = m.Label
+	if FromModelAPIKeySummaryCustom != nil {
+		FromModelAPIKeySummaryCustom(m, p)
+	}
+	return p
+}
+
+// FromModelAPIKeySummaryCustom, if set, runs at the end of fromModel_APIKeySummary to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelAPIKeySummaryCustom func(m *APIKeyModel, p *APIKeySummary)
+
+// ToModelAPIKeySummaryOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelAPIKeySummaryOnCreate func(p *APIKeySummary, m *APIKeyModel)
+
+// ToModelAPIKeySummaryOnUpdate, if set, runs in Update just before the database write.
+var ToModelAPIKeySummaryOnUpdate func(p *APIKeySummary, m *APIKeyModel)
+
+// APIKeySummaryColumns maps proto field names to DB column names for safe filter/order_by parsing.
+var APIKeySummaryColumns = map[string]string{
+	"id":          "id",
+	"account_id":  "account_id",
+	"key_prefix":  "key_prefix",
+	"label":       "label",
+	"delete_time": "deleted_at",
+	"expire_time": "expire_time",
+}
+
+// APIKeySummaryRepository is a GORM-backed persistence.Repository for *APIKeySummary.
+type APIKeySummaryRepository struct{ db *gorm.DB }
+
+// NewAPIKeySummaryRepository creates a repository backed by db.
+func NewAPIKeySummaryRepository(db *gorm.DB) *APIKeySummaryRepository {
+	return &APIKeySummaryRepository{db: db}
+}
+
+func (r *APIKeySummaryRepository) Get(ctx context.Context, key string) (*APIKeySummary, error) {
+	var m APIKeyModel
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get APIKeySummary: %w", err)
+	}
+	return fromModel_APIKeySummary(&m), nil
+}
+
+func (r *APIKeySummaryRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*APIKeySummary, string, error) {
+	var models []APIKeyModel
+	q := r.db.WithContext(ctx)
+	if opts.ShowDeleted {
+		q = q.Unscoped()
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if opts.Filter != "" {
+		cond, err := filter.Parse(opts.Filter, APIKeySummaryColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
+		}
+		sql, args := cond.SQL()
+		q = q.Where(sql, args...)
+	}
+	if opts.OrderBy != "" {
+		clauses, err := filter.ParseOrderBy(opts.OrderBy, APIKeySummaryColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid order_by: %v", err)
+		}
+		for _, c := range clauses {
+			q = q.Order(c.GORMExpr())
+		}
+	}
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	offset := 0
+	if opts.PageToken != "" {
+		if dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {
+			offset, _ = strconv.Atoi(string(dec))
+		}
+	}
+	if err := q.Limit(pageSize).Offset(offset).Find(&models).Error; err != nil {
+		return nil, "", fmt.Errorf("list APIKeySummary: %w", err)
+	}
+	out := make([]*APIKeySummary, len(models))
+	for i := range models {
+		out[i] = fromModel_APIKeySummary(&models[i])
+	}
+	nextToken := ""
+	if len(models) == pageSize {
+		nextToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(offset + pageSize)))
+	}
+	return out, nextToken, nil
+}
+
+func (r *APIKeySummaryRepository) Create(ctx context.Context, entity *APIKeySummary) (*APIKeySummary, error) {
+	m := toModel_APIKeySummary(entity)
+	m.ETag = etag.New() // AIP-154: fresh ETag on create
+	if ToModelAPIKeySummaryOnCreate != nil {
+		ToModelAPIKeySummaryOnCreate(entity, m)
+	}
+	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+		// Map driver constraint violations to clean sentinels so callers see
+		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
+		if ce := persistence.ConstraintError(err); ce != nil {
+			return nil, ce
+		}
+		return nil, fmt.Errorf("create APIKeySummary: %w", err)
+	}
+	return fromModel_APIKeySummary(m), nil
+}
+
+func (r *APIKeySummaryRepository) Update(ctx context.Context, key string, entity *APIKeySummary, fieldMask ...string) (*APIKeySummary, error) {
+	m := toModel_APIKeySummary(entity)
+	m.ID = key
+	m.ETag = etag.New() // AIP-154: bump the ETag on every update
+	if ToModelAPIKeySummaryOnUpdate != nil {
+		ToModelAPIKeySummaryOnUpdate(entity, m)
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if len(fieldMask) > 0 {
+		dbCols := make([]string, 0, len(fieldMask))
+		for _, f := range fieldMask {
+			col, ok := APIKeySummaryColumns[f]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
+			}
+			if col == "account_id" {
+				return nil, status.Errorf(codes.InvalidArgument, "account_id is the tenant key and cannot be updated")
+			}
+			dbCols = append(dbCols, col)
+		}
+		dbCols = append(dbCols, "etag") // a masked update still changes the resource
+		// Select makes GORM write the named columns even when their value is
+		// the zero value (false, 0, ""); a bare struct Updates would skip them.
+		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update APIKeySummary: %w", err)
+		}
+	} else {
+		// No field mask: full update of every writable column via a map, so
+		// zero values (false, 0, "") persist — a struct Updates skips zero fields
+		// and would silently drop "disable this" / "clear that" updates.
+		updates := map[string]interface{}{
+			"key_prefix": m.KeyPrefix,
+			"label":      m.Label,
+		}
+		updates["etag"] = m.ETag
+		if err := q.Updates(updates).Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update APIKeySummary: %w", err)
+		}
+	}
+	return r.Get(ctx, key)
+}
+
+func (r *APIKeySummaryRepository) Delete(ctx context.Context, key string) error {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	res := q.Delete(&APIKeyModel{})
+	if res.Error != nil {
+		return fmt.Errorf("delete APIKeySummary: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return persistence.ErrNotFound
+	}
+	return nil
+}
+
+func (r *APIKeySummaryRepository) Undelete(ctx context.Context, key string) (*APIKeySummary, error) {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Unscoped().Model(&APIKeyModel{}).Where("id = ?", key)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	q = q.Where("deleted_at IS NOT NULL")
+	res := q.Update("deleted_at", nil)
+	if res.Error != nil {
+		return nil, fmt.Errorf("undelete APIKeySummary: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, persistence.ErrNotFound
+	}
+	return r.Get(ctx, key)
+}
+
+func (r *APIKeySummaryRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	q := r.db.WithContext(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before.UTC())
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	res := q.Delete(&APIKeyModel{})
+	if res.Error != nil {
+		return 0, fmt.Errorf("purge expired APIKeySummary: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
+func (r *APIKeySummaryRepository) BatchGet(ctx context.Context, keys []string) ([]*APIKeySummary, error) {
+	if len(keys) == 0 {
+		return []*APIKeySummary{}, nil
+	}
+	var models []APIKeyModel
+	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if err := q.Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("batch get APIKeySummary: %w", err)
+	}
+	byID := make(map[string]*APIKeySummary, len(models))
+	for i := range models {
+		byID[models[i].ID] = fromModel_APIKeySummary(&models[i])
+	}
+	out := make([]*APIKeySummary, 0, len(keys))
+	for _, k := range keys {
+		p, ok := byID[k]
+		if !ok {
+			return nil, persistence.ErrNotFound
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *APIKeySummaryRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*APIKeySummary, string]) ([]*APIKeySummary, error) {
+	if len(items) == 0 {
+		return []*APIKeySummary{}, nil
+	}
+	out := make([]*APIKeySummary, 0, len(items))
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		txRepo := &APIKeySummaryRepository{db: tx}
+		for _, it := range items {
+			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
+			if err != nil {
+				return err
+			}
+			out = append(out, updated)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *APIKeySummaryRepository) BatchDelete(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	uniq := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+		if tenantID != "" {
+			q = q.Where("account_id = ?", tenantID)
+		}
+		res := q.Delete(&APIKeyModel{})
+		if res.Error != nil {
+			return fmt.Errorf("batch delete APIKeySummary: %w", res.Error)
+		}
+		if res.RowsAffected != int64(len(uniq)) {
+			return persistence.ErrNotFound
+		}
+		return nil
+	})
+}
+
+// compile-time check.
+var _ persistence.BatchRepository[*APIKeySummary, string] = (*APIKeySummaryRepository)(nil)

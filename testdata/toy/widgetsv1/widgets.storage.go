@@ -68,8 +68,23 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
 	}
 	p.Etag = m.ETag
+	if FromModelWidgetCustom != nil {
+		FromModelWidgetCustom(m, p)
+	}
 	return p
 }
+
+// FromModelWidgetCustom, if set, runs at the end of fromModel_Widget to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelWidgetCustom func(m *WidgetModel, p *Widget)
+
+// ToModelWidgetOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelWidgetOnCreate func(p *Widget, m *WidgetModel)
+
+// ToModelWidgetOnUpdate, if set, runs in Update just before the database write.
+var ToModelWidgetOnUpdate func(p *Widget, m *WidgetModel)
 
 // WidgetColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var WidgetColumns = map[string]string{
@@ -163,6 +178,9 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget, error) {
 	m := toModel_Widget(entity)
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
+	if ToModelWidgetOnCreate != nil {
+		ToModelWidgetOnCreate(entity, m)
+	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -178,6 +196,9 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 	m := toModel_Widget(entity)
 	m.ID = key
 	m.ETag = etag.New() // AIP-154: bump the ETag on every update
+	if ToModelWidgetOnUpdate != nil {
+		ToModelWidgetOnUpdate(entity, m)
+	}
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
