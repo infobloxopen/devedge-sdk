@@ -53,6 +53,40 @@ stub. See *Soft-delete (opt-in)* in the codegen reference for the full generated
   `codes.InvalidArgument` if named in the field mask. This prevents an update that omits `account_id`
   from blanking the scoping key and orphaning the row from its tenant.
 
+### Over the gateway — `update_mask` encoding trap
+
+A generated Update RPC uses `repeated string update_mask` (not `google.protobuf.FieldMask`),
+while a Get/List RPC uses `google.protobuf.FieldMask read_mask`. The two fields have **different
+wire encodings** over the grpc-gateway and the wrong form fails **silently** (HTTP 200, fresh
+etag, zero fields updated):
+
+| Encoding | Works? | Notes |
+|---|---|---|
+| `?update_mask=name&update_mask=value` | **yes** | repeated query params, proto snake_case name |
+| `?update_mask=name,value` | **no** | treated as a single unknown path; silently no-ops |
+| `?update_mask=displayName` | **no** | JSON camelCase rejected; no error returned |
+
+Supply `update_mask` as **separate repeated query params using the proto snake_case field name**:
+
+```bash
+# Correct — two separate params:
+curl -X PATCH 'localhost:8080/v1/widgets/w1?update_mask=name&update_mask=label' \
+  -d '{"name":"new-name","label":"new-label"}'
+
+# Wrong — comma-joined: silently updates zero fields (HTTP 200, new etag):
+curl -X PATCH 'localhost:8080/v1/widgets/w1?update_mask=name,label' ...
+
+# Wrong — camelCase: silently updates zero fields:
+curl -X PATCH 'localhost:8080/v1/widgets/w1?update_mask=displayName' ...
+```
+
+This is distinct from `read_mask` (`google.protobuf.FieldMask`), which the gateway encodes as a
+comma-joined value in a single query param — `?read_mask=name,create_time`. The inconsistency is
+a proto-type difference: `FieldMask` has a built-in gateway codec that accepts comma-joining;
+`repeated string` does not. See
+[middleware → FieldMaskUnary](../middleware/#fieldmaskunary) for the interceptor that validates
+update masks server-side.
+
 ## ListOptions
 
 ```go

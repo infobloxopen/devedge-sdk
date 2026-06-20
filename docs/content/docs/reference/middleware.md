@@ -88,6 +88,22 @@ Validates a request's field mask against the method's verb. `server.New` builds 
 (`FullMethod → verb`) from `Config.Rules`, so the same rule set that drives authz also drives
 field-mask validation.
 
+**Gateway encoding of `update_mask`.** A generated Update RPC uses `repeated string update_mask`
+(not `google.protobuf.FieldMask`). Over the grpc-gateway these have different wire forms. Supply
+`update_mask` as **separate repeated query params** using proto snake_case names — the two common
+wrong guesses fail silently (HTTP 200, zero fields updated):
+
+| Form | Result |
+|---|---|
+| `?update_mask=name&update_mask=value` | **correct** |
+| `?update_mask=name,value` | silent no-op (single unknown path) |
+| `?update_mask=displayName` | silent no-op (camelCase rejected) |
+
+This is different from `read_mask` (`google.protobuf.FieldMask`), which accepts a comma-joined
+single param — `?read_mask=name,create_time`. See
+[persistence → Update and the field mask](../persistence/#over-the-gateway--update_mask-encoding-trap)
+for full examples.
+
 ## etag — ETag / 412 preconditions
 
 ```go

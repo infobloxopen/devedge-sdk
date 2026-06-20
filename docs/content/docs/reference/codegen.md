@@ -26,6 +26,39 @@ Emits a generated `[]authz.MethodRule` table from the method annotations — the
 `authzpb.RulesFromGlobal()` would produce by reflection, but as a checked-in file. Pass it to
 `server.Config.Rules` (or `grpcauthz.WithRules`).
 
+**One rule table per service.** The plugin emits one `<Service>AuthzRules` variable per `service`
+declaration. A proto with multiple services — for example an owner `FooService` plus a
+multi-surface projection `FooSummaryService` — yields multiple tables. You must pass **all** of
+them combined to `server.Config.Rules`:
+
+```go
+// Go 1.22+: slices.Concat joins multiple slices without an intermediate copy.
+import "slices"
+
+srv, err := server.New(server.Config{
+    Rules: slices.Concat(
+        myv1.FooServiceAuthzRules,
+        myv1.FooSummaryServiceAuthzRules,
+    ),
+    // ...
+})
+```
+
+For older Go or when you prefer stdlib only:
+
+```go
+rules := append(
+    append([]authz.MethodRule{}, myv1.FooServiceAuthzRules...),
+    myv1.FooSummaryServiceAuthzRules...,
+)
+srv, err := server.New(server.Config{Rules: rules, /* ... */})
+```
+
+Omitting any service's rules leaves its methods undeclared: the boot-time
+`AssertMethodsDeclared` gate (run by the generated `Register<Service>` helper) will fail, and any
+method that does get past it is denied at runtime. See
+[server → Rules](../server/#config) for the `Config.Rules` field.
+
 ## protoc-gen-svc
 
 Generates a single registration helper, `Register<Service>(s *server.Server, impl <Service>Server) error`.

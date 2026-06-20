@@ -225,6 +225,38 @@ go test ./...
 - **Clean errors** — internal details are mapped to safe gRPC status codes.
 - **ETag/412** — conditional-request preconditions are read and the response ETag is written.
 
+## Error handling
+
+The `ErrorMapperUnary` interceptor (part of the chain `server.New` builds) automatically converts
+the persistence error sentinels to canonical gRPC status codes:
+
+| Sentinel | gRPC code |
+|---|---|
+| `persistence.ErrNotFound` | `codes.NotFound` |
+| `persistence.ErrConflict` | `codes.AlreadyExists` |
+| `persistence.ErrPreconditionFailed` | `codes.FailedPrecondition` |
+| `persistence.ConstraintError(err)` (unique/FK violation) | `codes.AlreadyExists` or `codes.FailedPrecondition` |
+| `*persistence.FieldViolationError` | `codes.InvalidArgument` (with field detail) |
+
+**Return the sentinel; do not hand-map it.** If your handler (or the repository it calls) returns
+`persistence.ErrNotFound`, the interceptor turns it into a `NotFound` status before the client
+sees it — you never need to call `status.Error(codes.NotFound, …)` yourself. Hand-mapping
+duplicates the logic, creates inconsistencies, and leaks internal detail.
+
+```go
+func (s *server) GetWidget(ctx context.Context, req *pb.GetWidgetRequest) (*pb.Widget, error) {
+    w, err := s.repo.Get(ctx, req.Id)
+    if err != nil {
+        return nil, err  // propagate — ErrorMapperUnary maps ErrNotFound → NotFound
+    }
+    return w, nil
+}
+```
+
+See [middleware → ErrorMapperUnary](../../reference/middleware/#errormapperunary) and
+[persistence → Errors](../../reference/persistence/#errors) for the full mapping and defense-in-depth
+details.
+
 ## Next steps
 
 - [Define a service](../../guides/define-a-service/) — the full proto → generate → scaffold loop.
