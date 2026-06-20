@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 )
 
@@ -47,6 +48,8 @@ func renderTemplates(dir string, m *Model) error {
 		{mainTemplate(m.Backend), filepath.Join("server", "main.go"), 0o644},
 		{"smoke_test.go.tmpl", filepath.Join("server", m.ServiceLower+"_smoke_test.go"), 0o644},
 		{"Makefile.tmpl", "Makefile", 0o644},
+		{"README.md.tmpl", "README.md", 0o644},
+		{"ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), 0o644},
 	}
 	// The ent backend pins entc (entgo.io/ent/cmd/ent) via a build-tagged tools.go
 	// so `go mod tidy` keeps the entc-only deps for `go generate ./gen/ent`.
@@ -95,13 +98,28 @@ func mainTemplate(b Backend) string {
 	}
 }
 
-// appendGitignore appends the scaffold's ignore rules to the .gitignore apx wrote.
+// appendGitignore appends the scaffold's ignore rules to the .gitignore apx wrote,
+// after stripping the dead `/internal/gen/` rule apx emits by default — this
+// scaffold's generated code lands in `/gen/` (our appended block), not
+// `/internal/gen/`, so that line is misleading noise.
 func appendGitignore(dir string, m *Model) error {
 	content, err := renderTemplate("gitignore.append.tmpl", m)
 	if err != nil {
 		return err
 	}
 	path := filepath.Join(dir, ".gitignore")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(existing) > 0 {
+		filtered := stripGitignoreRule(string(existing), "/internal/gen/")
+		if err := os.WriteFile(path, []byte(filtered), 0o644); err != nil {
+			return err
+		}
+	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -109,6 +127,29 @@ func appendGitignore(dir string, m *Model) error {
 	defer f.Close()
 	_, err = f.Write(content)
 	return err
+}
+
+// stripGitignoreRule removes the line exactly matching rule (and an immediately
+// preceding "# Generated code" comment that becomes orphaned) from a .gitignore.
+func stripGitignoreRule(content, rule string) string {
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) == rule {
+			// Drop a now-orphaned "# Generated code" header sitting just above it.
+			if n := len(out); n > 0 && strings.TrimSpace(out[n-1]) == "# Generated code" {
+				out = out[:n-1]
+			}
+			continue
+		}
+		out = append(out, ln)
+	}
+	// Drop leading blank lines left behind when the stripped rule + its header were
+	// at the top of the file.
+	for len(out) > 0 && strings.TrimSpace(out[0]) == "" {
+		out = out[1:]
+	}
+	return strings.Join(out, "\n")
 }
 
 // vendorMirrors copies the embedded infoblox annotation mirrors into

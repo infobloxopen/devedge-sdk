@@ -66,8 +66,17 @@ The generated project:
     with buf + the SDK plugins (git-ignored, engine deps in the consumer go.mod only);
   - builds, boots, persists, and passes its smoke test with zero hand-edits.
 
-apx and buf must be on PATH.`,
-		Example: "  devedge-sdk new service orders --resource Order --backend gorm",
+apx and buf must be on PATH.
+
+The module path defaults to github.com/<org>/<name> (org defaults to infobloxopen).
+If you are NOT publishing under github.com/infobloxopen, set --module to your own
+path so the generated go.mod + imports are correct, e.g.
+  --module github.com/you/orders`,
+		Example: `  # Infoblox-internal (module defaults to github.com/infobloxopen/orders):
+  devedge-sdk new service orders --resource Order --backend gorm
+
+  # External users: set your own module path:
+  devedge-sdk new service orders --resource Order --backend gorm --module github.com/you/orders`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -90,6 +99,21 @@ apx and buf must be on PATH.`,
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "\n✓ scaffolded %s service %q in %s\n", m.Backend, m.Service, target)
+
+			// Note the codegen plugins the project depends on, so the user knows
+			// what `make tools` installs and what `buf generate` runs. The SDK
+			// plugins are pinned to %s; the public plugins come from their canonical
+			// modules. (gorm uses protoc-gen-storage; ent uses protoc-gen-ent.)
+			enginePlugin := "protoc-gen-storage"
+			if m.Backend == scaffold.BackendEnt {
+				enginePlugin = "protoc-gen-ent"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"  codegen plugins (installed by `make tools`, run by `buf generate`):\n"+
+					"    devedge-sdk @ %s: protoc-gen-devedge-authz, protoc-gen-svc, %s\n"+
+					"    public:          protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway\n",
+				m.SDKVersion, enginePlugin)
+
 			if noGenerate {
 				fmt.Fprintf(cmd.OutOrStdout(), "  next: cd %s && make tools && make generate && make test\n", target)
 			} else {
@@ -100,7 +124,7 @@ apx and buf must be on PATH.`,
 	}
 	c.Flags().StringVar(&resource, "resource", "", "singular resource type name (e.g. Order); defaults from the service name")
 	c.Flags().StringVar(&backend, "backend", "gorm", "persistence backend: gorm|ent")
-	c.Flags().StringVar(&module, "module", "", "Go module path (e.g. github.com/acme/orders); defaults to github.com/<org>/<name>")
+	c.Flags().StringVar(&module, "module", "", "Go module path; defaults to github.com/<org>/<name>. SET THIS for non-Infoblox modules (e.g. --module github.com/you/orders)")
 	c.Flags().StringVar(&org, "org", "infobloxopen", "apx organization")
 	c.Flags().StringVar(&dir, "dir", "", "target directory (defaults to the service name)")
 	c.Flags().BoolVar(&noGenerate, "no-generate", false, "skip the first buf generate + go mod tidy")

@@ -1,4 +1,4 @@
-.PHONY: tools generate build test run api-lint api-release
+.PHONY: tools generate bootstrap build test run api-lint api-release
 
 # Pinned SDK version that supplies the codegen plugins and the runtime.
 # Keep this aligned with the `github.com/infobloxopen/devedge-sdk` require in go.mod.
@@ -42,14 +42,28 @@ generate:
 	go mod tidy
 {{- end }}
 
-build:
+# bootstrap is the one-command fresh-clone setup: install the plugins, then
+# generate the consumer-local code that gen/ holds (gen/ is git-ignored, so a
+# clone has none — `go build` would fail with "no required module provides
+# package .../gen/..." until this runs). README points new clones here.
+bootstrap: tools generate
+
+# build/test require the generated code. gen/ is git-ignored, so on a fresh clone
+# it is absent and `go build` fails; this order-only prerequisite generates it
+# once. After that gen/ exists and the prerequisite is satisfied immediately, so
+# the happy path stays fast (no regenerate on every build). Run `make generate`
+# explicitly after editing the proto.
+gen:
+	@test -d gen || $(MAKE) bootstrap
+
+build: | gen
 	go build ./...
 
-test:
+test: | gen
 	go test ./...
 
 # Run the service locally.
-run:
+run: | gen
 	go run ./server
 
 # apx governs the PUBLIC proto surface.

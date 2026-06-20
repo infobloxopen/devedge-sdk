@@ -21,6 +21,12 @@ You do **not** need Vault or Postgres to follow the [Quickstart](../quickstart/)
 encryptor and the in-memory repository run entirely in-process.
 {{< /callout >}}
 
+Check your apx version with `apx --version` (there is no `apx version` subcommand):
+
+```bash
+apx --version   # e.g. "apx 0.12.1 (...)" — need 0.12.1+
+```
+
 ## Add the module
 
 ```bash
@@ -97,9 +103,15 @@ Its `google/api/*.proto` imports (`annotations.proto`, `http.proto`) come from t
 
 ## Verify
 
+`go list -m` only works **inside a module** — run it from a directory with a `go.mod` (or create one
+first with `go mod init`), otherwise it fails with `go: cannot find main module`:
+
 ```bash
+# In a module (or: `go mod init example.com/scratch` in an empty dir first):
 go list -m github.com/infobloxopen/devedge-sdk
-which protoc-gen-svc protoc-gen-storage protoc-gen-ent
+
+# The plugins are plain executables on PATH — `which` works anywhere:
+which protoc-gen-svc protoc-gen-storage protoc-gen-ent protoc-gen-devedge-authz
 ```
 
 Next: the [Quickstart](../quickstart/).

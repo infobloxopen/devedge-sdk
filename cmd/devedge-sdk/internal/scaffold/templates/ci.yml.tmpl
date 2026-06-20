@@ -1,0 +1,41 @@
+name: CI
+
+# Build, generate, and test {{.Service}} on every push/PR. The implementation in
+# gen/ is git-ignored, so CI MUST generate before it builds — that's what
+# `make tools && make generate` does (mirrors the fresh-clone bootstrap in
+# README.md). go.mod pins the SDK version that supplies the codegen plugins.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+
+      - name: Install apx
+        uses: infobloxopen/apx@main
+
+      - name: Install codegen plugins
+        run: make tools
+
+      - name: Generate consumer-local code
+        run: make generate
+
+      - name: Test
+        run: go test ./...
