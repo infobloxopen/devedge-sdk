@@ -579,8 +579,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	// AIP-148 TTL: expire_time is OUTPUT_ONLY (server-managed), so it is not in the
 	// loop above — but it must be carried onto the model so a Create handler that
 	// stamps it persists a real expiry. Without this, seam-created rows always store
-	// expire_time = NULL and PurgeExpired has nothing to reap.
-	if owner.HasExpireTime {
+	// expire_time = NULL and PurgeExpired has nothing to reap. Gated on the SURFACE's
+	// own field set (msg): a surface that does not expose expire_time has no
+	// p.ExpireTime to read, and its writes simply do not carry it.
+	if msg.HasExpireTime {
 		b.WriteString("\tif p.ExpireTime != nil {\n")
 		b.WriteString("\t\tm.ExpireTime = sql.NullTime{Time: p.ExpireTime.AsTime(), Valid: true}\n")
 		b.WriteString("\t}\n")
