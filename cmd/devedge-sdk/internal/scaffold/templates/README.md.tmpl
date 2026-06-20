@@ -67,8 +67,9 @@ make api-breaking   # compatibility check vs the last committed proto (apx break
 make api-release    # prepare a versioned release (dry-run-equivalent; see note below)
 ```
 
-`make api-breaking` catches an accidental breaking change before it lands. A brand-new API has nothing
-to break against (HEAD equals the working tree), so it passes trivially; once you've released, compare
+`make api-breaking` catches an accidental breaking change before it lands. It requires an initialized
+git repo with at least one commit — run `git init && git add . && git commit -m "initial"` first if
+this is a fresh scaffold. After that, with no prior API tag, it passes. Once you've released, compare
 against the released tag instead.
 
 > **Expected, harmless warning.** `make api-release` (and `apx release prepare --dry-run`) prints a

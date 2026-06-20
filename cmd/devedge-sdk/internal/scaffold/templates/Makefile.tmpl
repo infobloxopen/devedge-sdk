@@ -82,9 +82,11 @@ run: | gen
 #
 #   api-lint     STANDARD lint of the public proto.
 #   api-breaking compatibility check vs the last committed proto (HEAD): catches an
-#                accidental breaking change before it lands. A brand-new API has
-#                nothing to break against (HEAD == working tree), so it passes
-#                trivially; once released, compare against the released tag instead.
+#                accidental breaking change before it lands. Requires an initialized
+#                git repo with at least one commit; run `git init && git add . &&
+#                git commit -m "initial"` first if this is a fresh scaffold. After
+#                that, with no prior API tag, it passes. Once released, compare
+#                against the released tag instead.
 #   api-release  prepare a versioned release of the public API. NOTE: this emits a
 #                NON-FATAL go_package mismatch warning ("got .../gen/{{.GoPkg}},
 #                expected .../proto/{{.ProtoPathSuffix}}"). It is EXPECTED and
@@ -99,6 +101,11 @@ api-lint:
 # (once raw, once in its summary). That double-print is apx's own output, not this
 # single invocation — nothing to fix here.
 api-breaking:
+	@if ! git rev-parse --git-dir > /dev/null 2>&1 || ! git rev-parse HEAD > /dev/null 2>&1; then \
+		echo "api-breaking requires a git repo with at least one commit."; \
+		echo "Run: git init && git add . && git commit -m \"initial\""; \
+		exit 1; \
+	fi
 	apx breaking --against HEAD
 
 # The api-id is the proto's path under the module root (module_roots: [proto]).
