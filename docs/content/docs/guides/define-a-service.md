@@ -217,6 +217,36 @@ if err := apikeyv1.RegisterAPIKeyService(srv, &apiKeyServer{ /* repo, enc */ });
 The generated rules feed both the authz interceptor and the field-mask validator. See the
 [server reference](../../reference/server.md).
 
+## Error handling
+
+The `ErrorMapperUnary` interceptor, installed automatically by `server.New`, converts persistence
+sentinels to gRPC status codes so your handlers never need to hand-map them:
+
+| Sentinel | gRPC code |
+|---|---|
+| `persistence.ErrNotFound` | `codes.NotFound` |
+| `persistence.ErrConflict` | `codes.AlreadyExists` |
+| `persistence.ErrPreconditionFailed` | `codes.FailedPrecondition` |
+| `persistence.ConstraintError(err)` (unique/FK violation) | `codes.AlreadyExists` or `codes.FailedPrecondition` |
+| `*persistence.FieldViolationError` | `codes.InvalidArgument` (with field detail) |
+
+**Propagate persistence errors directly** — return `err` from the repository call; the interceptor
+handles the translation. Hand-calling `status.Error(codes.NotFound, …)` is redundant and risks
+diverging from the framework's AIP-193 error detail format.
+
+```go
+func (s *apiKeyServer) GetAPIKey(ctx context.Context, req *apikeyv1.GetAPIKeyRequest) (*apikeyv1.APIKey, error) {
+    k, err := s.repo.Get(ctx, req.Id)
+    if err != nil {
+        return nil, err // ErrNotFound → codes.NotFound; other sentinels mapped automatically
+    }
+    return k, nil
+}
+```
+
+See [middleware → ErrorMapperUnary](../../reference/middleware/#errormapperunary) and
+[persistence → Errors](../../reference/persistence/#errors).
+
 ## 5. Choose how secret fields persist
 
 `key_value` is annotated `secret`, so the generated `APIKeyRepository` needs an `Encryptor`. Its

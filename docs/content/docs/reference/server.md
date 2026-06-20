@@ -46,7 +46,7 @@ type Config struct {
 |---|---|---|---|
 | `GRPCAddr` | **yes** | — | `:0` binds an ephemeral port; read it back with `GRPCAddr()` after `Serve` |
 | `HTTPAddr` | no | `""` (disabled) | enables the grpc-gateway HTTP/JSON proxy |
-| `Rules` | no* | `nil` | feeds **both** authz enforcement and field-mask verb lookup; *required in practice or every non-public call is denied |
+| `Rules` | no* | `nil` | feeds **both** authz enforcement and field-mask verb lookup; *required in practice or every non-public call is denied. For a proto with multiple services combine all `<Service>AuthzRules` — see below. |
 | `Authorizer` | no | `authz.NewDevAuthorizer()` (no grants → deny all) | swap for OPA/Cedar/remote PDP |
 | `PrincipalFunc` | no* | `nil` → empty principal | how the caller's identity is derived; *without it **no grant can match**, so every non-public call is denied. Use `grpcauthz.DevPrincipalFunc()` in dev, a verified-token function in prod |
 | `Interceptors` | no | `nil` | appended **after** the framework chain |
@@ -111,6 +111,29 @@ func (s *Server) Rules() []authz.MethodRule
 func (s *Server) GRPCAddr() string // actual bound addr after Serve (useful when GRPCAddr was ":0")
 func (s *Server) HTTPAddr() string // actual bound gateway addr after Serve; "" when no gateway
 ```
+
+### Combining rules for a multi-service proto
+
+`protoc-gen-devedge-authz` emits one `<Service>AuthzRules []authz.MethodRule` per `service`
+declaration. A proto that exposes multiple services — for example an owner `FooService` and a
+read-projection `FooSummaryService` — requires **all** tables merged into a single slice:
+
+```go
+import "slices" // Go 1.22+
+
+srv, err := server.New(server.Config{
+    Rules: slices.Concat(
+        myv1.FooServiceAuthzRules,
+        myv1.FooSummaryServiceAuthzRules,
+    ),
+    // ...
+})
+```
+
+Without combining, any service whose rules are omitted fails the boot-time completeness gate
+(`AssertMethodsDeclared`), which the generated `Register<Service>` helper runs at startup.
+See [codegen → protoc-gen-devedge-authz](../codegen/#protoc-gen-devedge-authz) for the full
+explanation and a stdlib `append` alternative.
 
 ## Complete `main.go`
 
