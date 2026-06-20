@@ -163,7 +163,7 @@ func TestEntRepository_ETagStampedAndChanges(t *testing.T) {
 	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
 	ctx := tenantCtx("t1")
 
-	created, err := repo.Create(ctx, &apikeyv1.APIKey{Id: "k1", Name: "a", AccountId: "t1", KeyValue: "sk_1"})
+	created, err := repo.Create(ctx, &apikeyv1.APIKey{Id: "k1", AccountId: "t1", KeyValue: "sk_1"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -179,11 +179,53 @@ func TestEntRepository_ETagStampedAndChanges(t *testing.T) {
 		t.Errorf("Get ETag = %q, want %q (must be stable until the next write)", got.Etag, created.Etag)
 	}
 
-	updated, err := repo.Update(ctx, "k1", &apikeyv1.APIKey{Id: "k1", Name: "b"}, "name")
+	// label is a plain writable scalar; name is OUTPUT_ONLY and never written.
+	updated, err := repo.Update(ctx, "k1", &apikeyv1.APIKey{Id: "k1", Label: "b"}, "label")
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if updated.Etag == "" || updated.Etag == created.Etag {
 		t.Errorf("Update ETag = %q, want a fresh non-empty token (was %q)", updated.Etag, created.Etag)
+	}
+}
+
+// TestEntRepository_ResourceNamePopulated is the ent-backend counterpart of the
+// AIP-122 name guarantee documented in guides/model-a-resource.md (#2): `name` is
+// OUTPUT_ONLY and DERIVED from id (never stored), so the repository must compute
+// and surface it on every read on the ent backend, exactly as the GORM backend
+// does via fromModel. Before the fix protoc-gen-ent stored `name` as a column and
+// fromEnt read it back, so it was always "".
+func TestEntRepository_ResourceNamePopulated(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:name_ent_rt?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
+	ctx := tenantCtx("t1")
+
+	want := apikeyv1.FormatAPIKeyName("k1") // "apikeys/k1"
+	if want == "" {
+		t.Fatal("FormatAPIKeyName returned empty; the AIP-122 helper must be generated")
+	}
+
+	created, err := repo.Create(ctx, &apikeyv1.APIKey{Id: "k1", AccountId: "t1", KeyValue: "sk_1"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.GetName() != want {
+		t.Errorf("Create name = %q, want %q (derived from id, AIP-122)", created.GetName(), want)
+	}
+
+	got, err := repo.Get(ctx, "k1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.GetName() != want {
+		t.Errorf("Get name = %q, want %q (must round-trip, derived from id)", got.GetName(), want)
+	}
+
+	// Parse round-trips back to the id.
+	if id, perr := apikeyv1.ParseAPIKeyName(got.GetName()); perr != nil || id != "k1" {
+		t.Errorf("ParseAPIKeyName(%q) = (%q, %v), want (\"k1\", nil)", got.GetName(), id, perr)
 	}
 }

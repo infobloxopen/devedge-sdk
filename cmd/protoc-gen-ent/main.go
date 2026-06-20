@@ -36,8 +36,15 @@ func main() {
 	// "postgres"/"sqlite" a partial unique index (WHERE delete_time IS NULL) is
 	// used instead. See render.go (targetDialect).
 	dialect := flags.String("dialect", "postgres", "target SQL dialect: postgres|sqlite|mysql")
+	// with_storage signals that protoc-gen-storage (the GORM backend) also runs in
+	// the same buf.gen invocation into the same Go package. When true, this plugin
+	// does NOT emit the package-level AIP-122 resource-name helpers (<R>NamePattern /
+	// Format<R>Name / Parse<R>Name) — storage already owns them, and duplicating them
+	// would not compile. An ent-only service (the normal scaffold) leaves it false.
+	withStorageOpt := flags.Bool("with_storage", false, "protoc-gen-storage also runs into the same package; do not emit shared resource-name helpers")
 	protogen.Options{ParamFunc: flags.Set}.Run(func(gen *protogen.Plugin) error {
 		targetDialect = *dialect
+		withStorage = *withStorageOpt
 		gen.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 		for _, f := range gen.Files {
 			if f.Generate {
@@ -87,6 +94,16 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			}
 		}
 		msg := entMessageInfo{MessageName: name}
+		// AIP-122: capture the (google.api.resource) pattern so an OUTPUT_ONLY `name`
+		// field can be DERIVED from id (Format<R>Name) rather than stored — matching
+		// protoc-gen-storage. Without the pattern there is nothing to format from.
+		if mopts := m.Desc.Options(); mopts != nil && proto.HasExtension(mopts, apiannotations.E_Resource) {
+			if rd, ok := proto.GetExtension(mopts, apiannotations.E_Resource).(*apiannotations.ResourceDescriptor); ok {
+				if patterns := rd.GetPattern(); len(patterns) > 0 {
+					msg.ResourcePattern = patterns[0]
+				}
+			}
+		}
 		for _, field := range m.Fields {
 			var (
 				isSecret     bool

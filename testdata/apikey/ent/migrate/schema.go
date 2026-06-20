@@ -14,7 +14,6 @@ var (
 		{Name: "account_id", Type: field.TypeString},
 		{Name: "delete_time", Type: field.TypeTime, Nullable: true},
 		{Name: "etag", Type: field.TypeString, Nullable: true},
-		{Name: "name", Type: field.TypeString, Nullable: true},
 		{Name: "key_value_hash", Type: field.TypeString, Nullable: true},
 		{Name: "key_value_cipher", Type: field.TypeString, Nullable: true},
 		{Name: "key_prefix", Type: field.TypeString, Nullable: true},
@@ -31,7 +30,7 @@ var (
 			{
 				Name:    "apikey_key_value_hash",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[5]},
+				Columns: []*schema.Column{APIKeysColumns[4]},
 			},
 		},
 	}

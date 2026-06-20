@@ -15,3 +15,8 @@ plugins:
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/fleet
   - local: protoc-gen-ent
     out: testdata/fleet
+    # protoc-gen-storage above also emits into this package; storage owns the
+    # AIP-122 resource-name helpers, so ent must not re-emit them (with_storage).
+    # (Fleet/Vehicle have no resource-name pattern today, so this is a no-op now —
+    # it keeps the both-backends invariant correct if one is added later.)
+    opt: with_storage=true

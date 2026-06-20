@@ -24,8 +24,6 @@ type APIKey struct {
 	DeleteTime *time.Time `json:"delete_time,omitempty"`
 	// AIP-154 opaque concurrency token; re-stamped on every write.
 	Etag string `json:"etag,omitempty"`
-	// Name holds the value of the "name" field.
-	Name string `json:"name,omitempty"`
 	// HMAC-SHA256 of key_value for lookup
 	KeyValueHash string `json:"key_value_hash,omitempty"`
 	// encrypted key_value for recovery
@@ -48,7 +46,7 @@ func (*APIKey) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case apikey.FieldTags:
 			values[i] = new([]byte)
-		case apikey.FieldID, apikey.FieldAccountID, apikey.FieldEtag, apikey.FieldName, apikey.FieldKeyValueHash, apikey.FieldKeyValueCipher, apikey.FieldKeyPrefix, apikey.FieldLabel:
+		case apikey.FieldID, apikey.FieldAccountID, apikey.FieldEtag, apikey.FieldKeyValueHash, apikey.FieldKeyValueCipher, apikey.FieldKeyPrefix, apikey.FieldLabel:
 			values[i] = new(sql.NullString)
 		case apikey.FieldDeleteTime, apikey.FieldExpireTime:
 			values[i] = new(sql.NullTime)
@@ -91,12 +89,6 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field etag", values[i])
 			} else if value.Valid {
 				_m.Etag = value.String
-			}
-		case apikey.FieldName:
-			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field name", values[i])
-			} else if value.Valid {
-				_m.Name = value.String
 			}
 		case apikey.FieldKeyValueHash:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -183,9 +175,6 @@ func (_m *APIKey) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("etag=")
 	builder.WriteString(_m.Etag)
-	builder.WriteString(", ")
-	builder.WriteString("name=")
-	builder.WriteString(_m.Name)
 	builder.WriteString(", ")
 	builder.WriteString("key_value_hash=")
 	builder.WriteString(_m.KeyValueHash)
