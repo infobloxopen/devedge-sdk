@@ -68,26 +68,6 @@ func (_u *APIKeyUpdate) ClearEtag() *APIKeyUpdate {
 	return _u
 }
 
-// SetName sets the "name" field.
-func (_u *APIKeyUpdate) SetName(v string) *APIKeyUpdate {
-	_u.mutation.SetName(v)
-	return _u
-}
-
-// SetNillableName sets the "name" field if the given value is not nil.
-func (_u *APIKeyUpdate) SetNillableName(v *string) *APIKeyUpdate {
-	if v != nil {
-		_u.SetName(*v)
-	}
-	return _u
-}
-
-// ClearName clears the value of the "name" field.
-func (_u *APIKeyUpdate) ClearName() *APIKeyUpdate {
-	_u.mutation.ClearName()
-	return _u
-}
-
 // SetKeyValueHash sets the "key_value_hash" field.
 func (_u *APIKeyUpdate) SetKeyValueHash(v string) *APIKeyUpdate {
 	_u.mutation.SetKeyValueHash(v)
@@ -253,12 +233,6 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.EtagCleared() {
 		_spec.ClearField(apikey.FieldEtag, field.TypeString)
 	}
-	if value, ok := _u.mutation.Name(); ok {
-		_spec.SetField(apikey.FieldName, field.TypeString, value)
-	}
-	if _u.mutation.NameCleared() {
-		_spec.ClearField(apikey.FieldName, field.TypeString)
-	}
 	if value, ok := _u.mutation.KeyValueHash(); ok {
 		_spec.SetField(apikey.FieldKeyValueHash, field.TypeString, value)
 	}
@@ -352,26 +326,6 @@ func (_u *APIKeyUpdateOne) SetNillableEtag(v *string) *APIKeyUpdateOne {
 // ClearEtag clears the value of the "etag" field.
 func (_u *APIKeyUpdateOne) ClearEtag() *APIKeyUpdateOne {
 	_u.mutation.ClearEtag()
-	return _u
-}
-
-// SetName sets the "name" field.
-func (_u *APIKeyUpdateOne) SetName(v string) *APIKeyUpdateOne {
-	_u.mutation.SetName(v)
-	return _u
-}
-
-// SetNillableName sets the "name" field if the given value is not nil.
-func (_u *APIKeyUpdateOne) SetNillableName(v *string) *APIKeyUpdateOne {
-	if v != nil {
-		_u.SetName(*v)
-	}
-	return _u
-}
-
-// ClearName clears the value of the "name" field.
-func (_u *APIKeyUpdateOne) ClearName() *APIKeyUpdateOne {
-	_u.mutation.ClearName()
 	return _u
 }
 
@@ -569,12 +523,6 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if _u.mutation.EtagCleared() {
 		_spec.ClearField(apikey.FieldEtag, field.TypeString)
-	}
-	if value, ok := _u.mutation.Name(); ok {
-		_spec.SetField(apikey.FieldName, field.TypeString, value)
-	}
-	if _u.mutation.NameCleared() {
-		_spec.ClearField(apikey.FieldName, field.TypeString)
 	}
 	if value, ok := _u.mutation.KeyValueHash(); ok {
 		_spec.SetField(apikey.FieldKeyValueHash, field.TypeString, value)

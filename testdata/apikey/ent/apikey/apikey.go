@@ -18,8 +18,6 @@ const (
 	FieldDeleteTime = "delete_time"
 	// FieldEtag holds the string denoting the etag field in the database.
 	FieldEtag = "etag"
-	// FieldName holds the string denoting the name field in the database.
-	FieldName = "name"
 	// FieldKeyValueHash holds the string denoting the key_value_hash field in the database.
 	FieldKeyValueHash = "key_value_hash"
 	// FieldKeyValueCipher holds the string denoting the key_value_cipher field in the database.
@@ -42,7 +40,6 @@ var Columns = []string{
 	FieldAccountID,
 	FieldDeleteTime,
 	FieldEtag,
-	FieldName,
 	FieldKeyValueHash,
 	FieldKeyValueCipher,
 	FieldKeyPrefix,
@@ -94,11 +91,6 @@ func ByDeleteTime(opts ...sql.OrderTermOption) OrderOption {
 // ByEtag orders the results by the etag field.
 func ByEtag(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEtag, opts...).ToFunc()
-}
-
-// ByName orders the results by the name field.
-func ByName(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldName, opts...).ToFunc()
 }
 
 // ByKeyValueHash orders the results by the key_value_hash field.

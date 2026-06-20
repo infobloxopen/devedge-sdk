@@ -190,7 +190,6 @@ func fromEntAPIKey(e *ent.APIKey) *APIKey {
 		return nil
 	}
 	p := &APIKey{
-		Name:      e.Name,
 		Id:        e.ID,
 		AccountId: e.AccountID,
 		// key_value omitted — secret, never returned
@@ -199,6 +198,7 @@ func fromEntAPIKey(e *ent.APIKey) *APIKey {
 		Tags:      e.Tags,
 		Etag:      e.Etag, // AIP-154: the EtagMixin-stamped token a client echoes as If-Match
 	}
+	p.Name = FormatAPIKeyName(e.ID)
 	if e.DeleteTime != nil {
 		p.DeleteTime = timestamppb.New(*e.DeleteTime)
 	}

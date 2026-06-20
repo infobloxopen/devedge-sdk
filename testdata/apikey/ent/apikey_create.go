@@ -54,20 +54,6 @@ func (_c *APIKeyCreate) SetNillableEtag(v *string) *APIKeyCreate {
 	return _c
 }
 
-// SetName sets the "name" field.
-func (_c *APIKeyCreate) SetName(v string) *APIKeyCreate {
-	_c.mutation.SetName(v)
-	return _c
-}
-
-// SetNillableName sets the "name" field if the given value is not nil.
-func (_c *APIKeyCreate) SetNillableName(v *string) *APIKeyCreate {
-	if v != nil {
-		_c.SetName(*v)
-	}
-	return _c
-}
-
 // SetKeyValueHash sets the "key_value_hash" field.
 func (_c *APIKeyCreate) SetKeyValueHash(v string) *APIKeyCreate {
 	_c.mutation.SetKeyValueHash(v)
@@ -238,10 +224,6 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Etag(); ok {
 		_spec.SetField(apikey.FieldEtag, field.TypeString, value)
 		_node.Etag = value
-	}
-	if value, ok := _c.mutation.Name(); ok {
-		_spec.SetField(apikey.FieldName, field.TypeString, value)
-		_node.Name = value
 	}
 	if value, ok := _c.mutation.KeyValueHash(); ok {
 		_spec.SetField(apikey.FieldKeyValueHash, field.TypeString, value)

@@ -1,4 +1,4 @@
-.PHONY: tools generate bootstrap build test run api-lint api-release
+.PHONY: tools generate bootstrap build test run api-lint api-breaking api-release
 
 # Pinned SDK version that supplies the codegen plugins and the runtime.
 # Keep this aligned with the `github.com/infobloxopen/devedge-sdk` require in go.mod.
@@ -26,14 +26,25 @@ tools:
 # + the New{{.Resource}}EntRepository adapter; entc then turns the schemas into
 # the ent CLIENT (`go generate ./gen/ent`). Both must run before the code builds.
 #
-# Ordering hazard: the schemas/adapter/main import the ent client packages
-# (gen/ent/order, .../predicate, .../runtime) that entc hasn't produced yet, so a
-# plain `go mod tidy` before entc would try to resolve them as remote modules and
-# fail. `go mod tidy -e` seeds the entc toolchain deps best-effort (ignoring those
-# not-yet-existing internal packages); the clean tidy runs after entc.
+# Cold-start ordering (why NOT a bare `go mod tidy` here): entc compiles the
+# schema package during `go generate`, so the entc tool AND the SDK packages the
+# schema/filterers/adapter import (persistence/entrepo, middleware,
+# persistence/resourcename) must already be in go.sum first. But the
+# schema/adapter/main ALSO import the ent CLIENT packages (gen/ent/...) that entc
+# has not produced yet, so a plain `go mod tidy` now would try to resolve those as
+# remote modules and print an alarming `fatal: Could not read from remote
+# repository` / "cannot find module providing package gen/ent/*". We avoid that
+# entirely: `go get` seeds JUST the toolchain + SDK deps into go.sum WITHOUT
+# building this module (so it never sees the missing gen/ent/* packages). entc can
+# then compile the schema; the clean `go mod tidy` runs last, once the client exists.
 generate:
 	buf generate
-	-go mod tidy -e
+	@echo "  seeding ent codegen toolchain (go.sum)…"
+	@go get entgo.io/ent/cmd/ent \
+		github.com/infobloxopen/devedge-sdk/persistence/entrepo \
+		github.com/infobloxopen/devedge-sdk/middleware \
+		github.com/infobloxopen/devedge-sdk/persistence/resourcename
+	@echo "  generating ent client…"
 	go generate ./gen/ent
 	go mod tidy
 {{- else }}
@@ -66,11 +77,30 @@ test: | gen
 run: | gen
 	go run ./server
 
-# apx governs the PUBLIC proto surface.
+# apx governs the PUBLIC proto surface. Run these locally BEFORE pushing — CI runs
+# the same gates (see .github/workflows/apx-release.yml).
+#
+#   api-lint     STANDARD lint of the public proto.
+#   api-breaking compatibility check vs the last committed proto (HEAD): catches an
+#                accidental breaking change before it lands. A brand-new API has
+#                nothing to break against (HEAD == working tree), so it passes
+#                trivially; once released, compare against the released tag instead.
+#   api-release  prepare a versioned release of the public API. NOTE: this emits a
+#                NON-FATAL go_package mismatch warning ("got .../gen/{{.GoPkg}},
+#                expected .../proto/{{.ProtoPathSuffix}}"). It is EXPECTED and
+#                HARMLESS: the scaffold's generated Go must be a single directory
+#                segment under gen/ so the sibling ent/ package compiles, which is
+#                not the <module>/<api-id> layout apx derives by default. The
+#                command exits 0. Do NOT add --strict, which would turn it fatal.
 api-lint:
 	apx lint
 
-# Prepare/submit a versioned release of the public API (see .github/workflows/apx-release.yml).
+# NOTE: when there ARE violations, apx itself prints the buf violation list twice
+# (once raw, once in its summary). That double-print is apx's own output, not this
+# single invocation — nothing to fix here.
+api-breaking:
+	apx breaking --against HEAD
+
 # The api-id is the proto's path under the module root (module_roots: [proto]).
 api-release:
 	apx release prepare proto/{{.ProtoPathSuffix}} --version v1.0.0-alpha.1 --lifecycle experimental

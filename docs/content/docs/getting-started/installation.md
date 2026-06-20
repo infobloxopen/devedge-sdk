@@ -10,6 +10,13 @@ devedge-sdk is a Go module. To build a service with it you need:
 | Tool | Version | Why |
 |---|---|---|
 | **Go** | 1.25+ | the SDK module targets a current Go toolchain |
+
+{{< callout type="info" >}}
+**On an older Go?** The SDK's `go.mod` declares `go 1.25`, so Go 1.21+ will auto-download the matching
+toolchain on first build (Go's transparent toolchain switching) — you do not have to upgrade your
+system Go by hand. Pre-1.21 toolchains predate that mechanism and will reject the module outright;
+upgrade to a current release in that case.
+{{< /callout >}}
 | **buf** | latest | drives proto compilation and the codegen plugins ([buf.build](https://buf.build)) |
 | **apx** | 0.12.1+ | declares/governs the public API surface; the `devedge-sdk new` scaffold shells out to `apx init app` ([infobloxopen/apx](https://github.com/infobloxopen/apx)) |
 | **protoc-gen-go**, **protoc-gen-go-grpc** | latest | base proto/gRPC code generation |
@@ -21,7 +28,8 @@ You do **not** need Vault or Postgres to follow the [Quickstart](../quickstart/)
 encryptor and the in-memory repository run entirely in-process.
 {{< /callout >}}
 
-Check your apx version with `apx --version` (there is no `apx version` subcommand):
+Check your apx version with `apx --version` (use the flag — recent apx has no `apx version`
+subcommand):
 
 ```bash
 apx --version   # e.g. "apx 0.12.1 (...)" — need 0.12.1+

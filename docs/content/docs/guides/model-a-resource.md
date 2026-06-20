@@ -51,7 +51,11 @@ message Widget {
 }
 ```
 
-`name` is `OUTPUT_ONLY` (see below) — it is derived from `id`, never stored or accepted on input.
+`name` is `OUTPUT_ONLY` (see below) — it is derived from `id`, never stored or accepted on input. This
+holds on **both** storage backends: GORM omits the column and populates `name` in `fromModel`; ent
+omits the column and recomputes it in the generated `fromEnt<R>` projection (see
+[codegen → Resource names on ent](../../reference/codegen/#resource-names-on-ent-aip-122)) — so a read
+always carries the resource name with no consumer code.
 
 ## Field types
 

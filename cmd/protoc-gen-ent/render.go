@@ -47,13 +47,55 @@ var targetDialect = "postgres"
 // in effect rather than the partial-index strategy (PostgreSQL/SQLite).
 func useSoftDeleteSentinel() bool { return targetDialect == "mysql" }
 
+// withStorage reports whether protoc-gen-storage (the GORM backend) also runs in
+// the same buf.gen invocation, into the same Go package. It is set by the
+// `with_storage=true` plugin option (see main.go). When true, protoc-gen-storage
+// already emits the package-level AIP-122 resource-name helpers (<R>NamePattern,
+// Format<R>Name, Parse<R>Name) and this plugin must NOT re-emit them, or the
+// package would have duplicate symbols. An ent-only service (the normal scaffold)
+// leaves it false, so this plugin owns those helpers. Default false.
+var withStorage = false
+
+// resourcenameIDVarName extracts the last {var} name from a resource name pattern.
+// "widgets/{widget}" → "widget"; "projects/{p}/widgets/{widget}" → "widget".
+// Mirrors protoc-gen-storage's helper so the two backends produce identical
+// Format/Parse helpers for the same pattern.
+func resourcenameIDVarName(pattern string) string {
+	segs := strings.Split(pattern, "/")
+	for i := len(segs) - 1; i >= 0; i-- {
+		s := segs[i]
+		if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
+			return s[1 : len(s)-1]
+		}
+	}
+	return "id"
+}
+
 // entMessageInfo describes a proto resource message for ent schema generation.
 type entMessageInfo struct {
-	MessageName   string // Go message name (e.g. "APIKey")
-	Fields        []entFieldInfo
-	SoftDelete    bool // true when the message has a delete_time OUTPUT_ONLY Timestamp field (AIP-148)
-	HasExpireTime bool // true when the message has an expire_time OUTPUT_ONLY Timestamp field (AIP-148)
-	HasETag       bool // true when the message has a string `etag` field (AIP-154); supplied by EtagMixin
+	MessageName     string // Go message name (e.g. "APIKey")
+	Fields          []entFieldInfo
+	SoftDelete      bool   // true when the message has a delete_time OUTPUT_ONLY Timestamp field (AIP-148)
+	HasExpireTime   bool   // true when the message has an expire_time OUTPUT_ONLY Timestamp field (AIP-148)
+	HasETag         bool   // true when the message has a string `etag` field (AIP-154); supplied by EtagMixin
+	ResourcePattern string // AIP-122 resource name pattern from (google.api.resource), e.g. "apikeys/{api_key}"
+}
+
+// msgHasResourceName reports whether the message participates in AIP-122 resource
+// naming: it carries a (google.api.resource) pattern AND declares an OUTPUT_ONLY
+// `name` field. When true, `name` is OUTPUT_ONLY and DERIVED from id (never stored)
+// — the ent schema omits the column and fromEnt<R> recomputes it via Format<R>Name,
+// mirroring the GORM backend (protoc-gen-storage).
+func msgHasResourceName(msg entMessageInfo) bool {
+	if msg.ResourcePattern == "" {
+		return false
+	}
+	for _, f := range msg.Fields {
+		if f.OutputOnly && f.Name == "name" {
+			return true
+		}
+	}
+	return false
 }
 
 // entFieldInfo describes a single proto message field for ent schema generation.
@@ -337,6 +379,14 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 			fmt.Fprintf(&b, "\t\t// %s is a secret field — stored as hash+cipher, never plaintext\n", f.Name)
 			fmt.Fprintf(&b, "\t\tfield.String(\"%s_hash\").Optional().Comment(\"HMAC-SHA256 of %s for lookup\"),\n", f.SnakeName, f.SnakeName)
 			fmt.Fprintf(&b, "\t\tfield.String(\"%s_cipher\").Optional().Comment(\"encrypted %s for recovery\"),\n", f.SnakeName, f.SnakeName)
+		case f.OutputOnly:
+			// AIP-203 OUTPUT_ONLY non-framework field (e.g. the AIP-122 resource
+			// `name`): server-computed, derived from id, NEVER stored — matching the
+			// GORM backend, which omits OUTPUT_ONLY fields from the model entirely.
+			// The framework OUTPUT_ONLY fields (etag, delete_time, expire_time) are
+			// owned by their mixins and excluded upstream in main.go, so the only
+			// fields reaching here are derived projections that fromEnt<R> recomputes.
+			fmt.Fprintf(&b, "\t\t// %s is OUTPUT_ONLY (derived, e.g. AIP-122 name) — never stored; fromEnt%s computes it\n", f.SnakeName, msg.MessageName)
 		default:
 			// Build the field chain with optional constraints.
 			chain := fmt.Sprintf("field.%s(\"%s\")", f.EntType, f.SnakeName)
@@ -903,6 +953,14 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/entrepo\"\n")
+	// resourcename backs the AIP-122 Format<R>Name helper this plugin emits — but
+	// only when it owns those helpers (ent-only service). With the GORM backend also
+	// present (withStorage), protoc-gen-storage emits both the helpers and their
+	// resourcename import in the same package, so this file must NOT import it again
+	// (it references the storage-emitted Format<R>Name, which carries its own import).
+	if msgHasResourceName(msg) && !withStorage {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/resourcename\"\n")
+	}
 	if hasSecret {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
@@ -1106,11 +1164,12 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		case f.IsRepeated || f.IsMessage:
 			// Relationships / repeated are ent edges, not scalar columns.
 			continue
-		case f.SnakeName == "etag" || f.SnakeName == "delete_time" || f.SnakeName == "expire_time":
-			// Framework fields surfaced below via flags: etag from the mixin, and the
-			// timestamps need timestamppb conversion. (Other OUTPUT_ONLY scalars — e.g.
-			// the AIP resource `name` — are still returned on read; OUTPUT_ONLY means
-			// the client can't write them, not that they're hidden on read.)
+		case f.OutputOnly:
+			// OUTPUT_ONLY fields are not stored ent columns: etag comes from the mixin
+			// (below), the soft-delete/TTL timestamps need timestamppb conversion
+			// (below), and a derived field like the AIP-122 `name` is recomputed from
+			// id after the literal (see msgHasResourceName below) — none can be read
+			// from e.<Field> because the schema no longer carries the column.
 			continue
 		default:
 			fmt.Fprintf(&b, "\t\t%s: e.%s,\n", entGoName(f.SnakeName), entSetterGoName(f.SnakeName))
@@ -1120,6 +1179,11 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		b.WriteString("\t\tEtag: e.Etag, // AIP-154: the EtagMixin-stamped token a client echoes as If-Match\n")
 	}
 	b.WriteString("\t}\n")
+	// AIP-122: the resource `name` is OUTPUT_ONLY and DERIVED from id — recompute it
+	// on read (it is never stored), mirroring protoc-gen-storage's fromModel.
+	if msgHasResourceName(msg) {
+		fmt.Fprintf(&b, "\tp.Name = Format%sName(e.ID)\n", res)
+	}
 	if soft {
 		b.WriteString("\tif e.DeleteTime != nil {\n\t\tp.DeleteTime = timestamppb.New(*e.DeleteTime)\n\t}\n")
 	}
@@ -1128,6 +1192,25 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	}
 	fmt.Fprintf(&b, "\tif FromEnt%sCustom != nil {\n\t\tFromEnt%sCustom(e, p)\n\t}\n", res, res)
 	b.WriteString("\treturn p\n}\n")
+
+	// ---- AIP-122 resource-name helpers (<R>NamePattern / Format<R>Name / Parse<R>Name) ----
+	// Emitted only when this is an ent-only service (withStorage=false). When the GORM
+	// backend also runs in the same package (with_storage=true), protoc-gen-storage
+	// already owns these symbols and re-emitting them here would duplicate them.
+	// fromEnt<R> above references Format<R>Name regardless — in the both-backends case
+	// it resolves to the storage-emitted helper in the same package.
+	if msgHasResourceName(msg) && !withStorage {
+		idVar := resourcenameIDVarName(msg.ResourcePattern)
+		fmt.Fprintf(&b, "\n// %sNamePattern is the AIP-122 resource name pattern for %s.\n", res, res)
+		fmt.Fprintf(&b, "const %sNamePattern = %q\n\n", res, msg.ResourcePattern)
+		fmt.Fprintf(&b, "// Format%sName builds the AIP-122 resource name for the given ID.\n", res)
+		fmt.Fprintf(&b, "func Format%sName(id string) string {\n", res)
+		fmt.Fprintf(&b, "\tname, _ := resourcename.Format(%sNamePattern, map[string]string{%q: id})\n", res, idVar)
+		b.WriteString("\treturn name\n}\n\n")
+		fmt.Fprintf(&b, "// Parse%sName extracts the resource ID from the given resource name.\n", res)
+		fmt.Fprintf(&b, "func Parse%sName(name string) (string, error) {\n", res)
+		fmt.Fprintf(&b, "\treturn resourcename.IDFromName(%sNamePattern, name)\n}\n", res)
+	}
 
 	// ---- LookupBy<Secret>Hash helpers ----
 	for _, f := range secrets {

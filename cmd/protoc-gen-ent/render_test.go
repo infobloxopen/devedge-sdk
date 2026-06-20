@@ -61,6 +61,27 @@ func TestRenderEntSchema_basicNoTenantNoSecret(t *testing.T) {
 	mustNotContain(t, out, "entgo.io/ent/schema/index")
 }
 
+// AIP-122: an OUTPUT_ONLY `name` (derived from id) must NOT be stored as an ent
+// column — it is recomputed on read by fromEnt<R>, mirroring the GORM backend
+// (protoc-gen-storage omits OUTPUT_ONLY fields from the model). A plain `name`
+// WITHOUT OUTPUT_ONLY is still a normal stored column (covered above).
+func TestRenderEntSchema_outputOnlyNameNotStored(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName:     "Widget",
+		ResourcePattern: "widgets/{widget}",
+		Fields: []entFieldInfo{
+			{Name: "name", SnakeName: "name", EntType: "String", OutputOnly: true},
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "display_name", SnakeName: "display_name", EntType: "String"},
+		},
+	}
+	out := renderEntSchema(msg, nil)
+	// The derived name must not become a stored column.
+	mustNotContain(t, out, `field.String("name")`)
+	// A non-OUTPUT_ONLY scalar is still stored.
+	mustContain(t, out, `field.String("display_name").Optional()`)
+}
+
 // A map<string,string> field is the Tags kind: an Optional JSON ent field,
 // never a skipped nested message.
 func TestRenderEntSchema_tagsField(t *testing.T) {

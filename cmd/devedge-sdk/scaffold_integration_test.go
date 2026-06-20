@@ -433,13 +433,17 @@ func generate(t *testing.T, target, pluginBin string) {
 }
 
 // generateEnt runs the ent two-step generate (buf generate then entc client gen)
-// in target, mirroring scaffold.Generate's ent path:
+// in target, mirroring the generated Makefile's ent `generate` target EXACTLY
+// (so the cold-start it validates is the one a fresh clone actually runs):
 //
-//	buf dep update → buf generate → go mod tidy -e (seed entc deps) →
+//	buf dep update → buf generate →
+//	go get <entc tool + SDK pkgs> (seed go.sum WITHOUT building the module) →
 //	go generate ./gen/ent (entc client) → go mod tidy.
 //
-// The `-e` tidy is best-effort: before entc runs, the schemas/adapter/main import
-// ent client packages that don't exist yet, so a clean tidy would fail.
+// The `go get` (not `go mod tidy -e`) is the #4 fix: tidy -e tolerated the
+// not-yet-generated gen/ent/* imports but printed an alarming `fatal: Could not
+// read from remote repository`; `go get` of the exact deps never builds the
+// module, so the cold-start is CLEAN. Output is asserted clean by the caller.
 func generateEnt(t *testing.T, target, pluginBin string) {
 	t.Helper()
 	gobin := filepath.Join(build0(t, "GOPATH"), "bin")
@@ -448,13 +452,39 @@ func generateEnt(t *testing.T, target, pluginBin string) {
 	env := append(os.Environ(), pathEnv)
 	run(t, target, env, "buf", "dep", "update")
 	run(t, target, env, "buf", "generate")
-	// Best-effort: seed the entc toolchain deps; ignore the expected
-	// not-yet-generated-client errors.
-	tidyE := exec.Command("go", "mod", "tidy", "-e")
-	tidyE.Dir = target
-	_ = tidyE.Run()
+	// Seed the entc toolchain + the SDK packages the schema/adapter import, into
+	// go.sum, without building this module — so it never trips over the
+	// not-yet-generated gen/ent/* packages (the #4 cold-start fix).
+	runNoScaryOutput(t, target, env, "go", "get",
+		"entgo.io/ent/cmd/ent",
+		"github.com/infobloxopen/devedge-sdk/persistence/entrepo",
+		"github.com/infobloxopen/devedge-sdk/middleware",
+		"github.com/infobloxopen/devedge-sdk/persistence/resourcename",
+	)
 	run(t, target, env, "go", "generate", "./gen/ent")
 	run(t, target, nil, "go", "mod", "tidy")
+}
+
+// runNoScaryOutput runs a command, fails on error, AND fails if the combined
+// output contains the alarming cold-start noise the #4 fix eliminates — a guard
+// that the clean cold-start does not regress back into fake "fatal" errors.
+func runNoScaryOutput(t *testing.T, dir string, env []string, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, out)
+	}
+	for _, scary := range []string{"Could not read from remote repository", "cannot find module providing package"} {
+		if strings.Contains(string(out), scary) {
+			t.Fatalf("cold-start %s %s printed alarming output %q (the #4 fix must keep it clean):\n%s",
+				name, strings.Join(args, " "), scary, out)
+		}
+	}
 }
 
 func build0(t *testing.T, env string) string {

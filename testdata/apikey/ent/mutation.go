@@ -36,7 +36,6 @@ type APIKeyMutation struct {
 	account_id       *string
 	delete_time      *time.Time
 	etag             *string
-	name             *string
 	key_value_hash   *string
 	key_value_cipher *string
 	key_prefix       *string
@@ -285,55 +284,6 @@ func (m *APIKeyMutation) EtagCleared() bool {
 func (m *APIKeyMutation) ResetEtag() {
 	m.etag = nil
 	delete(m.clearedFields, apikey.FieldEtag)
-}
-
-// SetName sets the "name" field.
-func (m *APIKeyMutation) SetName(s string) {
-	m.name = &s
-}
-
-// Name returns the value of the "name" field in the mutation.
-func (m *APIKeyMutation) Name() (r string, exists bool) {
-	v := m.name
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldName returns the old "name" field's value of the APIKey entity.
-// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *APIKeyMutation) OldName(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldName is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldName requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldName: %w", err)
-	}
-	return oldValue.Name, nil
-}
-
-// ClearName clears the value of the "name" field.
-func (m *APIKeyMutation) ClearName() {
-	m.name = nil
-	m.clearedFields[apikey.FieldName] = struct{}{}
-}
-
-// NameCleared returns if the "name" field was cleared in this mutation.
-func (m *APIKeyMutation) NameCleared() bool {
-	_, ok := m.clearedFields[apikey.FieldName]
-	return ok
-}
-
-// ResetName resets all changes to the "name" field.
-func (m *APIKeyMutation) ResetName() {
-	m.name = nil
-	delete(m.clearedFields, apikey.FieldName)
 }
 
 // SetKeyValueHash sets the "key_value_hash" field.
@@ -664,7 +614,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 10)
+	fields := make([]string, 0, 9)
 	if m.account_id != nil {
 		fields = append(fields, apikey.FieldAccountID)
 	}
@@ -673,9 +623,6 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.etag != nil {
 		fields = append(fields, apikey.FieldEtag)
-	}
-	if m.name != nil {
-		fields = append(fields, apikey.FieldName)
 	}
 	if m.key_value_hash != nil {
 		fields = append(fields, apikey.FieldKeyValueHash)
@@ -709,8 +656,6 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.DeleteTime()
 	case apikey.FieldEtag:
 		return m.Etag()
-	case apikey.FieldName:
-		return m.Name()
 	case apikey.FieldKeyValueHash:
 		return m.KeyValueHash()
 	case apikey.FieldKeyValueCipher:
@@ -738,8 +683,6 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldDeleteTime(ctx)
 	case apikey.FieldEtag:
 		return m.OldEtag(ctx)
-	case apikey.FieldName:
-		return m.OldName(ctx)
 	case apikey.FieldKeyValueHash:
 		return m.OldKeyValueHash(ctx)
 	case apikey.FieldKeyValueCipher:
@@ -781,13 +724,6 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetEtag(v)
-		return nil
-	case apikey.FieldName:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetName(v)
 		return nil
 	case apikey.FieldKeyValueHash:
 		v, ok := value.(string)
@@ -867,9 +803,6 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	if m.FieldCleared(apikey.FieldEtag) {
 		fields = append(fields, apikey.FieldEtag)
 	}
-	if m.FieldCleared(apikey.FieldName) {
-		fields = append(fields, apikey.FieldName)
-	}
 	if m.FieldCleared(apikey.FieldKeyValueHash) {
 		fields = append(fields, apikey.FieldKeyValueHash)
 	}
@@ -908,9 +841,6 @@ func (m *APIKeyMutation) ClearField(name string) error {
 	case apikey.FieldEtag:
 		m.ClearEtag()
 		return nil
-	case apikey.FieldName:
-		m.ClearName()
-		return nil
 	case apikey.FieldKeyValueHash:
 		m.ClearKeyValueHash()
 		return nil
@@ -945,9 +875,6 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldEtag:
 		m.ResetEtag()
-		return nil
-	case apikey.FieldName:
-		m.ResetName()
 		return nil
 	case apikey.FieldKeyValueHash:
 		m.ResetKeyValueHash()

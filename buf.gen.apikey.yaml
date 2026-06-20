@@ -25,3 +25,8 @@ plugins:
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/apikey
   - local: protoc-gen-ent
     out: testdata/apikey
+    # protoc-gen-storage above also emits into apikeyv1: it owns the AIP-122
+    # resource-name helpers (APIKeyNamePattern / FormatAPIKeyName / ParseAPIKeyName),
+    # so tell ent not to re-emit them (with_storage). The ent fromEnt projection
+    # still calls FormatAPIKeyName — it resolves to the storage-emitted helper.
+    opt: with_storage=true

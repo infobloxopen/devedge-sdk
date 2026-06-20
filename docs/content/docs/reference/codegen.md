@@ -177,10 +177,13 @@ dependency — never the SDK's own module. The SDK keeps gorm out of its `go.mod
 
 ## protoc-gen-ent
 
-Generates an ent schema for each **resource** message. Run `go generate ./ent` to produce the
-type-safe client from the schema. The ent shape enforces tenant scoping and secret-field handling
-through ent's **privacy layer** and **hooks** (applied by a generated mixin), so the invariants hold
-even for ad-hoc graph traversals — not just CRUD.
+Generates an ent schema for each **resource** message. Then run `go generate` on the **directory the
+schema landed in** to produce the type-safe client: it is `<out>/ent`, so with the scaffold's
+`out: gen` (below) the command is **`go generate ./gen/ent`** — and `go generate ./ent` only if you
+set `out: .`. (Pointing `go generate` at the wrong directory silently no-ops, leaving a stale or
+missing client, so match it to your `out:`.) The ent shape enforces tenant scoping and secret-field
+handling through ent's **privacy layer** and **hooks** (applied by a generated mixin), so the
+invariants hold even for ad-hoc graph traversals — not just CRUD.
 
 A message is a **resource** (and gets a schema) when it declares an `id` field — the same rule
 `protoc-gen-storage` uses. Request/response wrappers and other transport types without an `id`
@@ -222,6 +225,26 @@ backing storage model so several API surfaces can project one stored entity. The
 locked contract today; the cross-message surface codegen is forthcoming (a value other than the
 message's own name is rejected until then).
 
+### Resource names on ent (AIP-122)
+
+When a resource carries a `(google.api.resource)` pattern and an `OUTPUT_ONLY` `name` field, the ent
+backend treats `name` exactly like the GORM backend: it is **DERIVED from `id`, never stored**. The
+generated ent schema **omits** the `name` column, the adapter **never writes** it, and the generated
+`fromEnt<R>` projection **recomputes it on every read** via `Format<R>Name(e.ID)` — so a `Get`/`List`/
+`Create`/`Update` response always carries the resource name with no consumer code. The plugin also
+emits the same package-level helpers the GORM backend does:
+
+```go
+const <R>NamePattern = "<resources>/{<resource>}"
+func Format<R>Name(id string) string          // id → "resources/abc123"
+func Parse<R>Name(name string) (string, error) // "resources/abc123" → id
+```
+
+(When `protoc-gen-storage` also runs into the same package — as in a both-backends test fixture — pass
+the ent plugin `opt: with_storage=true` so it does **not** re-emit these helpers; storage already owns
+them, and the ent `fromEnt<R>` calls the storage-emitted `Format<R>Name`. An ent-only service — the
+normal scaffold — leaves it off and the ent plugin emits them.)
+
 ### Relationships in ent
 
 For a parent/child pair — a `has_many` on the parent and a `belongs_to` on the child (the
@@ -261,9 +284,13 @@ lives in `testdata/fleet/`.
 
 {{< callout type="warning" >}}
 **Standing up the ent client — gotchas:**
-- In a **consumer module**, give `protoc-gen-ent` a bare `out: .` (it writes `ent/schema/...`). Do
-  **not** add the `opt: module=...` used for the other plugins — ent rejects it
-  (`generated file does not match prefix`).
+- **`protoc-gen-ent` takes NO `module=` opt** (unlike the other plugins) — ent rejects it
+  (`generated file does not match prefix`). That is the real constraint. It derives its output dir
+  from the proto's Go package and writes `<out>/ent/schema/...` as a **sibling** of the proto
+  package. Set `out:` to wherever you want generated code rooted: the `devedge-sdk new service`
+  scaffold uses `out: gen` (so the schema lands in `gen/ent/`, next to `gen/<svc>v1`), and that is the
+  value to copy. (`out: .` also works — it just roots generated code at the module top instead of
+  under `gen/`.)
 - **Cold-start order matters.** `buf generate` writes the schema *and* generated files that import
   the not-yet-generated ent *client* packages (`<module>/ent/<resource>`): the `*.batch.ent.go` batch
   wrappers and the `ent/*_filter.ent.go` tenant / soft-delete filterers. The generated **schema** also
@@ -282,19 +309,27 @@ lives in `testdata/fleet/`.
      import _ "entgo.io/ent/cmd/ent"
      ```
   2. Seed `go.sum` with the ent codegen tool **and** the SDK packages the generated schema, filterers,
-     and batch wrappers import — `go get` resolves them and their transitive deps **without building
-     your module** (so it does not choke on the not-yet-generated client packages):
+     adapter, and batch wrappers import — `go get` resolves them and their transitive deps **without
+     building your module** (so it does not choke on the not-yet-generated client packages). Use
+     `go get`, **not** `go mod tidy -e`: tidy *builds* the module, so on a fresh clone it hits the
+     not-yet-generated `<module>/ent/<resource>` imports and prints an alarming (but ignored)
+     `fatal: Could not read from remote repository` / "cannot find module providing package
+     .../gen/ent/*"; `go get` of the exact packages never builds the module, so the cold-start stays
+     clean (this is the sequence `make generate` runs for you in a scaffolded service):
      ```
      go get entgo.io/ent/cmd/ent \
             github.com/infobloxopen/devedge-sdk/persistence/entrepo \
-            github.com/infobloxopen/devedge-sdk/middleware
+            github.com/infobloxopen/devedge-sdk/middleware \
+            github.com/infobloxopen/devedge-sdk/persistence/resourcename
      ```
-  3. `go generate ./ent` — `entc` can now compile the schema (its `entrepo` deps are in `go.sum`) and
-     produces the client, so the `<module>/ent/<resource>` packages the wrappers and filterers import
-     now exist.
+     (`persistence/resourcename` backs the generated AIP-122 `Format<R>Name` helper — see *Resource
+     names* below; harmless to include even when a resource has no name pattern.)
+  3. `go generate ./gen/ent` (or `./ent` if you used `out: .`) — `entc` can now compile the schema
+     (its `entrepo` deps are in `go.sum`) and produces the client, so the `<module>/ent/<resource>`
+     packages the wrappers and filterers import now exist.
   4. `go mod tidy` — everything resolves now that the client is generated.
 
-  After this, regenerating is just `buf generate` → `go generate ./ent`. `testdata/fleet/tools.go`
+  After this, regenerating is just `buf generate` → `go generate ./gen/ent`. `testdata/fleet/tools.go`
   shows the pin. (If you skip step 2, `go generate` aborts on the missing `entrepo` go.sum entries; if
   you run a bare `go mod tidy` before generating, it may fail to resolve your own not-yet-generated
   `<module>/ent/<resource>` packages — step 2 avoids both.)
@@ -366,4 +401,19 @@ plugins:
   - local: protoc-gen-ent
 ```
 
+A real service uses **one** storage backend — `protoc-gen-storage` (GORM) **or** `protoc-gen-ent`, not
+both (ent replaces storage). The combined list above is just the menu; the `devedge-sdk new service`
+scaffold emits one or the other.
+
 See [Define a service](../../guides/define-a-service/) for the complete configured example.
+
+{{< callout type="info" >}}
+**Expected `go_package` mismatch warning (ent scaffold + apx).** On the ent path the proto's
+`go_package` is a **single segment** (`gen/<svc>v1`, no `module=` opt) so the generated `ent/` package
+compiles as a sibling of the proto package. apx, however, derives the expected Go package rigidly as
+`<module>/<api-id>` (= `<module>/proto/<svc>/v1`), so `apx release prepare` (and `--dry-run`) prints a
+**non-fatal** `go_package` mismatch warning — `got "<module>/gen/<svc>v1", expected
+"<module>/proto/<svc>/v1"`. The command **exits 0**; the warning is expected and harmless. Do **not**
+align the `go_package` to silence it (it breaks the ent build), and do **not** pass `--strict` (that
+makes the warning fatal). See [Governing the public API locally](../../guides/define-a-service/#governing-the-public-api-locally).
+{{< /callout >}}

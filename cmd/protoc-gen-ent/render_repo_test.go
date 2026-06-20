@@ -46,10 +46,11 @@ func TestToStorageFields_failClosed(t *testing.T) {
 // load-bearing construct (F027 T101/T102).
 func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 	msg := entMessageInfo{
-		MessageName:   "Coupon",
-		SoftDelete:    true,
-		HasExpireTime: true,
-		HasETag:       true,
+		MessageName:     "Coupon",
+		SoftDelete:      true,
+		HasExpireTime:   true,
+		HasETag:         true,
+		ResourcePattern: "coupons/{coupon}",
 		Fields: []entFieldInfo{
 			{Name: "name", SnakeName: "name", EntType: "String", OutputOnly: true},
 			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
@@ -92,7 +93,13 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 		"entrepo.FilterPredicate(opts.Filter, CouponEntColumns, CouponEntJSONColumns)",
 		"entpredicate.Coupon(pred)",
 		"func fromEntCoupon(e *ent.Coupon) *Coupon",
-		"Name: e.Name", // OUTPUT_ONLY scalar still surfaced on read (not written)
+		// AIP-122: name is OUTPUT_ONLY + DERIVED from id — recomputed on read via the
+		// generated helper, never read from a stored column (it is not stored).
+		"p.Name = FormatCouponName(e.ID)",
+		"const CouponNamePattern = \"coupons/{coupon}\"",
+		"func FormatCouponName(id string) string",
+		"func ParseCouponName(name string) (string, error)",
+		`resourcename.Format(CouponNamePattern, map[string]string{"coupon": id})`,
 		"Etag: e.Etag",
 		"p.DeleteTime = timestamppb.New(*e.DeleteTime)",
 		"p.ExpireTime = timestamppb.New(*e.ExpireTime)",
@@ -118,6 +125,10 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 	// OUTPUT_ONLY `name` must NOT be written by Create/Update (client can't set it).
 	if strings.Contains(out, "SetName(") {
 		t.Error("OUTPUT_ONLY field 'name' must not be written by the adapter")
+	}
+	// The derived AIP-122 name is never stored, so it must NOT be read from a column.
+	if strings.Contains(out, "Name: e.Name") || strings.Contains(out, "p.Name = e.Name") {
+		t.Error("derived AIP-122 name must be recomputed from id, not read from a stored column")
 	}
 }
 
