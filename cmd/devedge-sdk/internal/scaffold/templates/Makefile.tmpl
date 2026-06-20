@@ -1,8 +1,13 @@
 .PHONY: tools generate bootstrap build test run api-lint api-breaking api-release
 
-# Pinned SDK version that supplies the codegen plugins and the runtime.
-# Keep this aligned with the `github.com/infobloxopen/devedge-sdk` require in go.mod.
-SDK_VERSION ?= {{.SDKVersion}}
+# SDK version that supplies the codegen plugins. go.mod is the SINGLE SOURCE OF
+# TRUTH: this resolves to the `github.com/infobloxopen/devedge-sdk` require in
+# go.mod at make-time, so `make tools` can never install plugins that disagree
+# with the project's own SDK dependency. Bump the SDK by editing go.mod (e.g.
+# `go get github.com/infobloxopen/devedge-sdk@vX.Y.Z`), then `make tools`.
+# The fallback (the version this project was scaffolded with) is used only when
+# `go list` can't resolve it yet — e.g. before `go mod download` on a fresh clone.
+SDK_VERSION ?= $(shell go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/infobloxopen/devedge-sdk 2>/dev/null || echo {{.SDKVersion}})
 
 # Install the protoc plugins `buf generate` needs onto PATH (GOPATH/bin):
 #   - the SDK plugins, pinned to SDK_VERSION;

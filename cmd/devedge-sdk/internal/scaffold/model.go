@@ -19,8 +19,14 @@ const (
 
 // fallbackSDKVersion is used when the running binary has no embedded module
 // version (e.g. built with `go build` from a checkout rather than `go install
-// ...@vX`). Keep aligned with the latest released SDK tag.
-const fallbackSDKVersion = "v0.11.0"
+// ...@vX`). It pins the generated project's go.mod devedge-sdk require AND the
+// scaffold's first plugin install at the SAME version, so a brand-new project is
+// internally consistent. After scaffolding, the generated Makefile derives
+// SDK_VERSION from go.mod at make-time (go.mod is the single source of truth), so
+// this constant only ever sets the INITIAL pin — but a stale value would still
+// pin a new project to an old SDK, so keep it aligned with the latest released
+// SDK tag (bump on every release).
+const fallbackSDKVersion = "v0.16.0"
 
 // Pinned dependency versions for the generated go.mod. These mirror the versions
 // the SDK's own testdata modules build against; `go mod tidy` reconciles indirects.
