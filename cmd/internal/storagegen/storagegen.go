@@ -38,12 +38,12 @@ func Mappable(f Field) bool {
 	switch {
 	case f.IsRelationship:
 		return true // ent edge / GORM association
+	case f.OutputOnly:
+		return true // server-computed/never-written; surfaced on read if derivable or via owned hook
 	case f.IsMessage || f.IsRepeated || f.IsEnum:
 		return false // nested non-relationship message, repeated scalar, or enum
 	case f.IsID, f.IsTenant, f.IsSecret, f.IsTags, f.IsScalarFK:
 		return true
-	case f.OutputOnly:
-		return true // surfaced on read, not written (e.g. name/etag/timestamps)
 	default:
 		return f.HasColumnType // a plain scalar with a known column type
 	}

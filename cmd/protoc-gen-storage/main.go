@@ -13,8 +13,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	storagev1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
@@ -63,8 +66,20 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		if !hasID {
 			continue
 		}
+		// F027 Phase 5b multi-surface: (infoblox.storage.v1.model) binds a message to
+		// a backing storage model so several API surfaces can project ONE table.
+		// Resolve the model name now (absent/empty => the message's own name, the
+		// normal single-surface case). A surface (model != name) emits a repository
+		// adapter + projection over its owner's GORM type but NO table of its own.
+		resolvedModel := name
+		if opts := m.Desc.Options(); opts != nil && proto.HasExtension(opts, storagev1.E_Model) {
+			if mv, _ := proto.GetExtension(opts, storagev1.E_Model).(string); mv != "" {
+				resolvedModel = mv
+			}
+		}
 		msg := messageInfo{
 			MessageName:  name,
+			Model:        resolvedModel,
 			PbPkgName:    string(f.GoPackageName),
 			PbImportPath: string(f.GoImportPath),
 		}
@@ -161,6 +176,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				SnakeName:     toSnake(string(field.Desc.Name())),
 				IsRepeated:    field.Desc.IsList(),
 				IsMessage:     field.Desc.Kind() == protoreflect.MessageKind && !isStringMap,
+				IsEnum:        field.Desc.Kind() == protoreflect.EnumKind,
 				IsTags:        isStringMap,
 				IsID:          string(field.Desc.Name()) == "id",
 				GoType:        protoKindToGoType(field.Desc.Kind()),
@@ -181,6 +197,38 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		messages = append(messages, msg)
 	}
 
+	if len(messages) == 0 {
+		return
+	}
+
+	// F027 fail-closed (G-002): every resource field must be deterministically
+	// wirable into the generated repository adapter. A field with no mapping — a
+	// nested non-relationship message, a repeated non-relationship field, an enum,
+	// a non-string map — would otherwise be silently dropped. Fail generation
+	// instead, naming the field and the remedy, using the engine-neutral classifier
+	// shared with protoc-gen-ent (G-005).
+	failed := false
+	for _, msg := range messages {
+		_, unmapped := storagegen.Classify(toStorageFields(msg))
+		for _, uf := range unmapped {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s: %s", msg.MessageName, uf.Name, storagegen.Reason(uf)))
+			failed = true
+		}
+	}
+	if failed {
+		return
+	}
+
+	// F027 Phase 5b multi-surface: index every message by name so a surface can be
+	// matched to its owner, then validate the surfaces fail-closed.
+	ownerByName := make(map[string]messageInfo, len(messages))
+	for _, msg := range messages {
+		ownerByName[msg.MessageName] = msg
+	}
+	if !validateSurfaces(gen, messages, ownerByName) {
+		return
+	}
+
 	// Storage code lives in the same package as the pb types (same directory).
 	// This keeps the generated file co-located with widgets.pb.go so the GORM
 	// model can reference proto types without a package qualifier.
@@ -188,7 +236,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	for i := range messages {
 		messages[i].PbPkgName = "" // same package — no qualifier needed
 	}
-	content := renderStorageFile(string(f.GoPackageName), messages)
+	content := renderStorageFile(string(f.GoPackageName), messages, ownerByName)
 	if content == "" {
 		return
 	}
@@ -196,6 +244,72 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	outPath := f.GeneratedFilenamePrefix + ".storage.go"
 	g := gen.NewGeneratedFile(outPath, f.GoImportPath)
 	g.P(content)
+}
+
+// validateSurfaces enforces the F027 Phase 5b multi-surface contract fail-closed.
+// A SURFACE message (one whose (infoblox.storage.v1.model) names a different
+// message) projects an OWNER's table, so the generated adapter writes/reads the
+// owner's GORM columns. Returns true when all surfaces are valid.
+func validateSurfaces(gen *protogen.Plugin, messages []messageInfo, ownerByName map[string]messageInfo) bool {
+	ok := true
+	for _, msg := range messages {
+		if !msg.isSurface() {
+			continue
+		}
+		owner, found := ownerByName[msg.Model]
+		if !found {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s: (infoblox.storage.v1.model)=%q names a model with no message in this proto; declare a message %s or correct the annotation", msg.MessageName, msg.Model, msg.Model))
+			ok = false
+			continue
+		}
+		if owner.isSurface() {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s: (infoblox.storage.v1.model)=%q points at another surface; a surface must name a base model", msg.MessageName, msg.Model))
+			ok = false
+			continue
+		}
+		ownerFields := make(map[string]fieldInfo, len(owner.Fields))
+		for _, of := range owner.Fields {
+			ownerFields[of.SnakeName] = of
+		}
+		if msgHasTenantField(owner) && !msgHasTenantField(msg) {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s: a surface of the tenant-scoped model %s must include the account_id field so the adapter can scope and stamp the tenant", msg.MessageName, msg.Model))
+			ok = false
+		}
+		for _, f := range msg.Fields {
+			if f.IsID {
+				continue // every model has the id primary key
+			}
+			if f.IsRepeated || f.IsMessage {
+				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s: relationships/nested messages are not supported on a model surface; declare them on the model %s", msg.MessageName, f.Name, msg.Model))
+				ok = false
+				continue
+			}
+			of, has := ownerFields[f.SnakeName]
+			if !has {
+				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s: a surface must project a subset of model %s's fields, but %s has no field %q", msg.MessageName, f.Name, msg.Model, msg.Model, f.SnakeName))
+				ok = false
+				continue
+			}
+			if f.GoType != of.GoType || f.IsSecret != of.IsSecret || f.IsOutputOnly != of.IsOutputOnly {
+				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s conflicts with model %s.%s: a surface field must match the model column's type and secret/output classification", msg.MessageName, f.Name, msg.Model, of.Name))
+				ok = false
+			}
+		}
+		// Framework parity checks: surface flags must be compatible with owner.
+		if msg.SoftDelete && !owner.SoftDelete {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s: surface declares soft-delete but owner %s does not", msg.MessageName, msg.Model))
+			ok = false
+		}
+		if msg.HasExpireTime && !owner.HasExpireTime {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s: surface declares expire_time but owner %s does not", msg.MessageName, msg.Model))
+			ok = false
+		}
+		if msg.HasETag && !owner.HasETag {
+			gen.Error(fmt.Errorf("protoc-gen-storage: %s: surface declares etag but owner %s does not", msg.MessageName, msg.Model))
+			ok = false
+		}
+	}
+	return ok
 }
 
 func protoKindToGoType(k protoreflect.Kind) string {

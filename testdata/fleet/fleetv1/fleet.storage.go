@@ -62,8 +62,23 @@ func fromModel_Fleet(m *FleetModel) *Fleet {
 	if m.DeletedAt.Valid {
 		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
 	}
+	if FromModelFleetCustom != nil {
+		FromModelFleetCustom(m, p)
+	}
 	return p
 }
+
+// FromModelFleetCustom, if set, runs at the end of fromModel_Fleet to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelFleetCustom func(m *FleetModel, p *Fleet)
+
+// ToModelFleetOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelFleetOnCreate func(p *Fleet, m *FleetModel)
+
+// ToModelFleetOnUpdate, if set, runs in Update just before the database write.
+var ToModelFleetOnUpdate func(p *Fleet, m *FleetModel)
 
 // FleetColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var FleetColumns = map[string]string{
@@ -150,6 +165,9 @@ func (r *FleetRepository) List(ctx context.Context, opts persistence.ListOptions
 
 func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, error) {
 	m := toModel_Fleet(entity)
+	if ToModelFleetOnCreate != nil {
+		ToModelFleetOnCreate(entity, m)
+	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -164,6 +182,9 @@ func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, er
 func (r *FleetRepository) Update(ctx context.Context, key string, entity *Fleet, fieldMask ...string) (*Fleet, error) {
 	m := toModel_Fleet(entity)
 	m.ID = key
+	if ToModelFleetOnUpdate != nil {
+		ToModelFleetOnUpdate(entity, m)
+	}
 	tenantID := middleware.TenantIDFromContext(ctx)
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
@@ -353,8 +374,23 @@ func fromModel_Vehicle(m *VehicleModel) *Vehicle {
 	p.AccountId = m.AccountId
 	p.Vin = m.Vin
 	p.FleetId = m.FleetId
+	if FromModelVehicleCustom != nil {
+		FromModelVehicleCustom(m, p)
+	}
 	return p
 }
+
+// FromModelVehicleCustom, if set, runs at the end of fromModel_Vehicle to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelVehicleCustom func(m *VehicleModel, p *Vehicle)
+
+// ToModelVehicleOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelVehicleOnCreate func(p *Vehicle, m *VehicleModel)
+
+// ToModelVehicleOnUpdate, if set, runs in Update just before the database write.
+var ToModelVehicleOnUpdate func(p *Vehicle, m *VehicleModel)
 
 // VehicleColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var VehicleColumns = map[string]string{
@@ -438,6 +474,9 @@ func (r *VehicleRepository) List(ctx context.Context, opts persistence.ListOptio
 
 func (r *VehicleRepository) Create(ctx context.Context, entity *Vehicle) (*Vehicle, error) {
 	m := toModel_Vehicle(entity)
+	if ToModelVehicleOnCreate != nil {
+		ToModelVehicleOnCreate(entity, m)
+	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -452,6 +491,9 @@ func (r *VehicleRepository) Create(ctx context.Context, entity *Vehicle) (*Vehic
 func (r *VehicleRepository) Update(ctx context.Context, key string, entity *Vehicle, fieldMask ...string) (*Vehicle, error) {
 	m := toModel_Vehicle(entity)
 	m.ID = key
+	if ToModelVehicleOnUpdate != nil {
+		ToModelVehicleOnUpdate(entity, m)
+	}
 	tenantID := middleware.TenantIDFromContext(ctx)
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {

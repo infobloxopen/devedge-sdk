@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func TestRenderStorageFile_basic(t *testing.T) {
 			{Name: "weight", GoType: "int32", SnakeName: "weight"},
 		},
 	}
-	out := renderStorageFile("widgetsv1storage", []messageInfo{msg})
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg}, nil)
 
 	mustContain(t, out, "DO NOT EDIT")
 	mustContain(t, out, "package widgetsv1storage")
@@ -73,7 +74,7 @@ func TestRenderStorageFile_resourceName(t *testing.T) {
 			{Name: "display_name", GoType: "string", SnakeName: "display_name"},
 		},
 	}
-	out := renderStorageFile("widgetsv1", []messageInfo{msg})
+	out := renderStorageFile("widgetsv1", []messageInfo{msg}, nil)
 
 	mustContain(t, out, "WidgetNamePattern")
 	mustContain(t, out, `"widgets/{widget}"`)
@@ -96,7 +97,7 @@ func TestRenderStorageFile_repeatedFieldSkipped(t *testing.T) {
 			{Name: "tags", GoType: "string", SnakeName: "tags", IsRepeated: true},
 		},
 	}
-	out := renderStorageFile("foov1storage", []messageInfo{msg})
+	out := renderStorageFile("foov1storage", []messageInfo{msg}, nil)
 	mustContain(t, out, "TODO: repeated field tags skipped")
 }
 
@@ -110,12 +111,12 @@ func TestRenderStorageFile_messageFieldSkipped(t *testing.T) {
 			{Name: "meta", GoType: "*SomeMeta", SnakeName: "meta", IsMessage: true},
 		},
 	}
-	out := renderStorageFile("barv1storage", []messageInfo{msg})
+	out := renderStorageFile("barv1storage", []messageInfo{msg}, nil)
 	mustContain(t, out, "TODO: nested message meta skipped")
 }
 
 func TestRenderStorageFile_noMessages(t *testing.T) {
-	out := renderStorageFile("emptystorage", nil)
+	out := renderStorageFile("emptystorage", nil, nil)
 	if out != "" {
 		t.Fatalf("expected empty output for no messages, got:\n%s", out)
 	}
@@ -132,7 +133,7 @@ func TestRenderStorageFile_secretField(t *testing.T) {
 			{Name: "api_key", GoFieldName: "ApiKey", GoType: "string", SnakeName: "api_key", IsSecret: true},
 		},
 	}
-	out := renderStorageFile("credv1storage", []messageInfo{msg})
+	out := renderStorageFile("credv1storage", []messageInfo{msg}, nil)
 
 	// Secret import must be present.
 	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/secret"`)
@@ -172,7 +173,7 @@ func TestRenderStorageFile_noSecretNoImport(t *testing.T) {
 			{Name: "value", GoType: "string", SnakeName: "value"},
 		},
 	}
-	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	out := renderStorageFile("plainv1storage", []messageInfo{msg}, nil)
 
 	// No secret import when no secret fields.
 	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/secret"`)
@@ -195,7 +196,7 @@ func TestRenderStorageFile_tenantIsolation(t *testing.T) {
 			{Name: "value", GoType: "string", SnakeName: "value"},
 		},
 	}
-	out := renderStorageFile("recordv1storage", []messageInfo{msg})
+	out := renderStorageFile("recordv1storage", []messageInfo{msg}, nil)
 
 	// Middleware import must be present when account_id field exists.
 	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
@@ -217,7 +218,7 @@ func TestRenderStorageFile_noTenantWhenNoAccountID(t *testing.T) {
 			{Name: "name", GoType: "string", SnakeName: "name"},
 		},
 	}
-	out := renderStorageFile("simplev1storage", []messageInfo{msg})
+	out := renderStorageFile("simplev1storage", []messageInfo{msg}, nil)
 
 	// No middleware import when no account_id field and no secret fields.
 	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
@@ -237,7 +238,7 @@ func TestRenderStorageFile_lookupByHash(t *testing.T) {
 			{Name: "key_value", GoFieldName: "KeyValue", GoType: "string", SnakeName: "key_value", IsSecret: true},
 		},
 	}
-	out := renderStorageFile("kvv1storage", []messageInfo{msg})
+	out := renderStorageFile("kvv1storage", []messageInfo{msg}, nil)
 
 	// LookupByKeyValueHash method must be present.
 	mustContain(t, out, "func (r *KeyValueRepository) LookupByKeyValueHash(")
@@ -263,7 +264,7 @@ func TestRenderStorageFile_lookupByHashWithTenant(t *testing.T) {
 			{Name: "token", GoFieldName: "Token", GoType: "string", SnakeName: "token", IsSecret: true},
 		},
 	}
-	out := renderStorageFile("secretv1storage", []messageInfo{msg})
+	out := renderStorageFile("secretv1storage", []messageInfo{msg}, nil)
 
 	// LookupByTokenHash must be present.
 	mustContain(t, out, "func (r *SecretRepository) LookupByTokenHash(")
@@ -285,7 +286,7 @@ func TestRenderStorageFile_notNullField(t *testing.T) {
 			{Name: "name", GoType: "string", SnakeName: "name", NotNull: true},
 		},
 	}
-	out := renderStorageFile("thingv1storage", []messageInfo{msg})
+	out := renderStorageFile("thingv1storage", []messageInfo{msg}, nil)
 	mustContain(t, out, `gorm:"column:name;not null"`)
 }
 
@@ -298,7 +299,7 @@ func TestRenderStorageFile_uniqueField(t *testing.T) {
 			{Name: "email", GoType: "string", SnakeName: "email", Unique: true},
 		},
 	}
-	out := renderStorageFile("uniqv1storage", []messageInfo{msg})
+	out := renderStorageFile("uniqv1storage", []messageInfo{msg}, nil)
 	// No tenant column → a plain global unique index is correct.
 	mustContain(t, out, "uniqueIndex")
 	mustNotContain(t, out, "priority:")
@@ -317,7 +318,7 @@ func TestRenderStorageFile_uniqueFieldIsPerTenant(t *testing.T) {
 			{Name: "name", GoFieldName: "Name", GoType: "string", SnakeName: "name", Unique: true, NotNull: true},
 		},
 	}
-	out := renderStorageFile("destv1", []messageInfo{msg})
+	out := renderStorageFile("destv1", []messageInfo{msg}, nil)
 	// The unique field and account_id share one composite index name, with
 	// account_id as the leading column.
 	mustContain(t, out, "uniqueIndex:ux_destination_account_name,priority:2")
@@ -345,7 +346,7 @@ func softDeleteUniqueStorageMsg() messageInfo {
 // (WHERE deleted_at IS NULL) — no discriminator column.
 func TestRenderStorageFile_softDeleteUnique_partial(t *testing.T) {
 	targetDialect = "postgres"
-	out := renderStorageFile("orderv1", []messageInfo{softDeleteUniqueStorageMsg()})
+	out := renderStorageFile("orderv1", []messageInfo{softDeleteUniqueStorageMsg()}, nil)
 	// The partial predicate rides the GORM index `option` (the `where` tag is
 	// dropped by GORM's migrator), on the leading account_id (priority 1) tag.
 	mustContain(t, out, "uniqueIndex:ux_order_account_source_ref,priority:1,option:WHERE deleted_at IS NULL")
@@ -357,7 +358,7 @@ func TestRenderStorageFile_softDeleteUnique_partial(t *testing.T) {
 func TestRenderStorageFile_softDeleteUnique_sentinel(t *testing.T) {
 	targetDialect = "mysql"
 	defer func() { targetDialect = "postgres" }()
-	out := renderStorageFile("orderv1", []messageInfo{softDeleteUniqueStorageMsg()})
+	out := renderStorageFile("orderv1", []messageInfo{softDeleteUniqueStorageMsg()}, nil)
 	mustContain(t, out, "column:soft_delete_key")
 	mustContain(t, out, "uniqueIndex:ux_order_account_source_ref,priority:3")
 	mustContain(t, out, `"soft_delete_key": key`)  // Delete stamps the id
@@ -371,7 +372,7 @@ func TestRenderStorageFile_uniqueNoSoftDelete_unchanged(t *testing.T) {
 	msg.SoftDelete = false
 	for _, d := range []string{"postgres", "mysql"} {
 		targetDialect = d
-		out := renderStorageFile("orderv1", []messageInfo{msg})
+		out := renderStorageFile("orderv1", []messageInfo{msg}, nil)
 		mustContain(t, out, "uniqueIndex:ux_order_account_source_ref,priority:2")
 		mustNotContain(t, out, "soft_delete_key")
 		mustNotContain(t, out, "option:WHERE deleted_at IS NULL")
@@ -391,7 +392,7 @@ func TestRenderStorageFile_mapsConstraintErrors(t *testing.T) {
 			{Name: "name", GoFieldName: "Name", GoType: "string", SnakeName: "name", Unique: true},
 		},
 	}
-	out := renderStorageFile("destv1", []messageInfo{msg})
+	out := renderStorageFile("destv1", []messageInfo{msg}, nil)
 	// At least the Create and the field-mask + no-mask Update paths are guarded.
 	if n := strings.Count(out, "persistence.ConstraintError(err)"); n < 3 {
 		t.Errorf("expected ConstraintError check on Create + both Update paths (>=3), got %d", n)
@@ -408,7 +409,7 @@ func TestRenderStorageFile_hasOneMessageField(t *testing.T) {
 				IsMessage: true, HasOne: &fieldv1.HasOne{ForeignKey: "order_id"}},
 		},
 	}
-	out := renderStorageFile("orderv1storage", []messageInfo{msg})
+	out := renderStorageFile("orderv1storage", []messageInfo{msg}, nil)
 	// Should emit a concrete pointer association to the related GORM model
 	// (issue 013: never interface{}), with a Go-name foreign key.
 	mustNotContain(t, out, "TODO: nested message address skipped")
@@ -427,7 +428,7 @@ func TestRenderStorageFile_hasManyRepeatedField(t *testing.T) {
 				IsRepeated: true, HasMany: &fieldv1.HasMany{ForeignKey: "post_id"}},
 		},
 	}
-	out := renderStorageFile("postv1storage", []messageInfo{msg})
+	out := renderStorageFile("postv1storage", []messageInfo{msg}, nil)
 	// Should emit a slice of the concrete related model, not []interface{}.
 	mustNotContain(t, out, "TODO: repeated field comments skipped")
 	mustContain(t, out, `Comments []*CommentModel`)
@@ -449,7 +450,7 @@ func TestRenderStorageFile_belongsToDedupesScalarFK(t *testing.T) {
 				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "destination_id"}},
 		},
 	}
-	out := renderStorageFile("exportsv1", []messageInfo{msg})
+	out := renderStorageFile("exportsv1", []messageInfo{msg}, nil)
 	// Concrete association, keyed by the existing scalar FK's Go field name.
 	mustContain(t, out, `Destination *DestinationModel`)
 	mustContain(t, out, `foreignKey:DestinationId`)
@@ -472,7 +473,7 @@ func TestRenderStorageFile_belongsToEmitsFKWhenNoScalar(t *testing.T) {
 				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "destination_id"}},
 		},
 	}
-	out := renderStorageFile("exportsv1", []messageInfo{msg})
+	out := renderStorageFile("exportsv1", []messageInfo{msg}, nil)
 	mustContain(t, out, `Destination *DestinationModel`)
 	mustContain(t, out, "DestinationId string `gorm:\"column:destination_id\"`")
 }
@@ -488,7 +489,7 @@ func TestRenderStorageFile_softDelete(t *testing.T) {
 			{Name: "name", GoType: "string", SnakeName: "name"},
 		},
 	}
-	out := renderStorageFile("widgetsv1storage", []messageInfo{msg})
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg}, nil)
 
 	// AC-001: soft-delete model carries gorm.DeletedAt.
 	mustContain(t, out, "gorm.DeletedAt")
@@ -530,7 +531,7 @@ func TestRenderStorageFile_expireTime(t *testing.T) {
 			{Name: "label", GoType: "string", SnakeName: "label"},
 		},
 	}
-	out := renderStorageFile("apikeyv1storage", []messageInfo{msg})
+	out := renderStorageFile("apikeyv1storage", []messageInfo{msg}, nil)
 
 	// Model has both DeletedAt and ExpireTime.
 	mustContain(t, out, "gorm.DeletedAt")
@@ -574,7 +575,7 @@ func TestRenderStorageFile_etagBridgedAndStamped(t *testing.T) {
 			{Name: "title", GoType: "string", SnakeName: "title"},
 		},
 	}
-	out := renderStorageFile("docv1storage", []messageInfo{msg})
+	out := renderStorageFile("docv1storage", []messageInfo{msg}, nil)
 
 	// fromModel surfaces the stored ETag.
 	mustContain(t, out, "p.Etag = m.ETag")
@@ -597,7 +598,7 @@ func TestRenderStorageFile_noETagNoStamp(t *testing.T) {
 			{Name: "name", GoType: "string", SnakeName: "name"},
 		},
 	}
-	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	out := renderStorageFile("plainv1storage", []messageInfo{msg}, nil)
 	mustNotContain(t, out, "etag.New()")
 	mustNotContain(t, out, "p.Etag = m.ETag")
 	mustNotContain(t, out, "middleware/etag")
@@ -613,7 +614,7 @@ func TestRenderStorageFile_softDeleteWithTenant(t *testing.T) {
 			{Name: "value", GoType: "string", SnakeName: "value"},
 		},
 	}
-	out := renderStorageFile("recordv1storage", []messageInfo{msg})
+	out := renderStorageFile("recordv1storage", []messageInfo{msg}, nil)
 
 	// Undelete has tenant scoping BEFORE the deleted_at predicate.
 	mustContain(t, out, "func (r *RecordRepository) Undelete(")
@@ -641,7 +642,7 @@ func TestRenderStorageFile_updatePersistsZeroValues(t *testing.T) {
 			{Name: "weight", GoFieldName: "Weight", GoType: "int32", SnakeName: "weight"},
 		},
 	}
-	out := renderStorageFile("widgetsv1storage", []messageInfo{msg})
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg}, nil)
 
 	// No-field-mask branch updates via a map of every writable column.
 	mustContain(t, out, "updates := map[string]interface{}{")
@@ -665,7 +666,7 @@ func TestRenderStorageFile_updateZeroValuesPreservesSecret(t *testing.T) {
 			{Name: "token", GoFieldName: "Token", GoType: "string", SnakeName: "token", IsSecret: true},
 		},
 	}
-	out := renderStorageFile("credv1storage", []messageInfo{msg})
+	out := renderStorageFile("credv1storage", []messageInfo{msg}, nil)
 
 	mustContain(t, out, "updates := map[string]interface{}{")
 	mustContain(t, out, `"label": m.Label,`)
@@ -692,7 +693,7 @@ func TestRenderStorageFile_updateNeverWritesTenantKey(t *testing.T) {
 			{Name: "subject", GoFieldName: "Subject", GoType: "string", SnakeName: "subject"},
 		},
 	}
-	out := renderStorageFile("campaignv1storage", []messageInfo{msg})
+	out := renderStorageFile("campaignv1storage", []messageInfo{msg}, nil)
 
 	// No-field-mask map writes the regular column but NOT the tenant key.
 	mustContain(t, out, "updates := map[string]interface{}{")
@@ -721,7 +722,7 @@ func TestRenderStorageFile_tagsField(t *testing.T) {
 			{Name: "tags", GoFieldName: "Tags", SnakeName: "tags", IsTags: true},
 		},
 	}
-	out := renderStorageFile("resv1storage", []messageInfo{msg})
+	out := renderStorageFile("resv1storage", []messageInfo{msg}, nil)
 
 	// types import + a JSONB column backed by types.Tags.
 	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/types"`)
@@ -753,7 +754,7 @@ func TestRenderStorageFile_tagsColumnTypeOverride(t *testing.T) {
 			{Name: "labels", GoFieldName: "Labels", SnakeName: "labels", IsTags: true, ColumnType: "json", ColumnName: "lbls"},
 		},
 	}
-	out := renderStorageFile("resv1storage", []messageInfo{msg})
+	out := renderStorageFile("resv1storage", []messageInfo{msg}, nil)
 	mustContain(t, out, "column:lbls;type:json")
 }
 
@@ -767,7 +768,7 @@ func TestRenderStorageFile_noTagsNoImport(t *testing.T) {
 			{Name: "name", GoType: "string", SnakeName: "name"},
 		},
 	}
-	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	out := renderStorageFile("plainv1storage", []messageInfo{msg}, nil)
 	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/types"`)
 	mustNotContain(t, out, "types.Tags")
 }
@@ -783,7 +784,7 @@ func TestRenderStorageFile_tagsFiltering(t *testing.T) {
 			{Name: "tags", GoFieldName: "Tags", SnakeName: "tags", IsTags: true},
 		},
 	}
-	out := renderStorageFile("resv1storage", []messageInfo{msg})
+	out := renderStorageFile("resv1storage", []messageInfo{msg}, nil)
 	mustContain(t, out, "var ResourceJSONColumns = map[string]string{")
 	mustContain(t, out, `"tags": "tags",`)
 	mustContain(t, out, "filter.WithJSONColumns(ResourceJSONColumns)")
@@ -801,10 +802,84 @@ func TestRenderStorageFile_noTagsPlainFilter(t *testing.T) {
 			{Name: "name", GoType: "string", SnakeName: "name"},
 		},
 	}
-	out := renderStorageFile("plainv1storage", []messageInfo{msg})
+	out := renderStorageFile("plainv1storage", []messageInfo{msg}, nil)
 	mustContain(t, out, "filter.Parse(opts.Filter, PlainColumns)")
 	mustNotContain(t, out, "WithJSONColumns")
 	mustNotContain(t, out, "JSONColumns")
+}
+
+// TestRenderStorageFile_multiSurface is the F027 Phase 5b gate at the render
+// level: a SURFACE message (CouponSummary, Model="Coupon") projecting a subset
+// of a tenant + soft-delete + secret owner (Coupon) generates:
+//
+//   (a) valid Go (go/format.Source gate)
+//   (b) type CouponModel struct (owner struct) but NOT type CouponSummaryModel struct
+//   (c) func NewCouponSummaryRepository
+//   (d) func toModel_CouponSummary(...) *CouponModel and func fromModel_CouponSummary(m *CouponModel)
+//   (e) surface CRUD uses CouponModel (var models []CouponModel appears for List)
+//   (f) owned hook var FromModelCouponSummaryCustom
+//
+// Also checks that single-surface output (existing Coupon) is unaffected.
+func TestRenderStorageFile_multiSurface(t *testing.T) {
+	owner := messageInfo{
+		MessageName: "Coupon",
+		Model:       "Coupon",
+		SoftDelete:  true,
+		Fields: []fieldInfo{
+			{Name: "id", GoFieldName: "Id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "code", GoFieldName: "Code", GoType: "string", SnakeName: "code", Unique: true, NotNull: true},
+			{Name: "discount_bps", GoFieldName: "DiscountBps", GoType: "int32", SnakeName: "discount_bps"},
+			{Name: "signing_key", GoFieldName: "SigningKey", GoType: "string", SnakeName: "signing_key", IsSecret: true},
+		},
+	}
+	surface := messageInfo{
+		MessageName: "CouponSummary",
+		Model:       "Coupon", // a surface over Coupon — no table of its own
+		Fields: []fieldInfo{
+			{Name: "id", GoFieldName: "Id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "code", GoFieldName: "Code", GoType: "string", SnakeName: "code"},
+		},
+	}
+	ownerByName := map[string]messageInfo{
+		"Coupon":        owner,
+		"CouponSummary": owner, // surface maps to owner
+	}
+	out := renderStorageFile("couponv1", []messageInfo{owner, surface}, ownerByName)
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+
+	// (a) strongest check: valid Go syntax
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+
+	// (b) owner struct present; surface struct absent
+	mustContain(t, out, "type CouponModel struct")
+	mustNotContain(t, out, "type CouponSummaryModel struct")
+
+	// (c) surface constructor present
+	mustContain(t, out, "func NewCouponSummaryRepository(")
+
+	// (d) toModel/fromModel use the owner model type for the surface
+	mustContain(t, out, "func toModel_CouponSummary(p *CouponSummary) *CouponModel")
+	mustContain(t, out, "func fromModel_CouponSummary(m *CouponModel) *CouponSummary")
+
+	// (e) CRUD for the surface uses CouponModel (List declares []CouponModel, BatchGet too)
+	if n := strings.Count(out, "var models []CouponModel"); n < 2 {
+		t.Errorf("expected var models []CouponModel at least 2 times (owner+surface List), got %d", n)
+	}
+	mustNotContain(t, out, "CouponSummaryModel")
+
+	// (f) owned hook
+	mustContain(t, out, "var FromModelCouponSummaryCustom func(")
+
+	// Also check single-surface (owner) still works
+	mustContain(t, out, "func NewCouponRepository(")
+	mustContain(t, out, "func toModel_Coupon(p *Coupon) *CouponModel")
+	mustContain(t, out, "func fromModel_Coupon(m *CouponModel) *Coupon")
 }
 
 func mustContain(t *testing.T, s, substr string) {

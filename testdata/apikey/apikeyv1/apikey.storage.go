@@ -85,8 +85,23 @@ func fromModel_APIKey(m *APIKeyModel) *APIKey {
 		p.ExpireTime = timestamppb.New(m.ExpireTime.Time)
 	}
 	p.Etag = m.ETag
+	if FromModelAPIKeyCustom != nil {
+		FromModelAPIKeyCustom(m, p)
+	}
 	return p
 }
+
+// FromModelAPIKeyCustom, if set, runs at the end of fromModel_APIKey to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelAPIKeyCustom func(m *APIKeyModel, p *APIKey)
+
+// ToModelAPIKeyOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelAPIKeyOnCreate func(p *APIKey, m *APIKeyModel)
+
+// ToModelAPIKeyOnUpdate, if set, runs in Update just before the database write.
+var ToModelAPIKeyOnUpdate func(p *APIKey, m *APIKeyModel)
 
 // APIKeyColumns maps proto field names to DB column names for safe filter/order_by parsing.
 var APIKeyColumns = map[string]string{
@@ -210,6 +225,9 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 		m.KeyValueCipher = c
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
+	if ToModelAPIKeyOnCreate != nil {
+		ToModelAPIKeyOnCreate(entity, m)
+	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
@@ -236,6 +254,9 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		}
 		m.KeyValueHash = h
 		m.KeyValueCipher = c
+	}
+	if ToModelAPIKeyOnUpdate != nil {
+		ToModelAPIKeyOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
 	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
