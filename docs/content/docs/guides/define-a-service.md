@@ -237,8 +237,9 @@ make api-release    # prepare a versioned release (apx release prepare … --lif
 Or call `apx` directly: `apx lint`, `apx breaking --against HEAD`, `apx release prepare proto/<svc>/v1
 --version v1.0.0-alpha.1 --lifecycle experimental --dry-run`.
 
-- **`api-breaking`** catches an accidental breaking change before it lands. A brand-new API has nothing
-  to break against (HEAD equals the working tree), so it passes trivially; once released, compare
+- **`api-breaking`** catches an accidental breaking change before it lands. It requires an initialized
+  git repo with at least one commit — run `git init && git add . && git commit -m "initial"` first if
+  this is a fresh scaffold. After that, with no prior API tag, it passes. Once released, compare
   against the released tag instead.
 - **`api-release`** on the **ent** scaffold prints a **non-fatal `go_package` mismatch** warning — `got
   "<module>/gen/<svc>v1", expected "<module>/proto/<svc>/v1"`. It is **expected and harmless**: the
