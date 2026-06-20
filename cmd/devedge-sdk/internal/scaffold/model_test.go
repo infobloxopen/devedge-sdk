@@ -1,6 +1,9 @@
 package scaffold
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOptionsValidate(t *testing.T) {
 	tests := []struct {
@@ -76,6 +79,54 @@ func TestOptionsValidate(t *testing.T) {
 func TestSDKVersionResolves(t *testing.T) {
 	if v := resolveSDKVersion(); v == "" {
 		t.Fatal("resolveSDKVersion returned empty")
+	}
+}
+
+// TestMakefileSDKVersionFromGoMod is the finding-051 (#61) regression: the
+// generated Makefile must DERIVE SDK_VERSION from the project's go.mod at
+// make-time (go list -m), so `make tools` can never install plugins that lag the
+// project's own devedge-sdk require — rather than baking the CLI binary's version
+// in as a literal pin. The scaffold-time version is permitted only as the `echo`
+// fallback when `go list` can't resolve it yet (fresh clone, pre-download).
+func TestMakefileSDKVersionFromGoMod(t *testing.T) {
+	for _, backend := range []Backend{BackendGORM, BackendEnt} {
+		t.Run(string(backend), func(t *testing.T) {
+			m, err := Options{Service: "orders", Resource: "Order", Backend: backend}.Validate()
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			out, err := renderTemplate("Makefile.tmpl", m)
+			if err != nil {
+				t.Fatalf("render Makefile.tmpl: %v", err)
+			}
+			mk := string(out)
+
+			var sdkLine string
+			for _, ln := range strings.Split(mk, "\n") {
+				if strings.HasPrefix(ln, "SDK_VERSION") {
+					sdkLine = ln
+					break
+				}
+			}
+			if sdkLine == "" {
+				t.Fatalf("no SDK_VERSION assignment in rendered Makefile:\n%s", mk)
+			}
+
+			// Must derive from go.mod via `go list -m`, not a baked literal pin.
+			if !strings.Contains(sdkLine,
+				"go list -m -f '{{.Version}}' github.com/infobloxopen/devedge-sdk") {
+				t.Errorf("SDK_VERSION must derive from go.mod via `go list -m`, got:\n%s", sdkLine)
+			}
+			// The scaffold-time version may appear ONLY as the `echo` fallback.
+			if strings.Contains(sdkLine, m.SDKVersion) && !strings.Contains(sdkLine, "echo "+m.SDKVersion) {
+				t.Errorf("scaffold-time version %q must appear only as the `echo` fallback, got:\n%s", m.SDKVersion, sdkLine)
+			}
+			// `make tools` must install the plugins at $(SDK_VERSION) — i.e. the
+			// go.mod-derived value — not at a hardcoded version.
+			if !strings.Contains(mk, "protoc-gen-svc@$(SDK_VERSION)") {
+				t.Errorf("`make tools` must install SDK plugins at $(SDK_VERSION):\n%s", mk)
+			}
+		})
 	}
 }
 

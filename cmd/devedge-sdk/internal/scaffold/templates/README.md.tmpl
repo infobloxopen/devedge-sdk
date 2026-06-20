@@ -7,8 +7,10 @@
   carries an `(infoblox.authz.v1.rule)`; the server asserts at boot that all methods are declared and
   refuses to start otherwise (fail-closed authz).
 - **Private implementation:** the models, repository, service registration, and gateway are **generated**
-  from the proto by `buf generate` (the devedge-sdk plugins, pinned to SDK `{{.SDKVersion}}`) into `gen/`.
-  Engine ({{.Backend}}) dependencies live only in this module's `go.mod`.
+  from the proto by `buf generate` (the devedge-sdk plugins) into `gen/`. The plugin version `make tools`
+  installs is derived from the `github.com/infobloxopen/devedge-sdk` require in `go.mod` (the single
+  source of truth) — bump the SDK with `go get github.com/infobloxopen/devedge-sdk@vX.Y.Z`, then
+  re-run `make tools`. Engine ({{.Backend}}) dependencies live only in this module's `go.mod`.
 
 ## Fresh clone — bootstrap first
 
