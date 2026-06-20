@@ -107,7 +107,7 @@ func TestRenderEntRepository_tagsInBatchUpdate(t *testing.T) {
 			{Name: "tags", SnakeName: "tags", IsTags: true},
 		},
 	}
-	out := renderEntRepository(msg, "resv1", "example/res/v1")
+	out := renderEntRepository(msg, msg, "resv1", "example/res/v1")
 	mustContain(t, out, "u = u.SetTags(it.Entity.GetTags())")
 }
 
@@ -351,7 +351,7 @@ func TestRenderEntRepository(t *testing.T) {
 			{Name: "label", SnakeName: "label", EntType: "String"},
 		},
 	}
-	out := renderEntRepository(msg, "apikeyv1", "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1")
+	out := renderEntRepository(msg, msg, "apikeyv1", "github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1")
 
 	mustContain(t, out, "package apikeyv1")
 	mustContain(t, out, `ent "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent"`)

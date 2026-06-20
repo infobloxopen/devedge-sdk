@@ -74,11 +74,30 @@ func resourcenameIDVarName(pattern string) string {
 // entMessageInfo describes a proto resource message for ent schema generation.
 type entMessageInfo struct {
 	MessageName     string // Go message name (e.g. "APIKey")
+	Model           string // resolved (infoblox.storage.v1.model): the backing storage model name (== MessageName for an owner/single-surface resource; the OWNER's name for a surface)
 	Fields          []entFieldInfo
 	SoftDelete      bool   // true when the message has a delete_time OUTPUT_ONLY Timestamp field (AIP-148)
 	HasExpireTime   bool   // true when the message has an expire_time OUTPUT_ONLY Timestamp field (AIP-148)
 	HasETag         bool   // true when the message has a string `etag` field (AIP-154); supplied by EtagMixin
 	ResourcePattern string // AIP-122 resource name pattern from (google.api.resource), e.g. "apikeys/{api_key}"
+}
+
+// isSurface reports whether msg is a projection over ANOTHER message's storage
+// model — its (infoblox.storage.v1.model) names a different message (F027 Phase
+// 5b). A surface emits a repository adapter + projection over the owner's ent
+// type but no schema/table of its own.
+func (msg entMessageInfo) isSurface() bool {
+	return msg.Model != "" && msg.Model != msg.MessageName
+}
+
+// modelType returns the ent type backing msg: its resolved model. For an owner /
+// single-surface resource this is its own name; for a surface it is the owner
+// message's name — the ent struct, client field and predicate package it projects.
+func (msg entMessageInfo) modelType() string {
+	if msg.Model == "" {
+		return msg.MessageName
+	}
+	return msg.Model
 }
 
 // msgHasResourceName reports whether the message participates in AIP-122 resource
@@ -516,6 +535,12 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 // query types. Returns "" for messages that are neither tenant-scoped nor
 // soft-deletable.
 func renderEntFilterers(msg entMessageInfo, goImportPath string) string {
+	// A surface projects the owner's ent query type; the owner already emits these
+	// filterers on it. Re-emitting them here would redeclare the same method on the
+	// same <Model>Query type (same package ent) — a compile error. Skip (F027 5b).
+	if msg.isSurface() {
+		return ""
+	}
 	hasTenant := msgHasTenantField(msg)
 	soft := msg.SoftDelete
 	if !hasTenant && !soft {
@@ -630,15 +655,22 @@ func entSetterGoName(snake string) string {
 // Requires hand-written New<R>EntRepository and fromEnt<R> in the proto's Go
 // package (the standard ent wiring convention). Returns "" for non-resource
 // messages (no fields).
-func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) string {
+func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goImportPath string) string {
 	if len(msg.Fields) == 0 {
 		return ""
 	}
-	res := msg.MessageName        // e.g. "APIKey"
-	lower := strings.ToLower(res) // ent predicate pkg + helper prefix, e.g. "apikey"
-	hasTenant := msgHasTenantField(msg)
+	// res names the proto/surface type (wrapper type, constructors, domain type,
+	// fromEnt<res> and the per-surface InMask helper); model is the ent type backing
+	// it — for a SURFACE the owner, so its client, predicate package and transaction
+	// builders. Mutation guards (tenant, soft-delete) follow the OWNER's table; the
+	// mask-driven writable/secret fields follow the SURFACE's own fields (F027 5b).
+	res := msg.MessageName
+	model := owner.MessageName
+	lower := strings.ToLower(model)   // ent predicate pkg, e.g. "coupon"
+	maskLower := strings.ToLower(res) // per-surface InMask helper prefix (unique per surface)
+	hasTenant := msgHasTenantField(owner)
 	hasSecret := msgHasSecretField(msg)
-	soft := msg.SoftDelete
+	soft := owner.SoftDelete
 
 	entImport := path.Dir(goImportPath) + "/ent"
 	entPredImport := entImport + "/" + lower
@@ -704,14 +736,14 @@ func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) strin
 	}
 
 	// Mask helper.
-	fmt.Fprintf(&b, "func %sInMask(mask []string, field string) bool {\n", lower)
+	fmt.Fprintf(&b, "func %sInMask(mask []string, field string) bool {\n", maskLower)
 	b.WriteString("\tif len(mask) == 0 {\n\t\treturn true\n\t}\n")
 	b.WriteString("\tfor _, m := range mask {\n\t\tif m == field {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\n")
 
 	// BatchGet — rides the tenant + soft-delete query interceptors automatically.
 	fmt.Fprintf(&b, "func (r *%sEntRepository) BatchGet(ctx context.Context, keys []string) ([]*%s, error) {\n", res, res)
 	fmt.Fprintf(&b, "\tif len(keys) == 0 {\n\t\treturn []*%s{}, nil\n\t}\n", res)
-	fmt.Fprintf(&b, "\trows, err := r.client.%s.Query().Where(ent%s.IDIn(keys...)).All(ctx)\n", res, lower)
+	fmt.Fprintf(&b, "\trows, err := r.client.%s.Query().Where(ent%s.IDIn(keys...)).All(ctx)\n", model, lower)
 	fmt.Fprintf(&b, "\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"batch get %s: %%w\", err)\n\t}\n", lower)
 	fmt.Fprintf(&b, "\tbyID := make(map[string]*%s, len(rows))\n", res)
 	fmt.Fprintf(&b, "\tfor _, e := range rows {\n\t\tbyID[e.ID] = fromEnt%s(e)\n\t}\n", res)
@@ -729,7 +761,7 @@ func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) strin
 	b.WriteString("\ttx, err := r.client.Tx(ctx)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
 	fmt.Fprintf(&b, "\tout := make([]*%s, 0, len(items))\n", res)
 	b.WriteString("\tfor _, it := range items {\n")
-	fmt.Fprintf(&b, "\t\tu := tx.%s.UpdateOneID(it.Key)\n", res)
+	fmt.Fprintf(&b, "\t\tu := tx.%s.UpdateOneID(it.Key)\n", model)
 	if hasTenant {
 		fmt.Fprintf(&b, "\t\tif tenantID != \"\" {\n\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n\t\t}\n", lower)
 	}
@@ -739,12 +771,12 @@ func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) strin
 	for _, f := range writable {
 		getName := entGoName(f.SnakeName)       // protoc-gen-go getter (no initialisms)
 		setName := entSetterGoName(f.SnakeName) // ent setter (applies initialisms)
-		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) {\n\t\t\tu = u.Set%s(it.Entity.Get%s())\n\t\t}\n", lower, f.SnakeName, setName, getName)
+		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) {\n\t\t\tu = u.Set%s(it.Entity.Get%s())\n\t\t}\n", maskLower, f.SnakeName, setName, getName)
 	}
 	for _, f := range secrets {
 		getName := entGoName(f.SnakeName)
 		setName := entSetterGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) && it.Entity.Get%s() != \"\" {\n", lower, f.SnakeName, getName)
+		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) && it.Entity.Get%s() != \"\" {\n", maskLower, f.SnakeName, getName)
 		fmt.Fprintf(&b, "\t\t\th, herr := r.enc.Hash(ctx, it.Entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\tif herr != nil {\n\t\t\t\t_ = tx.Rollback()\n\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\tc, cerr := r.enc.Encrypt(ctx, it.Entity.Get%s())\n", getName)
@@ -772,14 +804,14 @@ func renderEntRepository(msg entMessageInfo, pkgName, goImportPath string) strin
 	}
 	b.WriteString("\ttx, err := r.client.Tx(ctx)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
 	if soft {
-		fmt.Fprintf(&b, "\tupd := tx.%s.Update().Where(ent%s.IDIn(uniq...))\n", res, lower)
+		fmt.Fprintf(&b, "\tupd := tx.%s.Update().Where(ent%s.IDIn(uniq...))\n", model, lower)
 		if hasTenant {
 			fmt.Fprintf(&b, "\tif tenantID != \"\" {\n\t\tupd = upd.Where(ent%s.AccountID(tenantID))\n\t}\n", lower)
 		}
 		fmt.Fprintf(&b, "\tupd = upd.Where(ent%s.DeleteTimeIsNil())\n", lower)
 		b.WriteString("\tn, derr := upd.SetDeleteTime(time.Now()).Save(ctx)\n")
 	} else {
-		fmt.Fprintf(&b, "\tdel := tx.%s.Delete().Where(ent%s.IDIn(uniq...))\n", res, lower)
+		fmt.Fprintf(&b, "\tdel := tx.%s.Delete().Where(ent%s.IDIn(uniq...))\n", model, lower)
 		if hasTenant {
 			fmt.Fprintf(&b, "\tif tenantID != \"\" {\n\t\tdel = del.Where(ent%s.AccountID(tenantID))\n\t}\n", lower)
 		}
@@ -895,25 +927,37 @@ func msgForeignKeyFields(msg entMessageInfo) map[string]bool {
 // mutations), the secret hash/cipher block, and AIP-160 filter / paging wired from
 // the generated <R>EntColumns maps. Output equivalence with the prior hand-written
 // adapter is the bar (F027). Returns "" for non-resource messages (no fields).
-func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) string {
+func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goImportPath string) string {
 	if len(msg.Fields) == 0 {
 		return ""
 	}
-	res := msg.MessageName        // e.g. "APIKey"
-	lower := strings.ToLower(res) // ent predicate pkg + helper prefix, e.g. "apikey"
-	hasTenant := msgHasTenantField(msg)
+	// res is the proto/surface type — it names the constructor, the domain type the
+	// repository serves, the projection (fromEnt<res>), the column map and the owned
+	// hooks. model is the ent type backing it — for an owner / single-surface
+	// resource it equals res; for a SURFACE (F027 5b) it is the owner message, so the
+	// adapter reads/writes the owner's ent client, struct, predicate package and
+	// builders while still projecting to/from the surface proto. Mutation semantics
+	// (tenant guard, soft-delete, undelete) follow the OWNER's schema; the written
+	// and projected fields follow the SURFACE's own field set.
+	res := msg.MessageName
+	model := owner.MessageName
+	lower := strings.ToLower(model) // ent predicate pkg + ent client prefix, e.g. "coupon"
+	ownerTenant := msgHasTenantField(owner)
+	soft := owner.SoftDelete // Delete_/Undelete_ semantics follow the model's table
 	hasSecret := msgHasSecretField(msg)
 	hasTags := msgHasTags(msg)
-	soft := msg.SoftDelete
+	projectSoft := msg.SoftDelete    // fromEnt projects delete_time only if the surface declares it
+	projectExpire := msg.HasExpireTime
 
 	entImport := path.Dir(goImportPath) + "/ent"
 	entPredImport := entImport + "/" + lower
 	entPredicatePkgImport := entImport + "/predicate"
 
-	// Partition fields into plain writable scalars, foreign-key scalars (set
-	// conditionally), and secret fields. Skip id, the tenant discriminator,
-	// output-only, repeated and message fields.
-	fkSet := msgForeignKeyFields(msg)
+	// Partition the SURFACE's fields into plain writable scalars, foreign-key scalars
+	// (set conditionally), and secret fields. Skip id, the tenant discriminator,
+	// output-only, repeated and message fields. Foreign-key detection uses the
+	// OWNER's belongs_to bindings, since the columns live on the owner's table.
+	fkSet := msgForeignKeyFields(owner)
 	var plainWritable, fkWritable, secrets []entFieldInfo
 	for _, f := range msg.Fields {
 		if f.IsSecret {
@@ -945,10 +989,10 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		b.WriteString("\t\"time\"\n")
 	}
 	b.WriteString("\n")
-	if soft || msg.HasExpireTime {
+	if projectSoft || projectExpire {
 		b.WriteString("\t\"google.golang.org/protobuf/types/known/timestamppb\"\n\n")
 	}
-	if hasTenant {
+	if ownerTenant {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
 	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
@@ -987,14 +1031,14 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 
 	// ---- Create_ ----
 	fmt.Fprintf(&b, "\t\tCreate_: func(ctx context.Context, entity *%s) (*%s, error) {\n", res, res)
-	if hasTenant {
+	if ownerTenant {
 		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\t\t\tif entity.GetAccountId() == \"\" && tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")
 	}
 	// Build the create setter chain: id, account_id (if tenant), then writable.
-	b.WriteString("\t\t\tb := client." + res + ".Create().\n")
+	b.WriteString("\t\t\tb := client." + model + ".Create().\n")
 	chain := []string{"SetID(entity.GetId())"}
-	if hasTenant {
+	if ownerTenant {
 		chain = append(chain, "SetAccountID(entity.GetAccountId())")
 	}
 	for _, f := range plainWritable {
@@ -1035,7 +1079,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 
 	// ---- Get_ ----
 	fmt.Fprintf(&b, "\t\tGet_: func(ctx context.Context, key string) (*%s, error) {\n", res)
-	fmt.Fprintf(&b, "\t\t\te, err := client.%s.Get(ctx, key)\n", res)
+	fmt.Fprintf(&b, "\t\t\te, err := client.%s.Get(ctx, key)\n", model)
 	b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n\t\t\t\treturn nil, err\n\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(e), nil\n", res)
 	b.WriteString("\t\t},\n")
@@ -1045,7 +1089,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	if soft {
 		b.WriteString("\t\t\tif opts.ShowDeleted {\n\t\t\t\tctx = entrepo.WithShowDeleted(ctx)\n\t\t\t}\n")
 	}
-	fmt.Fprintf(&b, "\t\t\tq := client.%s.Query()\n", res)
+	fmt.Fprintf(&b, "\t\t\tq := client.%s.Query()\n", model)
 	b.WriteString("\t\t\tif opts.Filter != \"\" {\n")
 	if hasTags {
 		fmt.Fprintf(&b, "\t\t\t\tpred, perr := entrepo.FilterPredicate(opts.Filter, %sEntColumns, %sEntJSONColumns)\n", res, res)
@@ -1053,7 +1097,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		fmt.Fprintf(&b, "\t\t\t\tpred, perr := entrepo.FilterPredicate(opts.Filter, %sEntColumns, nil)\n", res)
 	}
 	b.WriteString("\t\t\t\tif perr != nil {\n\t\t\t\t\treturn nil, \"\", perr\n\t\t\t\t}\n")
-	fmt.Fprintf(&b, "\t\t\t\tif pred != nil {\n\t\t\t\t\tq = q.Where(entpredicate.%s(pred))\n\t\t\t\t}\n", res)
+	fmt.Fprintf(&b, "\t\t\t\tif pred != nil {\n\t\t\t\t\tq = q.Where(entpredicate.%s(pred))\n\t\t\t\t}\n", model)
 	b.WriteString("\t\t\t}\n")
 	b.WriteString("\t\t\tif opts.PageSize <= 0 {\n\t\t\t\topts.PageSize = 50\n\t\t\t}\n")
 	b.WriteString("\t\t\toffset := 0\n\t\t\tif opts.PageToken != \"\" {\n\t\t\t\tfmt.Sscanf(opts.PageToken, \"%d\", &offset) //nolint:errcheck\n\t\t\t}\n")
@@ -1067,7 +1111,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 
 	// ---- Update_ ----
 	fmt.Fprintf(&b, "\t\tUpdate_: func(ctx context.Context, key string, entity *%s, fieldMask ...string) (*%s, error) {\n", res, res)
-	fmt.Fprintf(&b, "\t\t\tu := client.%s.UpdateOneID(key)\n", res)
+	fmt.Fprintf(&b, "\t\t\tu := client.%s.UpdateOneID(key)\n", model)
 	for _, f := range plainWritable {
 		fmt.Fprintf(&b, "\t\t\tu = u.Set%s(entity.Get%s())\n", entSetterGoName(f.SnakeName), entGoName(f.SnakeName))
 	}
@@ -1076,7 +1120,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		setName := entSetterGoName(f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\tif entity.Get%s() != \"\" {\n\t\t\t\tu = u.Set%s(entity.Get%s())\n\t\t\t}\n", getName, setName, getName)
 	}
-	if hasTenant {
+	if ownerTenant {
 		// Tenant guard: ent query interceptors do NOT run for mutations, so the
 		// account_id predicate must be applied explicitly.
 		fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
@@ -1104,16 +1148,16 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	// ---- Delete_ ----
 	fmt.Fprintf(&b, "\t\tDelete_: func(ctx context.Context, key string) error {\n")
 	if soft {
-		fmt.Fprintf(&b, "\t\t\tq := client.%s.UpdateOneID(key)\n", res)
-		if hasTenant {
+		fmt.Fprintf(&b, "\t\t\tq := client.%s.UpdateOneID(key)\n", model)
+		if ownerTenant {
 			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tq = q.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
 		}
 		fmt.Fprintf(&b, "\t\t\tq = q.Where(ent%s.DeleteTimeIsNil())\n", lower)
 		b.WriteString("\t\t\terr := q.SetDeleteTime(time.Now()).Exec(ctx)\n")
 		b.WriteString("\t\t\tif ent.IsNotFound(err) {\n\t\t\t\treturn persistence.ErrNotFound\n\t\t\t}\n\t\t\treturn err\n")
 	} else {
-		fmt.Fprintf(&b, "\t\t\tdel := client.%s.Delete().Where(ent%s.ID(key))\n", res, lower)
-		if hasTenant {
+		fmt.Fprintf(&b, "\t\t\tdel := client.%s.Delete().Where(ent%s.ID(key))\n", model, lower)
+		if ownerTenant {
 			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tdel = del.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
 		}
 		b.WriteString("\t\t\tn, err := del.Exec(ctx)\n")
@@ -1125,7 +1169,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	if soft {
 		fmt.Fprintf(&b, "\t\tUndelete_: func(ctx context.Context, key string) (*%s, error) {\n", res)
 		b.WriteString("\t\t\tshowCtx := entrepo.WithShowDeleted(ctx)\n")
-		fmt.Fprintf(&b, "\t\t\texisting, err := client.%s.Query().Where(\n\t\t\t\tent%s.ID(key),\n\t\t\t\tent%s.DeleteTimeNotNil(),\n\t\t\t).Only(showCtx)\n", res, lower, lower)
+		fmt.Fprintf(&b, "\t\t\texisting, err := client.%s.Query().Where(\n\t\t\t\tent%s.ID(key),\n\t\t\t\tent%s.DeleteTimeNotNil(),\n\t\t\t).Only(showCtx)\n", model, lower, lower)
 		b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n")
 		fmt.Fprintf(&b, "\t\t\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", err)\n\t\t\t}\n", lower)
 		b.WriteString("\t\t\trestored, err := existing.Update().ClearDeleteTime().Save(ctx)\n")
@@ -1145,16 +1189,16 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	fmt.Fprintf(&b, "// FromEnt%sCustom, if set, runs at the end of fromEnt%s to populate fields the\n", res, res)
 	b.WriteString("// generator cannot derive (computed/derived values). Register it from your own\n")
 	b.WriteString("// (regen-safe) file — e.g. in an init(); this generated file never assigns it.\n")
-	fmt.Fprintf(&b, "var FromEnt%sCustom func(e *ent.%s, p *%s)\n\n", res, res, res)
+	fmt.Fprintf(&b, "var FromEnt%sCustom func(e *ent.%s, p *%s)\n\n", res, model, res)
 	fmt.Fprintf(&b, "// ToEnt%sOnCreate / ToEnt%sOnUpdate, if set, run just before the ent builder is\n", res, res)
 	b.WriteString("// saved, to set columns the generator does not (e.g. a custom-encoded field).\n")
-	fmt.Fprintf(&b, "var ToEnt%sOnCreate func(p *%s, b *ent.%sCreate)\n", res, res, res)
-	fmt.Fprintf(&b, "var ToEnt%sOnUpdate func(p *%s, u *ent.%sUpdateOne)\n\n", res, res, res)
+	fmt.Fprintf(&b, "var ToEnt%sOnCreate func(p *%s, b *ent.%sCreate)\n", res, res, model)
+	fmt.Fprintf(&b, "var ToEnt%sOnUpdate func(p *%s, u *ent.%sUpdateOne)\n\n", res, res, model)
 
 	// ---- fromEnt<R> projection ----
-	fmt.Fprintf(&b, "// fromEnt%s converts a generated ent.%s to the proto *%s. Secret fields are\n", res, res, res)
+	fmt.Fprintf(&b, "// fromEnt%s converts a generated ent.%s to the proto *%s. Secret fields are\n", res, model, res)
 	b.WriteString("// intentionally omitted — they are never returned from storage after creation.\n")
-	fmt.Fprintf(&b, "func fromEnt%s(e *ent.%s) *%s {\n", res, res, res)
+	fmt.Fprintf(&b, "func fromEnt%s(e *ent.%s) *%s {\n", res, model, res)
 	b.WriteString("\tif e == nil {\n\t\treturn nil\n\t}\n")
 	fmt.Fprintf(&b, "\tp := &%s{\n", res)
 	for _, f := range msg.Fields {
@@ -1184,7 +1228,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 	if msgHasResourceName(msg) {
 		fmt.Fprintf(&b, "\tp.Name = Format%sName(e.ID)\n", res)
 	}
-	if soft {
+	if projectSoft {
 		b.WriteString("\tif e.DeleteTime != nil {\n\t\tp.DeleteTime = timestamppb.New(*e.DeleteTime)\n\t}\n")
 	}
 	if msg.HasExpireTime {
@@ -1219,7 +1263,7 @@ func renderEntRepoAdapter(msg entMessageInfo, pkgName, goImportPath string) stri
 		b.WriteString("// Returns persistence.ErrNotFound when no record matches or hash is empty.\n")
 		fmt.Fprintf(&b, "func LookupBy%sHash(ctx context.Context, client *ent.Client, hash string) (*%s, error) {\n", setName, res)
 		b.WriteString("\tif hash == \"\" {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
-		fmt.Fprintf(&b, "\te, err := client.%s.Query().Where(ent%s.%sHash(hash)).Only(ctx)\n", res, lower, setName)
+		fmt.Fprintf(&b, "\te, err := client.%s.Query().Where(ent%s.%sHash(hash)).Only(ctx)\n", model, lower, setName)
 		b.WriteString("\tif err != nil {\n\t\tif ent.IsNotFound(err) {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n\t\treturn nil, err\n\t}\n")
 		fmt.Fprintf(&b, "\treturn fromEnt%s(e), nil\n}\n", res)
 	}
