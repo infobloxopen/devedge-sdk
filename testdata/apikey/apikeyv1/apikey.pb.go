@@ -12,7 +12,7 @@ package apikeyv1
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
 	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
-	_ "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1"
+	_ "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"

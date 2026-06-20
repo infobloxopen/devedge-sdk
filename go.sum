@@ -25,6 +25,8 @@ github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4 h1:E3wWxLO+vdyt
 github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4/go.mod h1:vc0qwvhuqC3iwRa2HRuwCPJO5nD+HMKddkamN4d4ZLY=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1 h1:PxQnST0UGUbi60tgxEVI31Dhx+4Aic7rilbGfgWpE+0=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
+github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1 h1:L9AJPsHnxLDAxxRcdMEFqYqgARNPwlK5RqGIQbkXCXk=
+github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1/go.mod h1:jPO84oxH4QgGedTEeYrgnLzCg96rlsDZoAp60JCsgkU=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=

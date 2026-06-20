@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171
 )

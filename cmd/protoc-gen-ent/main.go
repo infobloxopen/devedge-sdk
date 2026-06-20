@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
-	storagev1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/storage/v1"
+	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
