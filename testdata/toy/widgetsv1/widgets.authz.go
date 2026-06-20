@@ -5,6 +5,7 @@ package widgetsv1
 
 import (
 	authz "github.com/infobloxopen/devedge-sdk/authz"
+	slices "slices"
 )
 
 // WidgetServiceAuthzRules are the authorization rules declared on WidgetService's methods.
@@ -70,3 +71,8 @@ var WidgetServiceAuthzRules = []authz.MethodRule{
 		Resource: "widgets",
 	},
 }
+
+// AllAuthzRules is every service's rules in this file, concatenated.
+var AllAuthzRules = slices.Concat(
+	WidgetServiceAuthzRules,
+)

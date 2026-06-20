@@ -37,17 +37,26 @@ func startServer(t *testing.T) {{.GoPkg}}.{{.ServiceType}}Client {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = s.Serve(ctx) }()
+	// Serve runs the fail-closed authz completeness gate before it binds: if any
+	// registered RPC lacks an authz rule, Serve returns the gate error here (and
+	// never binds), so surface it instead of letting the client dial ":0".
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- s.Serve(ctx) }()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case err := <-serveErr:
+			t.Fatalf("server failed to start: %v", err)
+		default:
+		}
 		if a := s.GRPCAddr(); a != "" && a != ":0" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	addr := s.GRPCAddr()
-	if addr == "" {
+	if addr == "" || addr == ":0" {
 		t.Fatal("server did not bind gRPC address within 2s")
 	}
 

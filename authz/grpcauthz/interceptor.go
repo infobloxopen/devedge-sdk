@@ -60,7 +60,7 @@ type wrappedStream struct {
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
 func (c *config) authorize(ctx context.Context, fullMethod string) (context.Context, error) {
-	r, declared := c.rules[fullMethod]
+	r, declared := c.lookup(fullMethod)
 	if !declared {
 		if c.failOpen {
 			return ctx, nil
@@ -108,7 +108,7 @@ func AssertMethodsDeclared(methods []string, opts ...Option) error {
 	c := newConfig(opts...)
 	var missing []string
 	for _, m := range methods {
-		if _, ok := c.rules[m]; !ok {
+		if _, ok := c.lookup(m); !ok {
 			missing = append(missing, m)
 		}
 	}

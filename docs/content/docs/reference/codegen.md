@@ -23,50 +23,95 @@ go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@late
 ## protoc-gen-devedge-authz
 
 Emits a generated `[]authz.MethodRule` table from the method annotations — the same rules
-`authzpb.RulesFromGlobal()` would produce by reflection, but as a checked-in file. Pass it to
-`server.Config.Rules` (or `grpcauthz.WithRules`).
+`authzpb.RulesFromGlobal()` would produce by reflection, but as a checked-in file.
 
-**One rule table per service.** The plugin emits one `<Service>AuthzRules` variable per `service`
-declaration. A proto with multiple services — for example an owner `FooService` plus a
-multi-surface projection `FooSummaryService` — yields multiple tables. You must pass **all** of
-them combined to `server.Config.Rules`:
+**Rules are auto-wired; you no longer hand-list them.** The generated `Register<Service>`
+(see *protoc-gen-svc* below) calls `server.AddRules(<Service>AuthzRules...)` for you, so a service's
+rules are contributed to the server by the act of registering it. `server.Config.Rules` is now an
+**optional** additive override (merge extra rules in when you need to) — the generated path never
+needs it. The boot-time completeness gate runs at `server.Serve` over the **accumulated** rule set
+(fail-closed); see [server → Serve](../server/#serve).
 
-```go
-// Go 1.22+: slices.Concat joins multiple slices without an intermediate copy.
-import "slices"
-
-srv, err := server.New(server.Config{
-    Rules: slices.Concat(
-        myv1.FooServiceAuthzRules,
-        myv1.FooSummaryServiceAuthzRules,
-    ),
-    // ...
-})
-```
-
-For older Go or when you prefer stdlib only:
+**One rule table per service, plus an aggregate.** The plugin emits one `<Service>AuthzRules`
+variable per `service` declaration, and an `AllAuthzRules` that concatenates them (via
+`slices.Concat`) for the whole file:
 
 ```go
-rules := append(
-    append([]authz.MethodRule{}, myv1.FooServiceAuthzRules...),
-    myv1.FooSummaryServiceAuthzRules...,
-)
-srv, err := server.New(server.Config{Rules: rules, /* ... */})
+// Generated:
+var FooServiceAuthzRules = []authz.MethodRule{ /* ... */ }
+var FooSummaryServiceAuthzRules = []authz.MethodRule{ /* ... */ }
+var AllAuthzRules = slices.Concat(FooServiceAuthzRules, FooSummaryServiceAuthzRules)
 ```
 
-Omitting any service's rules leaves its methods undeclared: the boot-time
-`AssertMethodsDeclared` gate (run by the generated `Register<Service>` helper) will fail, and any
-method that does get past it is denied at runtime. See
-[server → Rules](../server/#config) for the `Config.Rules` field.
+Register each service (or use the `…WithRepository` one-liner) and its rules are contributed
+automatically — there is nothing to pass to `Config.Rules`. `AllAuthzRules` is handy when you want
+the whole file's rules in one reference (e.g. to seed a permission catalog).
 
 ## protoc-gen-svc
 
-Generates a single registration helper, `Register<Service>(s *server.Server, impl <Service>Server) error`.
-It runs the **boot-time authz completeness gate** (`grpcauthz.AssertMethodsDeclared` over
-`s.Rules()`), registers your implementation on the gRPC server, and registers the HTTP/JSON gateway
-handler — all in one call. It does **not** generate handler bodies or repository wiring: you write
-the `<Service>Server` methods over a `persistence.Repository`. (The `*.storage.go` from
-`protoc-gen-storage` gives you that repository.)
+Generates the server-package wiring for each service. For a `WidgetService` over a `Widget`
+resource it emits:
+
+- **`Register<Service>(s *server.Server, impl <Service>Server) error`** — records the service's
+  methods on the server, contributes `<Service>AuthzRules` via `server.AddRules`, registers `impl`
+  on the gRPC server, and wires the HTTP/JSON gateway. The boot-time authz completeness gate runs
+  later, at `server.Serve`, over the accumulated rule set (fail-closed).
+- **A generated default CRUD handler, `<Service>CRUDHandler`** (`DO NOT EDIT`). It embeds
+  `Unimplemented<Service>Server` and holds a `persistence.Repository[*<Resource>, string]`, with
+  one method per detected **AIP standard method** delegating to the repository:
+
+  | Detected RPC shape | Generated body |
+  |---|---|
+  | `Create<R>` (request carries the resource) | `repo.Create(ctx, req.Get<R>())` |
+  | `Get<R>` / `Delete<R>` (request keyed by `id` **or** an AIP-122 `name`) | `repo.Get`/`repo.Delete` — when keyed by `name`, parses it via `Parse<R>Name` |
+  | `List<R>s` (paging + optional `filter`/`order_by`/`show_deleted`) | `repo.List(persistence.ListOptions{...})` |
+  | `Update<R>` (resource + `update_mask`) | `repo.Update(res.Id, res, update_mask...)` |
+  | `Undelete<R>` (soft-delete resources) | `repo.Undelete` |
+
+  Detection is by request/response **shape**, not name alone, and tolerates extra optional fields.
+  An RPC matching no standard shape (e.g. an AIP-136 custom method) is **left `Unimplemented`** —
+  never silently mis-handled. Tenant stamping is the repository's job (it stamps `account_id` from
+  context on create), and `read_mask`/`field_mask` are applied by the interceptor chain, so the
+  handler does neither.
+- **`New<Service>Handler(repo) *<Service>CRUDHandler`** — returns the default handler so you can
+  embed/wrap it before registering via `Register<Service>`.
+- **`Register<Service>WithRepository(s *server.Server, repo) error`** — the one-call CRUD path
+  (`New<Service>Handler` + `Register<Service>`). A pure-CRUD service needs nothing else:
+
+  ```go
+  repo := myv1.NewWidgetRepository(db) // or NewWidgetEntRepository(client)
+  if err := myv1.RegisterWidgetServiceWithRepository(s, repo); err != nil { /* ... */ }
+  // ... s.Serve(ctx)
+  ```
+
+### Overriding a method (escape hatch)
+
+The generated handler is `DO NOT EDIT`. To add custom or non-CRUD logic, **embed**
+`<Service>CRUDHandler` in your own type and redefine only the methods you change; the rest still
+come from the generated defaults, and a custom RPC the generator left `Unimplemented` is now
+served. Regenerating codegen never disturbs your override (it lives in your file):
+
+```go
+type handler struct {
+    myv1.WidgetServiceCRUDHandler // Get/List/Update/Delete come from here
+}
+
+// Override Create to add custom logic; everything else is the generated default.
+func (h *handler) CreateWidget(ctx context.Context, req *myv1.CreateWidgetRequest) (*myv1.Widget, error) {
+    if req.Widget.Id == "" { req.Widget.Id = uuid.New().String() }
+    return h.Repo.Create(ctx, req.Widget)
+}
+
+// ArchiveWidget is an AIP-136 custom method the generated handler left Unimplemented.
+func (h *handler) ArchiveWidget(ctx context.Context, req *myv1.ArchiveWidgetRequest) (*myv1.ArchiveWidgetResponse, error) { /* ... */ }
+
+h := &handler{}
+h.WidgetServiceCRUDHandler.Repo = repo
+_ = myv1.RegisterWidgetService(s, h) // plain Register, with your overriding handler
+```
+
+Or, for a fully custom (non-CRUD) service, implement the bare `<Service>Server` interface and use
+`Register<Service>(s, custom)` directly.
 
 ## protoc-gen-storage
 

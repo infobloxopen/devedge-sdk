@@ -108,4 +108,31 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		g.P("}")
 		g.P()
 	}
+
+	// AllAuthzRules aggregates every service's rules in the file into one slice, so
+	// a multi-service file can be wired in a single reference (and Register<Svc>
+	// contributes the per-service slices it owns). Uses slices.Concat (Go 1.23).
+	names := make([]string, len(services))
+	for i, s := range services {
+		names[i] = s.name
+	}
+	slicesPkg := g.QualifiedGoIdent(protogen.GoImportPath("slices").Ident("Concat"))
+	for _, line := range allAuthzRulesLines(names, slicesPkg) {
+		g.P(line)
+	}
+}
+
+// allAuthzRulesLines renders the AllAuthzRules aggregate declaration. concatIdent
+// is the (possibly package-qualified) identifier for slices.Concat. It is a pure
+// function so the multi-service aggregate is unit-testable without protogen/buf.
+func allAuthzRulesLines(serviceNames []string, concatIdent string) []string {
+	lines := []string{
+		"// AllAuthzRules is every service's rules in this file, concatenated.",
+		"var AllAuthzRules = " + concatIdent + "(",
+	}
+	for _, n := range serviceNames {
+		lines = append(lines, "\t"+n+"AuthzRules,")
+	}
+	lines = append(lines, ")", "")
+	return lines
 }

@@ -1,43 +1,178 @@
 package main
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 )
 
-// T001: unit tests for renderSvcFile — pure function, no protogen/buf needed.
-
-func TestRenderSvcFile_basic(t *testing.T) {
-	svc := serviceInfo{
-		ServiceName: "WidgetService",
+// crudService returns a single-resource CRUD service shaped like the apikey/
+// scaffold fixtures: Create/Get/List/Update/Delete over a soft-delete resource
+// keyed by id, with the resource request field named differently from the Go
+// type (ApiKey vs APIKey) to exercise the field-name resolution.
+func crudService() serviceInfo {
+	return serviceInfo{
+		ServiceName:        "APIKeyService",
+		Resource:           "APIKey",
+		ResourceSoftDelete: true,
 		Methods: []methodInfo{
-			{Name: "CreateWidget", InputGoIdent: "CreateWidgetRequest", OutputGoIdent: "Widget"},
-			{Name: "GetWidget", InputGoIdent: "GetWidgetRequest", OutputGoIdent: "Widget"},
-			{Name: "DeleteWidget", InputGoIdent: "DeleteWidgetRequest", OutputGoIdent: "DeleteWidgetResponse"},
+			{Name: "CreateAPIKey", InputGoIdent: "CreateAPIKeyRequest", OutputGoIdent: "APIKey", Std: stdCreate, ResourceField: "ApiKey"},
+			{Name: "GetAPIKey", InputGoIdent: "GetAPIKeyRequest", OutputGoIdent: "APIKey", Std: stdGet},
+			{Name: "ListAPIKeys", InputGoIdent: "ListAPIKeysRequest", OutputGoIdent: "ListAPIKeysResponse", Std: stdList, ListItemsField: "ApiKeys", ListHasShowDeleted: true},
+			{Name: "UpdateAPIKey", InputGoIdent: "UpdateAPIKeyRequest", OutputGoIdent: "APIKey", Std: stdUpdate, ResourceField: "ApiKey"},
+			{Name: "DeleteAPIKey", InputGoIdent: "DeleteAPIKeyRequest", OutputGoIdent: "DeleteAPIKeyResponse", Std: stdDelete},
 		},
 	}
-	out := renderSvcFile("widgetsv1", "github.com/example/widgets/v1;widgetsv1", []serviceInfo{svc})
+}
+
+// TestRenderSvcFile_validGo gates that the generated file is syntactically valid
+// Go (go/format.Source) — the render-drift guard from the spec's failure modes.
+func TestRenderSvcFile_validGo(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "github.com/example/apikey/v1;apikeyv1", []serviceInfo{crudService()})
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated output is not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+}
+
+func TestRenderSvcFile_register(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
 
 	mustContain(t, out, "DO NOT EDIT")
-	mustContain(t, out, "package widgetsv1")
+	mustContain(t, out, "package apikeyv1")
 	mustContain(t, out, "protoc-gen-svc")
 
 	// protoc-gen-svc no longer re-declares the server interface or unimplemented
 	// stub — those are provided by protoc-gen-go-grpc (_grpc.pb.go).
-	mustNotContain(t, out, "type WidgetServiceServer interface")
-	mustNotContain(t, out, "type UnimplementedWidgetServiceServer struct")
+	mustNotContain(t, out, "type APIKeyServiceServer interface")
+	mustNotContain(t, out, "type UnimplementedAPIKeyServiceServer struct")
 
-	// Register<Svc> accepts *server.Server and wires gRPC + HTTP gateway.
-	mustContain(t, out, "RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error")
-	// Boot-gate: fails closed if any method lacks an authz declaration.
-	mustContain(t, out, "grpcauthz.AssertMethodsDeclared(")
-	mustContain(t, out, "WidgetService_CreateWidget_FullMethodName")
-	mustContain(t, out, "WidgetService_GetWidget_FullMethodName")
-	mustContain(t, out, "WidgetService_DeleteWidget_FullMethodName")
-	// Delegates to grpc-generated server registration.
-	mustContain(t, out, "RegisterWidgetServiceServer(s.GRPCServer(), srv)")
-	// Wires HTTP gateway via RegisterGateway.
-	mustContain(t, out, "RegisterWidgetServiceHandlerClient(ctx, mux, NewWidgetServiceClient(conn))")
+	// Register<Svc> records methods + contributes rules; the completeness gate
+	// moved to server.Serve (no per-Register AssertMethodsDeclared).
+	mustContain(t, out, "func RegisterAPIKeyService(s *server.Server, srv APIKeyServiceServer) error")
+	mustContain(t, out, "s.RecordMethods(")
+	mustContain(t, out, "s.AddRules(APIKeyServiceAuthzRules...)")
+	mustNotContain(t, out, "AssertMethodsDeclared")
+	mustContain(t, out, "APIKeyService_CreateAPIKey_FullMethodName")
+	mustContain(t, out, "RegisterAPIKeyServiceServer(s.GRPCServer(), srv)")
+	mustContain(t, out, "RegisterAPIKeyServiceHandlerClient(ctx, mux, NewAPIKeyServiceClient(conn))")
+}
+
+// TestRenderSvcFile_crudHandler verifies the generated default handler delegates
+// each standard method to the repository with the right shape (D-1/D-2/D-4).
+func TestRenderSvcFile_crudHandler(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
+
+	// Struct: embeds the unimplemented stub (custom RPCs stay Unimplemented) and
+	// holds the typed repository.
+	mustContain(t, out, "type APIKeyServiceCRUDHandler struct {")
+	mustContain(t, out, "UnimplementedAPIKeyServiceServer")
+	mustContain(t, out, "Repo persistence.Repository[*APIKey, string]")
+
+	// Create delegates to repo.Create using the request's resource accessor
+	// (ApiKey, not APIKey — proves field-name resolution).
+	mustContain(t, out, "func (h *APIKeyServiceCRUDHandler) CreateAPIKey(ctx context.Context, req *CreateAPIKeyRequest) (*APIKey, error)")
+	mustContain(t, out, "return h.Repo.Create(ctx, req.GetApiKey())")
+
+	// Get keyed by id.
+	mustContain(t, out, "key := req.GetId()")
+	mustContain(t, out, "return h.Repo.Get(ctx, key)")
+
+	// List maps paging + show_deleted (present) but NOT filter/order_by (absent).
+	mustContain(t, out, "h.Repo.List(ctx, persistence.ListOptions{")
+	mustContain(t, out, "PageSize:  int(req.GetPageSize())")
+	mustContain(t, out, "ShowDeleted: req.GetShowDeleted()")
+	mustNotContain(t, out, "Filter:")
+	mustNotContain(t, out, "OrderBy:")
+	mustContain(t, out, "return &ListAPIKeysResponse{ApiKeys: items, NextPageToken: next}, nil")
+
+	// Update delegates with the resource id + update_mask.
+	mustContain(t, out, "return h.Repo.Update(ctx, req.GetApiKey().GetId(), req.GetApiKey(), req.GetUpdateMask()...)")
+
+	// Delete delegates and returns the delete response.
+	mustContain(t, out, "if err := h.Repo.Delete(ctx, key); err != nil {")
+	mustContain(t, out, "return &DeleteAPIKeyResponse{}, nil")
+
+	// Constructors: New<Svc>Handler + Register<Svc>WithRepository.
+	mustContain(t, out, "func NewAPIKeyServiceHandler(repo persistence.Repository[*APIKey, string]) *APIKeyServiceCRUDHandler")
+	mustContain(t, out, "return &APIKeyServiceCRUDHandler{Repo: repo}")
+	mustContain(t, out, "func RegisterAPIKeyServiceWithRepository(s *server.Server, repo persistence.Repository[*APIKey, string]) error")
+	mustContain(t, out, "return RegisterAPIKeyService(s, NewAPIKeyServiceHandler(repo))")
+}
+
+// TestRenderSvcFile_nameKeyed verifies a Get/Delete keyed by an AIP-122 name
+// (not id) parses the name via Parse<R>Name (D-2).
+func TestRenderSvcFile_nameKeyed(t *testing.T) {
+	svc := serviceInfo{
+		ServiceName: "BookService",
+		Resource:    "Book",
+		Methods: []methodInfo{
+			{Name: "GetBook", InputGoIdent: "GetBookRequest", OutputGoIdent: "Book", Std: stdGet, KeyByName: true},
+		},
+	}
+	out := renderSvcFile("bookv1", "x;bookv1", []serviceInfo{svc})
+	mustContain(t, out, "key, err := ParseBookName(req.GetName())")
+	mustContain(t, out, "return h.Repo.Get(ctx, key)")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("name-keyed output not valid Go: %v\n%s", err, out)
+	}
+}
+
+// TestRenderSvcFile_undelete verifies Undelete is generated only for soft-delete
+// resources and delegates to repo.Undelete.
+func TestRenderSvcFile_undelete(t *testing.T) {
+	svc := serviceInfo{
+		ServiceName:        "DocService",
+		Resource:           "Doc",
+		ResourceSoftDelete: true,
+		Methods: []methodInfo{
+			{Name: "UndeleteDoc", InputGoIdent: "UndeleteDocRequest", OutputGoIdent: "Doc", Std: stdUndelete},
+		},
+	}
+	out := renderSvcFile("docv1", "x;docv1", []serviceInfo{svc})
+	mustContain(t, out, "func (h *DocServiceCRUDHandler) UndeleteDoc(")
+	mustContain(t, out, "return h.Repo.Undelete(ctx, key)")
+}
+
+// TestRenderSvcFile_customRPCUnimplemented verifies a service whose only RPC is
+// custom (no standard shape) gets Register<Svc> but NO CRUD handler — the custom
+// RPC is left to the developer (via the Unimplemented embed / escape hatch).
+func TestRenderSvcFile_customRPCUnimplemented(t *testing.T) {
+	svc := serviceInfo{
+		ServiceName: "ReportService",
+		Resource:    "", // no resource detected
+		Methods: []methodInfo{
+			{Name: "GenerateReport", InputGoIdent: "GenerateReportRequest", OutputGoIdent: "GenerateReportResponse", Std: stdNone},
+		},
+	}
+	out := renderSvcFile("reportv1", "x;reportv1", []serviceInfo{svc})
+	mustContain(t, out, "func RegisterReportService(s *server.Server, srv ReportServiceServer) error")
+	mustNotContain(t, out, "ReportServiceCRUDHandler")
+	mustNotContain(t, out, "RegisterReportServiceWithRepository")
+	// No persistence import when no service has a CRUD handler.
+	mustNotContain(t, out, "devedge-sdk/persistence")
+}
+
+// TestRenderSvcFile_mixedStdAndCustom verifies a service with standard methods
+// AND a custom method generates the handler for the standard methods only — the
+// custom method is left Unimplemented (AC-3).
+func TestRenderSvcFile_mixedStdAndCustom(t *testing.T) {
+	svc := serviceInfo{
+		ServiceName: "WidgetService",
+		Resource:    "Widget",
+		Methods: []methodInfo{
+			{Name: "CreateWidget", InputGoIdent: "CreateWidgetRequest", OutputGoIdent: "Widget", Std: stdCreate, ResourceField: "Widget"},
+			{Name: "GetWidget", InputGoIdent: "GetWidgetRequest", OutputGoIdent: "Widget", Std: stdGet},
+			{Name: "ArchiveWidget", InputGoIdent: "ArchiveWidgetRequest", OutputGoIdent: "ArchiveWidgetResponse", Std: stdNone},
+		},
+	}
+	out := renderSvcFile("widgetsv1", "x;widgetsv1", []serviceInfo{svc})
+	mustContain(t, out, "func (h *WidgetServiceCRUDHandler) CreateWidget(")
+	mustContain(t, out, "func (h *WidgetServiceCRUDHandler) GetWidget(")
+	// The custom RPC has no generated method — it stays Unimplemented via the embed.
+	mustNotContain(t, out, "func (h *WidgetServiceCRUDHandler) ArchiveWidget(")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("mixed output not valid Go: %v\n%s", err, out)
+	}
 }
 
 func TestRenderSvcFile_noServices(t *testing.T) {
@@ -50,9 +185,10 @@ func TestRenderSvcFile_noServices(t *testing.T) {
 func TestRenderSvcFile_emptyMethodList(t *testing.T) {
 	svc := serviceInfo{ServiceName: "EmptyService", Methods: nil}
 	out := renderSvcFile("pkg", "example/pkg;pkg", []serviceInfo{svc})
-	// A service with no methods still emits a Register helper.
-	mustContain(t, out, "RegisterEmptyService(s *server.Server, srv EmptyServiceServer) error")
+	// A service with no methods still emits a Register helper (no CRUD handler).
+	mustContain(t, out, "func RegisterEmptyService(s *server.Server, srv EmptyServiceServer) error")
 	mustContain(t, out, "RegisterEmptyServiceServer(s.GRPCServer(), srv)")
+	mustNotContain(t, out, "EmptyServiceCRUDHandler")
 }
 
 func mustContain(t *testing.T, s, substr string) {

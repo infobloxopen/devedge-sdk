@@ -21,8 +21,28 @@ type rule struct {
 type config struct {
 	authorizer  authz.Authorizer
 	principalFn PrincipalFunc
-	rules       map[string]rule // keyed by gRPC FullMethod
-	failOpen    bool
+	rules       map[string]rule // keyed by gRPC FullMethod; static rules from options
+	// ruleSource, when set, supplies additional rules resolved lazily at
+	// authorize-time (e.g. the server's accumulated AddRules set, which is not
+	// known until every service has registered). It is merged over the static
+	// rules: ruleSource wins on conflict.
+	ruleSource func() []authz.MethodRule
+	failOpen   bool
+}
+
+// lookup resolves the rule for fullMethod, consulting the lazy ruleSource (if
+// any) before the static rule table so late-registered (AddRules) rules are
+// visible to the interceptor at request time.
+func (c *config) lookup(fullMethod string) (rule, bool) {
+	if c.ruleSource != nil {
+		for _, r := range c.ruleSource() {
+			if r.Method == fullMethod {
+				return rule{verb: r.Verb, resource: r.Resource, public: r.Public}, true
+			}
+		}
+	}
+	r, ok := c.rules[fullMethod]
+	return r, ok
 }
 
 // Option configures the interceptor. The constructor + functional-option shape
@@ -75,6 +95,20 @@ func WithRules(rules ...authz.MethodRule) Option {
 	return func(c *config) {
 		for _, r := range rules {
 			c.rules[r.Method] = rule{verb: r.Verb, resource: r.Resource, public: r.Public}
+		}
+	}
+}
+
+// WithRuleSource supplies a function that returns the live set of declared
+// rules, resolved lazily on each authorization (and by AssertMethodsDeclared).
+// It lets the interceptor enforce over rules contributed AFTER construction —
+// e.g. the server's accumulated AddRules set, which is only complete once every
+// service has registered. Rules from the source take precedence over the static
+// WithRules/WithMethodRule table on a method conflict.
+func WithRuleSource(fn func() []authz.MethodRule) Option {
+	return func(c *config) {
+		if fn != nil {
+			c.ruleSource = fn
 		}
 	}
 }

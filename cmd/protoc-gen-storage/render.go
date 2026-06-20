@@ -814,6 +814,17 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	// Create. Model type follows the OWNER; hooks use the SURFACE name.
 	fmt.Fprintf(b, "func (r *%sRepository) Create(ctx context.Context, entity %s) (%s, error) {\n", msg.MessageName, pbType, pbType)
 	fmt.Fprintf(b, "\tm := toModel_%s(entity)\n", msg.MessageName)
+	if hasTenant {
+		// Stamp the tenant from context when the caller did not set it, so the
+		// resource is scoped to the authenticated account — matching the ent
+		// backend. The handler does not duplicate this (F029 D-4: tenant stamping
+		// is the repository's job).
+		b.WriteString("\tif m.AccountId == \"\" {\n")
+		b.WriteString("\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n")
+		b.WriteString("\t\t\tm.AccountId = tenantID\n")
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+	}
 	if msgHasSecrets {
 		for _, f := range msg.Fields {
 			if !f.IsSecret {

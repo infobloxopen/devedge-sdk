@@ -5,6 +5,7 @@ package testpb
 
 import (
 	authz "github.com/infobloxopen/devedge-sdk/authz"
+	slices "slices"
 )
 
 // ZoneServiceAuthzRules are the authorization rules declared on ZoneService's methods.
@@ -24,3 +25,8 @@ var ZoneServiceAuthzRules = []authz.MethodRule{
 		Public: true,
 	},
 }
+
+// AllAuthzRules is every service's rules in this file, concatenated.
+var AllAuthzRules = slices.Concat(
+	ZoneServiceAuthzRules,
+)

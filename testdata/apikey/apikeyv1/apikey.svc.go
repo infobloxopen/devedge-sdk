@@ -9,26 +9,79 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 
-	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
 
-// RegisterAPIKeyService wires srv into the server's gRPC handler and HTTP gateway.
-// It asserts at startup that all methods are declared in the authz rules;
-// if any method lacks a declaration, an error is returned (fail-closed boot gate).
+// RegisterAPIKeyService wires srv into the server's gRPC handler and HTTP gateway,
+// records its methods, and contributes APIKeyServiceAuthzRules to the server. The
+// boot-time authz completeness gate runs at server.Serve over the accumulated
+// rule set (fail-closed).
 func RegisterAPIKeyService(s *server.Server, srv APIKeyServiceServer) error {
-	methods := []string{
+	s.RecordMethods(
 		APIKeyService_CreateAPIKey_FullMethodName,
 		APIKeyService_GetAPIKey_FullMethodName,
 		APIKeyService_ListAPIKeys_FullMethodName,
 		APIKeyService_DeleteAPIKey_FullMethodName,
-	}
-	if err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {
-		return err
-	}
+	)
+	s.AddRules(APIKeyServiceAuthzRules...)
 	RegisterAPIKeyServiceServer(s.GRPCServer(), srv)
 	s.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {
 		return RegisterAPIKeyServiceHandlerClient(ctx, mux, NewAPIKeyServiceClient(conn))
 	})
 	return nil
+}
+
+// APIKeyServiceCRUDHandler is the generated default handler for APIKeyService. It implements the
+// detected AIP standard methods by delegating to Repo; custom or unmatched RPCs
+// remain Unimplemented (override by embedding this type). Tenant stamping and
+// read_mask/field_mask are handled by the repository and the interceptor chain,
+// so the handler does not duplicate them. DO NOT EDIT.
+type APIKeyServiceCRUDHandler struct {
+	UnimplementedAPIKeyServiceServer
+	Repo persistence.Repository[*APIKey, string]
+}
+
+func (h *APIKeyServiceCRUDHandler) CreateAPIKey(ctx context.Context, req *CreateAPIKeyRequest) (*APIKey, error) {
+	return h.Repo.Create(ctx, req.GetApiKey())
+}
+
+func (h *APIKeyServiceCRUDHandler) GetAPIKey(ctx context.Context, req *GetAPIKeyRequest) (*APIKey, error) {
+	key := req.GetId()
+	return h.Repo.Get(ctx, key)
+}
+
+func (h *APIKeyServiceCRUDHandler) ListAPIKeys(ctx context.Context, req *ListAPIKeysRequest) (*ListAPIKeysResponse, error) {
+	items, next, err := h.Repo.List(ctx, persistence.ListOptions{
+		PageSize:    int(req.GetPageSize()),
+		PageToken:   req.GetPageToken(),
+		ShowDeleted: req.GetShowDeleted(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ListAPIKeysResponse{ApiKeys: items, NextPageToken: next}, nil
+}
+
+func (h *APIKeyServiceCRUDHandler) DeleteAPIKey(ctx context.Context, req *DeleteAPIKeyRequest) (*DeleteAPIKeyResponse, error) {
+	key := req.GetId()
+	if err := h.Repo.Delete(ctx, key); err != nil {
+		return nil, err
+	}
+	return &DeleteAPIKeyResponse{}, nil
+}
+
+// NewAPIKeyServiceHandler returns the generated default CRUD handler backed by repo. Embed
+// the returned type (or this struct) to override individual methods before
+// registering it via RegisterAPIKeyService.
+func NewAPIKeyServiceHandler(repo persistence.Repository[*APIKey, string]) *APIKeyServiceCRUDHandler {
+	return &APIKeyServiceCRUDHandler{Repo: repo}
+}
+
+// RegisterAPIKeyServiceWithRepository is the one-call CRUD path: it constructs the
+// generated default handler over repo and registers it via RegisterAPIKeyService
+// (gRPC + REST gateway + authz rules). Use the New<Svc>Handler + Register<Svc>
+// pair instead when you need to wrap/override the default handler.
+func RegisterAPIKeyServiceWithRepository(s *server.Server, repo persistence.Repository[*APIKey, string]) error {
+	return RegisterAPIKeyService(s, NewAPIKeyServiceHandler(repo))
 }

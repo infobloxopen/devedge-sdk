@@ -9,6 +9,25 @@ import (
 type serviceInfo struct {
 	ServiceName string
 	Methods     []methodInfo
+	// Resource is the Go type name of the API resource the service manages (the
+	// repository element type). Empty when no resource is detectable, in which
+	// case no default CRUD handler is generated for the service.
+	Resource           string
+	ResourceSoftDelete bool
+}
+
+// hasStdMethods reports whether the service has at least one detected standard
+// method (so a default CRUD handler is worth generating).
+func (s serviceInfo) hasStdMethods() bool {
+	if s.Resource == "" {
+		return false
+	}
+	for _, m := range s.Methods {
+		if m.Std != stdNone {
+			return true
+		}
+	}
+	return false
 }
 
 // methodInfo describes a single RPC method.
@@ -16,6 +35,22 @@ type methodInfo struct {
 	Name          string
 	InputGoIdent  string // Go type name for the request (within the same package)
 	OutputGoIdent string // Go type name for the response
+	Std           stdMethod
+	// KeyByName reports that a Get/Delete/Undelete is keyed by an AIP-122 name
+	// field (parse via Parse<R>Name) rather than a plain id.
+	KeyByName bool
+	// ListItemsField is the Go field name of the repeated-resource field on a List
+	// response (e.g. "Widgets", "ApiKeys"), set only for stdList methods.
+	ListItemsField string
+	// ResourceField is the Go field name of the resource-typed request field on a
+	// Create/Update request (e.g. "Widget", "ApiKey"), set for stdCreate/stdUpdate.
+	ResourceField string
+	// List optional fields present on the request (drives whether the handler maps
+	// them onto persistence.ListOptions — protoc-gen-go only emits a getter for a
+	// field that exists). Set only for stdList methods.
+	ListHasFilter      bool
+	ListHasOrderBy     bool
+	ListHasShowDeleted bool
 }
 
 // renderSvcFile generates the .svc.go content for the given package and services.
@@ -28,9 +63,9 @@ type methodInfo struct {
 //   - <Service>_<Method>_FullMethodName constants (from _grpc.pb.go)
 //   - Register<Service>HandlerClient + New<Service>Client (from .pb.gw.go)
 //
-// protoc-gen-svc emits only the server-package wiring:
-//   - Register<Service>(*server.Server, <Service>Server) error — boot-gate (authz
-//     completeness check), gRPC service registration, and HTTP gateway wiring.
+// It also assumes protoc-gen-devedge-authz emitted <Service>AuthzRules and
+// protoc-gen-{storage,ent} emitted persistence.Repository constructors +
+// Parse<Resource>Name helpers in the same package.
 func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	if len(services) == 0 {
 		return ""
@@ -42,54 +77,162 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	b.WriteString("// source: (proto input)\n")
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "package %s\n\n", pkgName)
+
+	needPersistence := false
+	for _, svc := range services {
+		if svc.hasStdMethods() {
+			needPersistence = true
+		}
+	}
+
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n\n")
 	b.WriteString("\t\"github.com/grpc-ecosystem/grpc-gateway/v2/runtime\"\n")
 	b.WriteString("\t\"google.golang.org/grpc\"\n\n")
-	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/authz/grpcauthz\"\n")
+	if needPersistence {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
+	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/server\"\n")
 	b.WriteString(")\n\n")
 
 	for _, svc := range services {
-		// Register<Service> — boot-gate + gRPC + HTTP gateway wiring.
-		// The <Service>Server interface, Unimplemented<Service>Server, and
-		// Register<Service>Server come from _grpc.pb.go in the same package.
-		// Register<Service>HandlerClient and New<Service>Client come from
-		// .pb.gw.go in the same package.
-		fmt.Fprintf(&b, "// Register%s wires srv into the server's gRPC handler and HTTP gateway.\n", svc.ServiceName)
-		fmt.Fprintf(&b, "// It asserts at startup that all methods are declared in the authz rules;\n")
-		fmt.Fprintf(&b, "// if any method lacks a declaration, an error is returned (fail-closed boot gate).\n")
-		fmt.Fprintf(&b, "func Register%s(s *server.Server, srv %sServer) error {\n", svc.ServiceName, svc.ServiceName)
-
-		// Method list from _grpc.pb.go constants — avoids hardcoding strings.
-		b.WriteString("\tmethods := []string{\n")
-		for _, m := range svc.Methods {
-			fmt.Fprintf(&b, "\t\t%s_%s_FullMethodName,\n", svc.ServiceName, m.Name)
+		renderRegister(&b, svc)
+		if svc.hasStdMethods() {
+			renderCRUDHandler(&b, svc)
+			renderHandlerConstructors(&b, svc)
 		}
-		b.WriteString("\t}\n")
-
-		// Boot gate: fail closed if any method lacks an authz declaration.
-		b.WriteString("\tif err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {\n")
-		b.WriteString("\t\treturn err\n")
-		b.WriteString("\t}\n")
-
-		// gRPC registration — delegates to the grpc-generated Register<Service>Server.
-		fmt.Fprintf(&b, "\tRegister%sServer(s.GRPCServer(), srv)\n", svc.ServiceName)
-
-		// HTTP gateway — wired at Serve time via the recorded closure.
-		b.WriteString("\ts.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {\n")
-		fmt.Fprintf(&b, "\t\treturn Register%sHandlerClient(ctx, mux, New%sClient(conn))\n", svc.ServiceName, svc.ServiceName)
-		b.WriteString("\t})\n")
-		b.WriteString("\treturn nil\n")
-		b.WriteString("}\n\n")
 	}
 
 	return b.String()
 }
 
-func lcFirst(s string) string {
-	if s == "" {
-		return ""
+// renderRegister emits Register<Svc>: record methods, contribute authz rules,
+// register gRPC + the HTTP gateway. The boot-time completeness gate now runs at
+// server.Serve over the accumulated rule set (no per-Register assertion).
+func renderRegister(b *strings.Builder, svc serviceInfo) {
+	fmt.Fprintf(b, "// Register%s wires srv into the server's gRPC handler and HTTP gateway,\n", svc.ServiceName)
+	fmt.Fprintf(b, "// records its methods, and contributes %sAuthzRules to the server. The\n", svc.ServiceName)
+	b.WriteString("// boot-time authz completeness gate runs at server.Serve over the accumulated\n")
+	b.WriteString("// rule set (fail-closed).\n")
+	fmt.Fprintf(b, "func Register%s(s *server.Server, srv %sServer) error {\n", svc.ServiceName, svc.ServiceName)
+
+	b.WriteString("\ts.RecordMethods(\n")
+	for _, m := range svc.Methods {
+		fmt.Fprintf(b, "\t\t%s_%s_FullMethodName,\n", svc.ServiceName, m.Name)
 	}
-	return strings.ToLower(s[:1]) + s[1:]
+	b.WriteString("\t)\n")
+	fmt.Fprintf(b, "\ts.AddRules(%sAuthzRules...)\n", svc.ServiceName)
+	fmt.Fprintf(b, "\tRegister%sServer(s.GRPCServer(), srv)\n", svc.ServiceName)
+	b.WriteString("\ts.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {\n")
+	fmt.Fprintf(b, "\t\treturn Register%sHandlerClient(ctx, mux, New%sClient(conn))\n", svc.ServiceName, svc.ServiceName)
+	b.WriteString("\t})\n")
+	b.WriteString("\treturn nil\n")
+	b.WriteString("}\n\n")
+}
+
+// renderCRUDHandler emits the generated default handler: a struct embedding
+// Unimplemented<Svc>Server (so custom/unmatched RPCs are Unimplemented) and
+// holding the repository, with one method per detected AIP standard RPC
+// delegating to the repository. Override by embedding this type and redefining
+// the method(s) you change.
+func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
+	res := svc.Resource
+	fmt.Fprintf(b, "// %sCRUDHandler is the generated default handler for %s. It implements the\n", svc.ServiceName, svc.ServiceName)
+	b.WriteString("// detected AIP standard methods by delegating to Repo; custom or unmatched RPCs\n")
+	b.WriteString("// remain Unimplemented (override by embedding this type). Tenant stamping and\n")
+	b.WriteString("// read_mask/field_mask are handled by the repository and the interceptor chain,\n")
+	b.WriteString("// so the handler does not duplicate them. DO NOT EDIT.\n")
+	fmt.Fprintf(b, "type %sCRUDHandler struct {\n", svc.ServiceName)
+	fmt.Fprintf(b, "\tUnimplemented%sServer\n", svc.ServiceName)
+	fmt.Fprintf(b, "\tRepo persistence.Repository[*%s, string]\n", res)
+	b.WriteString("}\n\n")
+
+	for _, m := range svc.Methods {
+		switch m.Std {
+		case stdCreate:
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			fmt.Fprintf(b, "\treturn h.Repo.Create(ctx, req.Get%s())\n", m.ResourceField)
+			b.WriteString("}\n\n")
+		case stdGet:
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			renderKeyResolve(b, m, res)
+			b.WriteString("\treturn h.Repo.Get(ctx, key)\n")
+			b.WriteString("}\n\n")
+		case stdList:
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			b.WriteString("\titems, next, err := h.Repo.List(ctx, persistence.ListOptions{\n")
+			b.WriteString("\t\tPageSize:  int(req.GetPageSize()),\n")
+			b.WriteString("\t\tPageToken: req.GetPageToken(),\n")
+			if m.ListHasFilter {
+				b.WriteString("\t\tFilter: req.GetFilter(),\n")
+			}
+			if m.ListHasOrderBy {
+				b.WriteString("\t\tOrderBy: req.GetOrderBy(),\n")
+			}
+			if m.ListHasShowDeleted {
+				b.WriteString("\t\tShowDeleted: req.GetShowDeleted(),\n")
+			}
+			b.WriteString("\t})\n")
+			b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+			fmt.Fprintf(b, "\treturn &%s{%s: items, NextPageToken: next}, nil\n", m.OutputGoIdent, m.ListItemsField)
+			b.WriteString("}\n\n")
+		case stdUpdate:
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			fmt.Fprintf(b, "\treturn h.Repo.Update(ctx, req.Get%s().GetId(), req.Get%s(), req.GetUpdateMask()...)\n",
+				m.ResourceField, m.ResourceField)
+			b.WriteString("}\n\n")
+		case stdDelete:
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			renderKeyResolve(b, m, res)
+			b.WriteString("\tif err := h.Repo.Delete(ctx, key); err != nil {\n\t\treturn nil, err\n\t}\n")
+			fmt.Fprintf(b, "\treturn &%s{}, nil\n", m.OutputGoIdent)
+			b.WriteString("}\n\n")
+		case stdUndelete:
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			renderKeyResolve(b, m, res)
+			b.WriteString("\treturn h.Repo.Undelete(ctx, key)\n")
+			b.WriteString("}\n\n")
+		}
+	}
+}
+
+// renderKeyResolve emits the code that derives the repository key from the
+// request: either req.GetId() directly, or Parse<R>Name(req.GetName()) when the
+// method is keyed by an AIP-122 name.
+func renderKeyResolve(b *strings.Builder, m methodInfo, res string) {
+	if m.KeyByName {
+		fmt.Fprintf(b, "\tkey, err := Parse%sName(req.GetName())\n", res)
+		b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+		return
+	}
+	b.WriteString("\tkey := req.GetId()\n")
+}
+
+// renderHandlerConstructors emits New<Svc>Handler (returns the default handler so
+// it can be embedded/wrapped) and Register<Svc>WithRepository (the one-call CRUD
+// path: construct the default handler + Register<Svc>).
+func renderHandlerConstructors(b *strings.Builder, svc serviceInfo) {
+	res := svc.Resource
+	fmt.Fprintf(b, "// New%sHandler returns the generated default CRUD handler backed by repo. Embed\n", svc.ServiceName)
+	b.WriteString("// the returned type (or this struct) to override individual methods before\n")
+	fmt.Fprintf(b, "// registering it via Register%s.\n", svc.ServiceName)
+	fmt.Fprintf(b, "func New%sHandler(repo persistence.Repository[*%s, string]) *%sCRUDHandler {\n",
+		svc.ServiceName, res, svc.ServiceName)
+	fmt.Fprintf(b, "\treturn &%sCRUDHandler{Repo: repo}\n", svc.ServiceName)
+	b.WriteString("}\n\n")
+
+	fmt.Fprintf(b, "// Register%sWithRepository is the one-call CRUD path: it constructs the\n", svc.ServiceName)
+	fmt.Fprintf(b, "// generated default handler over repo and registers it via Register%s\n", svc.ServiceName)
+	b.WriteString("// (gRPC + REST gateway + authz rules). Use the New<Svc>Handler + Register<Svc>\n")
+	b.WriteString("// pair instead when you need to wrap/override the default handler.\n")
+	fmt.Fprintf(b, "func Register%sWithRepository(s *server.Server, repo persistence.Repository[*%s, string]) error {\n",
+		svc.ServiceName, res)
+	fmt.Fprintf(b, "\treturn Register%s(s, New%sHandler(repo))\n", svc.ServiceName, svc.ServiceName)
+	b.WriteString("}\n\n")
 }
