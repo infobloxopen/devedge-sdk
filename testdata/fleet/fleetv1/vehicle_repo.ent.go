@@ -85,8 +85,10 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 		},
 		Update_: func(ctx context.Context, key string, entity *Vehicle, fieldMask ...string) (*Vehicle, error) {
 			u := client.Vehicle.UpdateOneID(key)
-			u = u.SetVin(entity.GetVin())
-			if entity.GetFleetId() != "" {
+			if vehicleInMask(fieldMask, "vin") {
+				u = u.SetVin(entity.GetVin())
+			}
+			if vehicleInMask(fieldMask, "fleet_id") && entity.GetFleetId() != "" {
 				u = u.SetFleetID(entity.GetFleetId())
 			}
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {

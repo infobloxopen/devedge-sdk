@@ -1110,15 +1110,23 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	b.WriteString("\t\t},\n")
 
 	// ---- Update_ ----
+	// Field-mask semantics mirror the GORM Update and the ent batch wrapper
+	// (cmd/protoc-gen-storage/render.go, BatchUpdate): an empty fieldMask is a full
+	// update (every writable field, including zero values) and a non-empty mask
+	// writes only the named proto fields. The <maskLower>InMask helper emitted by the
+	// sibling <snake>.batch.ent.go (same package, same res) returns true for an empty
+	// mask, so gating every Set on it yields both behaviours uniformly. The tenant
+	// key (account_id) is never a Set here — only the WHERE guard below.
+	maskHelper := strings.ToLower(res) // matches maskLower in renderEntRepository
 	fmt.Fprintf(&b, "\t\tUpdate_: func(ctx context.Context, key string, entity *%s, fieldMask ...string) (*%s, error) {\n", res, res)
 	fmt.Fprintf(&b, "\t\t\tu := client.%s.UpdateOneID(key)\n", model)
 	for _, f := range plainWritable {
-		fmt.Fprintf(&b, "\t\t\tu = u.Set%s(entity.Get%s())\n", entSetterGoName(f.SnakeName), entGoName(f.SnakeName))
+		fmt.Fprintf(&b, "\t\t\tif %sInMask(fieldMask, %q) {\n\t\t\t\tu = u.Set%s(entity.Get%s())\n\t\t\t}\n", maskHelper, f.SnakeName, entSetterGoName(f.SnakeName), entGoName(f.SnakeName))
 	}
 	for _, f := range fkWritable {
 		getName := entGoName(f.SnakeName)
 		setName := entSetterGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\t\tif entity.Get%s() != \"\" {\n\t\t\t\tu = u.Set%s(entity.Get%s())\n\t\t\t}\n", getName, setName, getName)
+		fmt.Fprintf(&b, "\t\t\tif %sInMask(fieldMask, %q) && entity.Get%s() != \"\" {\n\t\t\t\tu = u.Set%s(entity.Get%s())\n\t\t\t}\n", maskHelper, f.SnakeName, getName, setName, getName)
 	}
 	if ownerTenant {
 		// Tenant guard: ent query interceptors do NOT run for mutations, so the
@@ -1128,7 +1136,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	for _, f := range secrets {
 		getName := entGoName(f.SnakeName)
 		setName := entSetterGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\t\tif enc != nil && entity.Get%s() != \"\" {\n", getName)
+		fmt.Fprintf(&b, "\t\t\tif %sInMask(fieldMask, %q) && enc != nil && entity.Get%s() != \"\" {\n", maskHelper, f.SnakeName, getName)
 		fmt.Fprintf(&b, "\t\t\t\th, herr := enc.Hash(ctx, entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\t\tif herr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\t\tc, cerr := enc.Encrypt(ctx, entity.Get%s())\n", getName)

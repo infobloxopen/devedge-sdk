@@ -88,7 +88,9 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 		},
 		Update_: func(ctx context.Context, key string, entity *Fleet, fieldMask ...string) (*Fleet, error) {
 			u := client.Fleet.UpdateOneID(key)
-			u = u.SetDisplayName(entity.GetDisplayName())
+			if fleetInMask(fieldMask, "display_name") {
+				u = u.SetDisplayName(entity.GetDisplayName())
+			}
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entfleet.AccountID(tenantID))
 			}
