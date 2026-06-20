@@ -32,6 +32,16 @@ stays current with apx. Flags: `--backend gorm|ent` (both produce a building, pe
 with zero hand-written persistence wiring — `ent` runs the buf→entc two-step for you), `--module`,
 `--org`, `--no-generate` (skip the first `buf generate`), `--force` (scaffold into a non-empty dir).
 
+> **Set `--module` if you're not Infoblox.** The Go module path defaults to
+> `github.com/<org>/<name>` and `--org` defaults to `infobloxopen`, so the command above generates a
+> module rooted at `github.com/infobloxopen/orders`. If you publish elsewhere, pass your own path so
+> the generated `go.mod` and imports are correct:
+>
+> ```bash
+> devedge-sdk new service orders --resource Order --backend gorm \
+>   --module github.com/you/orders
+> ```
+
 > **Before / after.** The manual sequence below is ~10 hand-authored, error-prone artifacts (a
 > two-module `buf.yaml`, a seven-plugin `buf.gen.yaml` where one plugin takes no `module=` and
 > another an optional `dialect=`, byte-identical annotation mirrors, the `server.New(...)` wiring,
@@ -40,13 +50,22 @@ with zero hand-written persistence wiring — `ent` runs the buf→entc two-step
 
 ## 1. Prerequisites
 
-Install the SDK and the codegen plugins (see [Installation](../installation/)):
+Install the SDK and **every** plugin the `buf.gen.yaml` in step 3 invokes — the two SDK plugins
+plus the base proto/gRPC plugins (see [Installation](../installation/) for the full table):
 
 ```bash
 go get github.com/infobloxopen/devedge-sdk@latest
+# SDK plugins:
 go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@latest
 go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-svc@latest
+# base proto/gRPC plugins the buf.gen.yaml below also runs (independently versioned):
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 ```
+
+If you also wire a backend (`protoc-gen-storage` for GORM or `protoc-gen-ent` for ent) or the
+HTTP/JSON gateway (`protoc-gen-grpc-gateway`), install those too — see
+[Installation](../installation/#install-the-codegen-plugins).
 
 ## 2. Write a proto with an authz annotation
 
