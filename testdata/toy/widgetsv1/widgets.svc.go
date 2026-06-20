@@ -9,15 +9,16 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 
-	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
 
-// RegisterWidgetService wires srv into the server's gRPC handler and HTTP gateway.
-// It asserts at startup that all methods are declared in the authz rules;
-// if any method lacks a declaration, an error is returned (fail-closed boot gate).
+// RegisterWidgetService wires srv into the server's gRPC handler and HTTP gateway,
+// records its methods, and contributes WidgetServiceAuthzRules to the server. The
+// boot-time authz completeness gate runs at server.Serve over the accumulated
+// rule set (fail-closed).
 func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
-	methods := []string{
+	s.RecordMethods(
 		WidgetService_CreateWidget_FullMethodName,
 		WidgetService_GetWidget_FullMethodName,
 		WidgetService_ListWidgets_FullMethodName,
@@ -30,13 +31,69 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 		WidgetService_ProcessWidget_FullMethodName,
 		WidgetService_GetOperationStatus_FullMethodName,
 		WidgetService_CancelWidgetOperation_FullMethodName,
-	}
-	if err := grpcauthz.AssertMethodsDeclared(methods, grpcauthz.WithRules(s.Rules()...)); err != nil {
-		return err
-	}
+	)
+	s.AddRules(WidgetServiceAuthzRules...)
 	RegisterWidgetServiceServer(s.GRPCServer(), srv)
 	s.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {
 		return RegisterWidgetServiceHandlerClient(ctx, mux, NewWidgetServiceClient(conn))
 	})
 	return nil
+}
+
+// WidgetServiceCRUDHandler is the generated default handler for WidgetService. It implements the
+// detected AIP standard methods by delegating to Repo; custom or unmatched RPCs
+// remain Unimplemented (override by embedding this type). Tenant stamping and
+// read_mask/field_mask are handled by the repository and the interceptor chain,
+// so the handler does not duplicate them. DO NOT EDIT.
+type WidgetServiceCRUDHandler struct {
+	UnimplementedWidgetServiceServer
+	Repo persistence.Repository[*Widget, string]
+}
+
+func (h *WidgetServiceCRUDHandler) CreateWidget(ctx context.Context, req *CreateWidgetRequest) (*Widget, error) {
+	return h.Repo.Create(ctx, req.GetWidget())
+}
+
+func (h *WidgetServiceCRUDHandler) GetWidget(ctx context.Context, req *GetWidgetRequest) (*Widget, error) {
+	key := req.GetId()
+	return h.Repo.Get(ctx, key)
+}
+
+func (h *WidgetServiceCRUDHandler) ListWidgets(ctx context.Context, req *ListWidgetsRequest) (*ListWidgetsResponse, error) {
+	items, next, err := h.Repo.List(ctx, persistence.ListOptions{
+		PageSize:    int(req.GetPageSize()),
+		PageToken:   req.GetPageToken(),
+		ShowDeleted: req.GetShowDeleted(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ListWidgetsResponse{Widgets: items, NextPageToken: next}, nil
+}
+
+func (h *WidgetServiceCRUDHandler) UpdateWidget(ctx context.Context, req *UpdateWidgetRequest) (*Widget, error) {
+	return h.Repo.Update(ctx, req.GetWidget().GetId(), req.GetWidget(), req.GetUpdateMask()...)
+}
+
+func (h *WidgetServiceCRUDHandler) DeleteWidget(ctx context.Context, req *DeleteWidgetRequest) (*DeleteWidgetResponse, error) {
+	key := req.GetId()
+	if err := h.Repo.Delete(ctx, key); err != nil {
+		return nil, err
+	}
+	return &DeleteWidgetResponse{}, nil
+}
+
+// NewWidgetServiceHandler returns the generated default CRUD handler backed by repo. Embed
+// the returned type (or this struct) to override individual methods before
+// registering it via RegisterWidgetService.
+func NewWidgetServiceHandler(repo persistence.Repository[*Widget, string]) *WidgetServiceCRUDHandler {
+	return &WidgetServiceCRUDHandler{Repo: repo}
+}
+
+// RegisterWidgetServiceWithRepository is the one-call CRUD path: it constructs the
+// generated default handler over repo and registers it via RegisterWidgetService
+// (gRPC + REST gateway + authz rules). Use the New<Svc>Handler + Register<Svc>
+// pair instead when you need to wrap/override the default handler.
+func RegisterWidgetServiceWithRepository(s *server.Server, repo persistence.Repository[*Widget, string]) error {
+	return RegisterWidgetService(s, NewWidgetServiceHandler(repo))
 }

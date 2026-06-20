@@ -5,6 +5,7 @@ package apikeyv1
 
 import (
 	authz "github.com/infobloxopen/devedge-sdk/authz"
+	slices "slices"
 )
 
 // APIKeyServiceAuthzRules are the authorization rules declared on APIKeyService's methods.
@@ -30,3 +31,8 @@ var APIKeyServiceAuthzRules = []authz.MethodRule{
 		Resource: "api_keys",
 	},
 }
+
+// AllAuthzRules is every service's rules in this file, concatenated.
+var AllAuthzRules = slices.Concat(
+	APIKeyServiceAuthzRules,
+)

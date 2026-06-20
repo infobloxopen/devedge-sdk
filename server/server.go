@@ -69,6 +69,17 @@ type Server struct {
 	gatewayFns []func(context.Context, *runtime.ServeMux, *grpc.ClientConn) error
 	grpcLis    net.Listener // set by Serve
 	httpLis    net.Listener // set by Serve when HTTPAddr != ""
+
+	// rules is the accumulated authz rule set: Config.Rules seeds it and each
+	// AddRules call (from a generated Register<Svc>) appends to it. The authz and
+	// field-mask interceptors read this live set (via a rule-source closure), and
+	// the boot-time completeness gate runs over it at Serve — so a service's rules
+	// are enforced even though they are contributed after New.
+	rules []authz.MethodRule
+	// methods is every gRPC FullMethod registered with the server (recorded by the
+	// generated Register<Svc>). The completeness gate at Serve fails closed if any
+	// of these lacks a rule or a public exemption.
+	methods []string
 }
 
 // New validates cfg and constructs a Server. It builds the framework
@@ -89,27 +100,28 @@ func New(cfg Config) (*Server, error) {
 		cfg.LROStore = lro.NewMemoryStore(time.Hour)
 	}
 
-	// verbMap feeds FieldMaskUnary: FullMethod -> verb string.
-	verbMap := make(map[string]string, len(cfg.Rules))
-	for _, r := range cfg.Rules {
-		verbMap[r.Method] = string(r.Verb)
-	}
+	// Seed the accumulated rule set from Config.Rules (now an optional additive
+	// override; the generated Register<Svc> contributes the rest via AddRules).
+	s := &Server{cfg: cfg, rules: append([]authz.MethodRule(nil), cfg.Rules...)}
 
 	authzOpts := []grpcauthz.Option{
-		grpcauthz.WithRules(cfg.Rules...),
+		// The interceptor reads the LIVE accumulated set so rules contributed by
+		// Register<Svc> (AddRules) after New are enforced.
+		grpcauthz.WithRuleSource(func() []authz.MethodRule { return s.rules }),
 		grpcauthz.WithAuthorizer(cfg.Authorizer),
 	}
 	if cfg.PrincipalFunc != nil {
 		authzOpts = append(authzOpts, grpcauthz.WithPrincipalFunc(cfg.PrincipalFunc))
 	}
 
-	// Interceptor chain — outermost first.
+	// Interceptor chain — outermost first. FieldMaskUnary reads the live verb map
+	// (FullMethod -> verb) so update-method mask validation covers AddRules rules.
 	chain := []grpc.UnaryServerInterceptor{
 		middleware.RequestIDUnary(),
 		middleware.ErrorMapperUnary(),
 		middleware.TenantIDUnary(),
 		grpcauthz.UnaryServerInterceptor("sdk", authzOpts...),
-		middleware.FieldMaskUnary(verbMap),
+		middleware.FieldMaskUnarySource(func() map[string]string { return s.verbMap() }),
 		etag.PreconditionUnary(),
 		middleware.ReadMaskUnary(),
 		middleware.ValidateOnlyUnary(),
@@ -117,17 +129,26 @@ func New(cfg Config) (*Server, error) {
 	}
 	chain = append(chain, cfg.Interceptors...)
 
-	grpcSrv := grpc.NewServer(grpc.ChainUnaryInterceptor(chain...))
+	s.grpcSrv = grpc.NewServer(grpc.ChainUnaryInterceptor(chain...))
 
-	var gwMux *runtime.ServeMux
 	if cfg.HTTPAddr != "" {
-		gwMux = runtime.NewServeMux(
+		s.gwMux = runtime.NewServeMux(
 			runtime.WithIncomingHeaderMatcher(incomingHeaderMatcher),
 			runtime.WithErrorHandler(httpErrorHandler),
 		)
 	}
 
-	return &Server{cfg: cfg, grpcSrv: grpcSrv, gwMux: gwMux}, nil
+	return s, nil
+}
+
+// verbMap returns the live FullMethod -> verb map derived from the accumulated
+// rule set, for the field-mask interceptor.
+func (s *Server) verbMap() map[string]string {
+	m := make(map[string]string, len(s.rules))
+	for _, r := range s.rules {
+		m[r.Method] = string(r.Verb)
+	}
+	return m
 }
 
 // incomingHeaderMatcher forwards the headers the framework chain reads — from the
@@ -184,6 +205,18 @@ func (w *statusOverrideWriter) WriteHeader(int) {
 // It returns the first fatal error from either server, or nil on clean
 // shutdown.
 func (s *Server) Serve(ctx context.Context) error {
+	// Boot-time completeness gate (fail-closed), now run over the ACCUMULATED rule
+	// set + every registered method: a registered RPC with neither a rule nor a
+	// public exemption must not serve. Rules contributed via AddRules (by the
+	// generated Register<Svc>) are visible here because the gate runs at Serve,
+	// after all registration, rather than per-Register.
+	if err := grpcauthz.AssertMethodsDeclared(
+		s.methods,
+		grpcauthz.WithRuleSource(func() []authz.MethodRule { return s.rules }),
+	); err != nil {
+		return err
+	}
+
 	lis, err := net.Listen("tcp", s.cfg.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("server: listen %q: %w", s.cfg.GRPCAddr, err)
@@ -272,8 +305,25 @@ func (s *Server) shutdown(httpSrv *http.Server) {
 // service implementations on it.
 func (s *Server) GRPCServer() *grpc.Server { return s.grpcSrv }
 
-// Rules returns the declared MethodRules this server was configured with.
-func (s *Server) Rules() []authz.MethodRule { return s.cfg.Rules }
+// Rules returns the accumulated authz rule set: Config.Rules plus everything
+// contributed via AddRules (e.g. by the generated Register<Svc>).
+func (s *Server) Rules() []authz.MethodRule { return s.rules }
+
+// AddRules appends authz rules to the server's accumulated set. The generated
+// Register<Svc>/Register<Svc>WithRepository call it with the service's
+// <Svc>AuthzRules so the developer never hand-assembles Config.Rules. The authz
+// and field-mask interceptors read the live set, and the boot-time completeness
+// gate runs over it at Serve. Call before Serve.
+func (s *Server) AddRules(rules ...authz.MethodRule) {
+	s.rules = append(s.rules, rules...)
+}
+
+// RecordMethods records gRPC FullMethods registered with the server so the
+// completeness gate at Serve can verify each has a rule or a public exemption.
+// The generated Register<Svc> calls it with the service's method names.
+func (s *Server) RecordMethods(methods ...string) {
+	s.methods = append(s.methods, methods...)
+}
 
 // LROStore returns the long-running operation store this server was configured with.
 func (s *Server) LROStore() lro.Store { return s.cfg.LROStore }

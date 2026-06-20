@@ -23,19 +23,30 @@ import (
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
-	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 	"github.com/infobloxopen/devedge-sdk/testdata/toy/widgetsv1"
 )
 
-// toyHandler is a concrete in-memory WidgetServiceServer used by integration tests.
+// toyHandler proves the F029 override escape hatch (G-4/AC-2): it EMBEDS the
+// generated widgetsv1.WidgetServiceCRUDHandler — which supplies Get/List/Update/
+// Delete by delegating to the repository — and overrides ONLY CreateWidget (to
+// add auto-id + AIP-163 validate_only short-circuit) plus the custom/non-CRUD
+// AIP-136/137/151/152 methods the generated handler leaves Unimplemented.
+//
+// Get/List/Update/Delete are NOT redefined here: they come from the embedded
+// generated handler, so the ETag/pagination/soft-delete behaviors the suites
+// assert run against the generated CRUD path (AC-6 parity).
 type toyHandler struct {
-	widgetsv1.UnimplementedWidgetServiceServer
+	widgetsv1.WidgetServiceCRUDHandler
 	repo   *persistence.MemoryRepository[*widgetsv1.Widget, string]
 	lroMgr *lro.Manager
 }
 
+// CreateWidget overrides the generated default to (a) assign a UUID when the
+// caller omits the id and (b) honor AIP-163 validate_only by returning the
+// would-be resource without persisting. Everything else delegates to the repo
+// (which stamps the ETag), exactly like the generated default.
 func (h *toyHandler) CreateWidget(ctx context.Context, req *widgetsv1.CreateWidgetRequest) (*widgetsv1.Widget, error) {
 	if req.Widget == nil {
 		return nil, status.Error(codes.InvalidArgument, "widget required")
@@ -46,55 +57,7 @@ func (h *toyHandler) CreateWidget(ctx context.Context, req *widgetsv1.CreateWidg
 	if middleware.ValidateOnlyFromContext(ctx) {
 		return req.Widget, nil
 	}
-	w, err := h.repo.Create(ctx, req.Widget)
-	if err != nil {
-		return nil, err
-	}
-	storedETag := h.repo.GetETagForKey(w.Id)
-	etag.SetNewETag(ctx, storedETag)
-	return w, nil
-}
-
-func (h *toyHandler) GetWidget(ctx context.Context, req *widgetsv1.GetWidgetRequest) (*widgetsv1.Widget, error) {
-	w, err := h.repo.Get(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
-	return w, nil
-}
-
-func (h *toyHandler) ListWidgets(ctx context.Context, req *widgetsv1.ListWidgetsRequest) (*widgetsv1.ListWidgetsResponse, error) {
-	items, nextToken, err := h.repo.List(ctx, persistence.ListOptions{
-		PageSize:  int(req.PageSize),
-		PageToken: req.PageToken,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &widgetsv1.ListWidgetsResponse{
-		Widgets:       items,
-		NextPageToken: nextToken,
-	}, nil
-}
-
-func (h *toyHandler) UpdateWidget(ctx context.Context, req *widgetsv1.UpdateWidgetRequest) (*widgetsv1.Widget, error) {
-	if req.Widget == nil {
-		return nil, status.Error(codes.InvalidArgument, "widget required")
-	}
-	w, err := h.repo.Update(ctx, req.Widget.Id, req.Widget, req.UpdateMask...)
-	if err != nil {
-		return nil, err
-	}
-	newETag := h.repo.GetETagForKey(w.Id)
-	etag.SetNewETag(ctx, newETag)
-	return w, nil
-}
-
-func (h *toyHandler) DeleteWidget(ctx context.Context, req *widgetsv1.DeleteWidgetRequest) (*widgetsv1.DeleteWidgetResponse, error) {
-	if err := h.repo.Delete(ctx, req.Id); err != nil {
-		return nil, err
-	}
-	return &widgetsv1.DeleteWidgetResponse{}, nil
+	return h.repo.Create(ctx, req.Widget)
 }
 
 // ArchiveWidget is an AIP-136 custom method: stamps archived_time on the widget.
@@ -196,26 +159,33 @@ func (h *toyHandler) GetOperationStatus(ctx context.Context, req *widgetsv1.GetO
 	return &widgetsv1.OperationStatus{Name: op.Name, Done: op.Done, Result: result}, nil
 }
 
+// newToyHandler builds the override handler: one in-memory repository feeds both
+// the embedded generated CRUD handler (Repo) and the custom methods (repo).
+func newToyHandler(lroStore lro.Store) *toyHandler {
+	repo := persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id })
+	h := &toyHandler{repo: repo, lroMgr: lro.NewManager(lroStore)}
+	h.WidgetServiceCRUDHandler.Repo = repo
+	return h
+}
+
 // newTestServer boots a real server with port :0 (kernel-assigned), registers
 // the toy WidgetService, and returns the server plus its gRPC and HTTP addresses.
 // It also wires a Cleanup that cancels the server's context on test finish.
 func newTestServer(t *testing.T, authorizer authz.Authorizer) (*server.Server, string, string) {
 	t.Helper()
 	lroStore := lro.NewMemoryStore(time.Hour)
+	// No Config.Rules: registration auto-contributes WidgetServiceAuthzRules via
+	// server.AddRules, and the completeness gate runs at Serve (F029 D-3).
 	s, err := server.New(server.Config{
 		GRPCAddr:   ":0",
 		HTTPAddr:   ":0",
-		Rules:      widgetsv1.WidgetServiceAuthzRules,
 		Authorizer: authorizer,
 		LROStore:   lroStore,
 	})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	handler := &toyHandler{
-		repo:   persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
-		lroMgr: lro.NewManager(lroStore),
-	}
+	handler := newToyHandler(lroStore)
 	if err := widgetsv1.RegisterWidgetService(s, handler); err != nil {
 		t.Fatalf("RegisterWidgetService: %v", err)
 	}
@@ -1027,7 +997,6 @@ func newTestServerWithDedup(t *testing.T, authorizer authz.Authorizer, store mid
 	s, err := server.New(server.Config{
 		GRPCAddr:           ":0",
 		HTTPAddr:           ":0",
-		Rules:              widgetsv1.WidgetServiceAuthzRules,
 		Authorizer:         authorizer,
 		DeduplicationStore: store,
 		LROStore:           lroStore,
@@ -1035,10 +1004,7 @@ func newTestServerWithDedup(t *testing.T, authorizer authz.Authorizer, store mid
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	handler := &toyHandler{
-		repo:   persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id }),
-		lroMgr: lro.NewManager(lroStore),
-	}
+	handler := newToyHandler(lroStore)
 	if err := widgetsv1.RegisterWidgetService(s, handler); err != nil {
 		t.Fatalf("RegisterWidgetService: %v", err)
 	}

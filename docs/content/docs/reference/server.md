@@ -20,8 +20,10 @@ type Config struct {
     GRPCAddr string
     // HTTPAddr is the optional gateway address (e.g. ":8080"). Empty disables the HTTP gateway.
     HTTPAddr string
-    // Rules are the declared authz rules; they feed both grpcauthz (enforcement)
-    // and the field-mask interceptor (verb lookup).
+    // Rules is an OPTIONAL additive authz rule set. The generated Register<Service>
+    // contributes each service's rules automatically (via AddRules), so the
+    // generated path never needs this; set it only to merge in extra rules. The
+    // rules feed both grpcauthz (enforcement) and the field-mask interceptor.
     Rules []authz.MethodRule
     // Authorizer is the pluggable decision point.
     // Defaults to authz.NewDevAuthorizer() (default-deny) if nil.
@@ -46,7 +48,7 @@ type Config struct {
 |---|---|---|---|
 | `GRPCAddr` | **yes** | — | `:0` binds an ephemeral port; read it back with `GRPCAddr()` after `Serve` |
 | `HTTPAddr` | no | `""` (disabled) | enables the grpc-gateway HTTP/JSON proxy |
-| `Rules` | no* | `nil` | feeds **both** authz enforcement and field-mask verb lookup; *required in practice or every non-public call is denied. For a proto with multiple services combine all `<Service>AuthzRules` — see below. |
+| `Rules` | no | `nil` | **optional** additive override; the generated `Register<Service>` contributes each service's rules via `AddRules`, so you rarely set this. The accumulated set must cover every registered method or `Serve` fails closed. |
 | `Authorizer` | no | `authz.NewDevAuthorizer()` (no grants → deny all) | swap for OPA/Cedar/remote PDP |
 | `PrincipalFunc` | no* | `nil` → empty principal | how the caller's identity is derived; *without it **no grant can match**, so every non-public call is denied. Use `grpcauthz.DevPrincipalFunc()` in dev, a verified-token function in prod |
 | `Interceptors` | no | `nil` | appended **after** the framework chain |
@@ -72,8 +74,8 @@ chain := []grpc.UnaryServerInterceptor{
     middleware.RequestIDUnary(),
     middleware.ErrorMapperUnary(),
     middleware.TenantIDUnary(),
-    grpcauthz.UnaryServerInterceptor("sdk", authzOpts...), // fail-closed; authzOpts adds WithPrincipalFunc when Config.PrincipalFunc is set
-    middleware.FieldMaskUnary(verbMap),                    // verbMap built from cfg.Rules
+    grpcauthz.UnaryServerInterceptor("sdk", authzOpts...), // fail-closed; reads the LIVE accumulated rule set (Config.Rules + AddRules)
+    middleware.FieldMaskUnarySource(...),                  // verb map derived from the live accumulated rule set
     etag.PreconditionUnary(),
     middleware.ReadMaskUnary(),                            // AIP-157 response field selection
     middleware.ValidateOnlyUnary(),                        // short-circuit validate_only requests
@@ -87,9 +89,16 @@ chain = append(chain, cfg.Interceptors...)
 ```go
 func (s *Server) Serve(ctx context.Context) error
 ```
-Starts the gRPC server (and the HTTP gateway when configured) and **blocks until `ctx` is
-cancelled**, then shuts both down gracefully (bounded by a 5s timeout). Returns the first fatal
-error from either server, or nil on clean shutdown.
+First runs the **boot-time authz completeness gate** (fail-closed) over the accumulated rule set and
+every registered method — a registered RPC with neither a rule nor a `public: true` exemption makes
+`Serve` return an `undeclared` error and **never bind**. Then starts the gRPC server (and the HTTP
+gateway when configured) and **blocks until `ctx` is cancelled**, then shuts both down gracefully
+(bounded by a 5s timeout). Returns the first fatal error from either server, or nil on clean
+shutdown.
+
+> The gate moved here from per-`Register` so it can see rules contributed by every
+> `Register<Service>`/`…WithRepository` call (which `AddRules` after `New`). Registering a service
+> but never serving means the gate never runs — `Serve` is required to serve.
 
 ```go
 func (s *Server) GRPCServer() *grpc.Server
@@ -106,34 +115,23 @@ other, not both — the generated helper already calls `RegisterGateway` for you
 registers the gateway twice.
 
 ```go
-func (s *Server) GatewayMux() *runtime.ServeMux // nil when no HTTP gateway
-func (s *Server) Rules() []authz.MethodRule
+func (s *Server) AddRules(rules ...authz.MethodRule)   // contribute authz rules (the generated Register<Service> calls this)
+func (s *Server) RecordMethods(methods ...string)      // record registered FullMethods for the Serve-time gate
+func (s *Server) GatewayMux() *runtime.ServeMux         // nil when no HTTP gateway
+func (s *Server) Rules() []authz.MethodRule             // the accumulated set (Config.Rules + AddRules)
 func (s *Server) GRPCAddr() string // actual bound addr after Serve (useful when GRPCAddr was ":0")
 func (s *Server) HTTPAddr() string // actual bound gateway addr after Serve; "" when no gateway
 ```
 
-### Combining rules for a multi-service proto
+### Multi-service protos: rules are auto-wired
 
-`protoc-gen-devedge-authz` emits one `<Service>AuthzRules []authz.MethodRule` per `service`
-declaration. A proto that exposes multiple services — for example an owner `FooService` and a
-read-projection `FooSummaryService` — requires **all** tables merged into a single slice:
-
-```go
-import "slices" // Go 1.22+
-
-srv, err := server.New(server.Config{
-    Rules: slices.Concat(
-        myv1.FooServiceAuthzRules,
-        myv1.FooSummaryServiceAuthzRules,
-    ),
-    // ...
-})
-```
-
-Without combining, any service whose rules are omitted fails the boot-time completeness gate
-(`AssertMethodsDeclared`), which the generated `Register<Service>` helper runs at startup.
-See [codegen → protoc-gen-devedge-authz](../codegen/#protoc-gen-devedge-authz) for the full
-explanation and a stdlib `append` alternative.
+`protoc-gen-devedge-authz` emits one `<Service>AuthzRules` per `service` (and an `AllAuthzRules`
+aggregate). You do **not** hand-merge them: registering each service — via
+`Register<Service>WithRepository(s, repo)` or `Register<Service>(s, impl)` — calls
+`s.AddRules(<Service>AuthzRules...)` for you, so the accumulated set covers every registered service
+by the time `Serve` runs the completeness gate. A service you never register (so never contribute
+rules for) cannot silently serve unprotected: its methods aren't registered, and any that were would
+fail the gate. See [codegen → protoc-gen-devedge-authz](../codegen/#protoc-gen-devedge-authz).
 
 ## Complete `main.go`
 
@@ -160,7 +158,8 @@ func main() {
     srv, err := server.New(server.Config{
         GRPCAddr: ":9090",
         HTTPAddr: ":8080",
-        Rules:    widgetv1.WidgetServiceAuthzRules,
+        // No Rules: the generated registration contributes WidgetServiceAuthzRules
+        // for you (Config.Rules is now only an optional additive override).
         Authorizer: authz.NewDevAuthorizer(authz.Grant{
             Tenant:   "t1",
             Subjects: []string{"group:admin"},
@@ -176,11 +175,12 @@ func main() {
         log.Fatal(err)
     }
 
-    // Canonical wiring (generated by protoc-gen-svc): one call runs the boot-time
-    // authz completeness gate, registers the gRPC implementation, AND registers the
-    // HTTP/JSON gateway handler. Prefer this over calling RegisterWidgetServiceServer
-    // + RegisterGateway by hand — doing both double-registers the gateway.
-    if err := widgetv1.RegisterWidgetService(srv, newWidgetServer()); err != nil {
+    // One-call CRUD wiring (generated by protoc-gen-svc): construct the generated
+    // default handler over the repository, register it on gRPC + the HTTP gateway,
+    // and contribute the service's authz rules. The boot-time completeness gate runs
+    // at Serve. (For custom logic, embed WidgetServiceCRUDHandler, override the
+    // methods you change, and use RegisterWidgetService(srv, h) instead.)
+    if err := widgetv1.RegisterWidgetServiceWithRepository(srv, newWidgetRepository()); err != nil {
         log.Fatal(err)
     }
 

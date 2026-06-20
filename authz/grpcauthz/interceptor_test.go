@@ -59,6 +59,48 @@ func TestPublicMethodAllowed(t *testing.T) {
 	}
 }
 
+// TestWithRuleSource_LazyRulesEnforced verifies the interceptor enforces rules
+// supplied by a lazy rule source (the mechanism the server uses so AddRules
+// rules contributed after construction are visible at request time — F029).
+func TestWithRuleSource_LazyRulesEnforced(t *testing.T) {
+	var live []authz.MethodRule
+	intc := UnaryServerInterceptor("test",
+		WithRuleSource(func() []authz.MethodRule { return live }),
+		WithAuthorizer(authz.NewDevAuthorizer(
+			authz.Grant{Tenant: "t1", Subjects: []string{"u1"}, Verbs: []authz.Verb{authz.Get}, Resource: "zone"},
+		)),
+		WithPrincipalFunc(func(context.Context) (authz.Principal, error) {
+			return authz.Principal{Subject: "u1", Tenant: "t1"}, nil
+		}),
+	)
+	info := &grpc.UnaryServerInfo{FullMethod: "/dns.v1.ZoneService/GetZone"}
+
+	// Before the rule is added: undeclared → fail closed.
+	if _, err := intc(context.Background(), nil, info, okHandler); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("want PermissionDenied before rule added, got %v", err)
+	}
+
+	// Add the rule to the live source; now the interceptor sees and allows it.
+	live = []authz.MethodRule{{Method: "/dns.v1.ZoneService/GetZone", Verb: authz.Get, Resource: "zone"}}
+	if out, err := intc(context.Background(), nil, info, okHandler); err != nil || out != "ok" {
+		t.Fatalf("want allow after rule added to source, got out=%v err=%v", out, err)
+	}
+}
+
+// TestAssertMethodsDeclared_RuleSource verifies the completeness gate consults a
+// lazy rule source too (so Serve can run the gate over the accumulated set).
+func TestAssertMethodsDeclared_RuleSource(t *testing.T) {
+	src := func() []authz.MethodRule {
+		return []authz.MethodRule{{Method: "/a/B", Verb: authz.Get, Resource: "x"}}
+	}
+	if err := AssertMethodsDeclared([]string{"/a/B"}, WithRuleSource(src)); err != nil {
+		t.Fatalf("unexpected error with rule source: %v", err)
+	}
+	if err := AssertMethodsDeclared([]string{"/a/B", "/c/D"}, WithRuleSource(src)); err == nil {
+		t.Fatal("want error for undeclared /c/D via rule source")
+	}
+}
+
 func TestAssertMethodsDeclared(t *testing.T) {
 	err := AssertMethodsDeclared(
 		[]string{"/a/B", "/c/D"},

@@ -2,13 +2,18 @@
 //
 // The server is wired by construction:
 //   - server.New configures the gRPC + HTTP-gateway stack and the authz interceptor;
-//   - {{.GoPkg}}.Register{{.ServiceType}} asserts at boot that every RPC has an authz
-//     rule (fail-closed) and refuses to start otherwise;
-//   - the resource is persisted through the GENERATED ent repository adapter
-//     ({{.GoPkg}}.New{{.Resource}}EntRepository — produced by protoc-gen-ent, F027:
-//     no hand-written ent wiring) over SQLite.
+//   - {{.GoPkg}}.Register{{.ServiceType}}WithRepository wires the GENERATED default CRUD
+//     handler over the GENERATED ent repository adapter ({{.GoPkg}}.New{{.Resource}}EntRepository
+//     — produced by protoc-gen-ent, F027: no hand-written ent wiring, no hand-written
+//     handler) and contributes the service's authz rules to the server;
+//   - server.Serve asserts at boot that every registered RPC has an authz rule
+//     (fail-closed) and refuses to start otherwise.
 //
-// This file is hand-owned (NOT generated) — edit it to change the handler logic.
+// This file is hand-owned (NOT generated). It owns the environment wiring (open
+// the ent client, migrate, choose the authorizer/principal); the handler + rule
+// wiring are generated. To add custom (non-CRUD) logic, embed
+// {{.GoPkg}}.{{.ServiceType}}CRUDHandler, override the methods you change, and
+// register it with {{.GoPkg}}.Register{{.ServiceType}}(s, h).
 package main
 
 import (
@@ -21,7 +26,6 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
-	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 
@@ -29,47 +33,6 @@ import (
 	_ "{{.Module}}/gen/ent/runtime" // required by ent schema hooks (mixins)
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
-
-// handler implements the generated {{.GoPkg}}.{{.ServiceType}}Server interface.
-type handler struct {
-	{{.GoPkg}}.Unimplemented{{.ServiceType}}Server
-	repo persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string]
-}
-
-func (h *handler) Create{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Create{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
-	// Stamp the resource with the caller's tenant so it is scoped to their account.
-	if tid := middleware.TenantIDFromContext(ctx); tid != "" {
-		req.{{.Resource}}.AccountId = tid
-	}
-	return h.repo.Create(ctx, req.{{.Resource}})
-}
-
-func (h *handler) Get{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Get{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
-	return h.repo.Get(ctx, req.Id)
-}
-
-func (h *handler) List{{.Resource}}s(ctx context.Context, req *{{.GoPkg}}.List{{.Resource}}sRequest) (*{{.GoPkg}}.List{{.Resource}}sResponse, error) {
-	items, next, err := h.repo.List(ctx, persistence.ListOptions{
-		PageSize:    int(req.PageSize),
-		PageToken:   req.PageToken,
-		ShowDeleted: req.ShowDeleted,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &{{.GoPkg}}.List{{.Resource}}sResponse{{"{"}}{{.Resource}}s: items, NextPageToken: next}, nil
-}
-
-func (h *handler) Update{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Update{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
-	return h.repo.Update(ctx, req.{{.Resource}}.Id, req.{{.Resource}}, req.UpdateMask...)
-}
-
-func (h *handler) Delete{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Delete{{.Resource}}Request) (*{{.GoPkg}}.Delete{{.Resource}}Response, error) {
-	if err := h.repo.Delete(ctx, req.Id); err != nil {
-		return nil, err
-	}
-	return &{{.GoPkg}}.Delete{{.Resource}}Response{}, nil
-}
 
 // registerSQLite3 aliases the pure-Go "sqlite" driver (modernc.org/sqlite) under
 // the name "sqlite3" that ent's dialect.SQLite expects. SQLite (no CGo) keeps the
@@ -90,9 +53,9 @@ func registerSQLite3() error {
 	return nil
 }
 
-// newHandler opens the ent client, runs the schema migration, and returns a
-// handler backed by the GENERATED ent repository adapter (no hand-written wiring).
-func newHandler() (*handler, error) {
+// newRepository opens the ent client, runs the schema migration, and returns the
+// GENERATED ent repository adapter (no hand-written wiring).
+func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], error) {
 	if err := registerSQLite3(); err != nil {
 		return nil, err
 	}
@@ -103,7 +66,7 @@ func newHandler() (*handler, error) {
 	if err := client.Schema.Create(context.Background()); err != nil {
 		return nil, err
 	}
-	return &handler{repo: {{.GoPkg}}.New{{.Resource}}EntRepository(client)}, nil
+	return {{.GoPkg}}.New{{.Resource}}EntRepository(client), nil
 }
 
 // newServer builds a fully wired server with the given authorizer and listen
@@ -113,7 +76,6 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 	s, err := server.New(server.Config{
 		GRPCAddr:   grpcAddr,
 		HTTPAddr:   httpAddr,
-		Rules:      {{.GoPkg}}.{{.ServiceType}}AuthzRules,
 		Authorizer: authorizer,
 		// Derive the caller's authz.Principal from request metadata (account-id ->
 		// tenant, groups -> group:<name>). Without it the principal is empty and
@@ -123,11 +85,13 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 	if err != nil {
 		return nil, err
 	}
-	h, err := newHandler()
+	repo, err := newRepository()
 	if err != nil {
 		return nil, err
 	}
-	if err := {{.GoPkg}}.Register{{.ServiceType}}(s, h); err != nil {
+	// One call: construct the generated default CRUD handler over repo, register it
+	// (gRPC + REST gateway), and contribute the service's authz rules.
+	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {
 		return nil, err
 	}
 	return s, nil

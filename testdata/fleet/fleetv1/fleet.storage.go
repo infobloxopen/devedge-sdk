@@ -165,6 +165,11 @@ func (r *FleetRepository) List(ctx context.Context, opts persistence.ListOptions
 
 func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, error) {
 	m := toModel_Fleet(entity)
+	if m.AccountId == "" {
+		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			m.AccountId = tenantID
+		}
+	}
 	if ToModelFleetOnCreate != nil {
 		ToModelFleetOnCreate(entity, m)
 	}
@@ -474,6 +479,11 @@ func (r *VehicleRepository) List(ctx context.Context, opts persistence.ListOptio
 
 func (r *VehicleRepository) Create(ctx context.Context, entity *Vehicle) (*Vehicle, error) {
 	m := toModel_Vehicle(entity)
+	if m.AccountId == "" {
+		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			m.AccountId = tenantID
+		}
+	}
 	if ToModelVehicleOnCreate != nil {
 		ToModelVehicleOnCreate(entity, m)
 	}

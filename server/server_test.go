@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,86 @@ func TestServer_Rules_ReturnsConfiguredRules(t *testing.T) {
 		if got[i].Method != r.Method || got[i].Verb != r.Verb || got[i].Resource != r.Resource {
 			t.Fatalf("rule[%d] mismatch: want %+v, got %+v", i, r, got[i])
 		}
+	}
+}
+
+// TestAddRules_AccumulatesIntoRules verifies AddRules appends to the server's
+// rule set on top of Config.Rules (F029 D-3): Config.Rules seeds it, AddRules
+// (called by the generated Register<Svc>) contributes the rest.
+func TestAddRules_AccumulatesIntoRules(t *testing.T) {
+	s, err := server.New(server.Config{
+		GRPCAddr: ":0",
+		Rules:    []authz.MethodRule{{Method: "/svc.v1.Svc/A", Verb: authz.Get, Resource: "a"}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.AddRules(
+		authz.MethodRule{Method: "/svc.v1.Svc/B", Verb: authz.Create, Resource: "b"},
+		authz.MethodRule{Method: "/svc.v1.Svc/C", Public: true},
+	)
+	got := s.Rules()
+	if len(got) != 3 {
+		t.Fatalf("Rules() = %d, want 3 (1 seed + 2 added)", len(got))
+	}
+	byMethod := map[string]authz.MethodRule{}
+	for _, r := range got {
+		byMethod[r.Method] = r
+	}
+	for _, m := range []string{"/svc.v1.Svc/A", "/svc.v1.Svc/B", "/svc.v1.Svc/C"} {
+		if _, ok := byMethod[m]; !ok {
+			t.Errorf("Rules() missing %s", m)
+		}
+	}
+}
+
+// TestServe_UndeclaredMethod_FailsClosed verifies the boot-time completeness gate
+// now runs at Serve over the accumulated rule set + recorded methods (F029 D-3 /
+// AC-4): a registered RPC with neither a rule nor a public exemption makes Serve
+// fail closed.
+func TestServe_UndeclaredMethod_FailsClosed(t *testing.T) {
+	s, err := server.New(server.Config{GRPCAddr: ":0"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Record a method but contribute NO rule for it.
+	s.RecordMethods("/svc.v1.Svc/Orphan")
+	s.AddRules(authz.MethodRule{Method: "/svc.v1.Svc/Other", Verb: authz.Get, Resource: "x"})
+
+	err = s.Serve(context.Background())
+	if err == nil {
+		t.Fatal("Serve: want fail-closed error for undeclared method, got nil")
+	}
+	if !strings.Contains(err.Error(), "undeclared") {
+		t.Fatalf("Serve error = %q, want it to mention 'undeclared'", err.Error())
+	}
+}
+
+// TestServe_AllMethodsDeclared_PassesGate verifies the gate passes (and Serve
+// proceeds to listen) when every recorded method has a rule. The cancelled
+// context returns Serve cleanly, proving the gate did not block a valid config.
+func TestServe_AllMethodsDeclared_PassesGate(t *testing.T) {
+	s, err := server.New(server.Config{GRPCAddr: ":0"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.RecordMethods("/svc.v1.Svc/Get", "/svc.v1.Svc/Health")
+	s.AddRules(
+		authz.MethodRule{Method: "/svc.v1.Svc/Get", Verb: authz.Get, Resource: "x"},
+		authz.MethodRule{Method: "/svc.v1.Svc/Health", Public: true},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve with all methods declared returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return within 5s after cancel")
 	}
 }
 

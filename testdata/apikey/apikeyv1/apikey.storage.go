@@ -212,6 +212,11 @@ func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOption
 
 func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey, error) {
 	m := toModel_APIKey(entity)
+	if m.AccountId == "" {
+		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			m.AccountId = tenantID
+		}
+	}
 	if entity.KeyValue != "" {
 		h, err := r.enc.Hash(ctx, entity.KeyValue)
 		if err != nil {
@@ -582,6 +587,11 @@ func (r *APIKeySummaryRepository) List(ctx context.Context, opts persistence.Lis
 
 func (r *APIKeySummaryRepository) Create(ctx context.Context, entity *APIKeySummary) (*APIKeySummary, error) {
 	m := toModel_APIKeySummary(entity)
+	if m.AccountId == "" {
+		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			m.AccountId = tenantID
+		}
+	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelAPIKeySummaryOnCreate != nil {
 		ToModelAPIKeySummaryOnCreate(entity, m)

@@ -17,8 +17,15 @@ import (
 // GetUpdateMask() []string and the mask must be non-empty; otherwise
 // codes.InvalidArgument is returned.
 func FieldMaskUnary(verbMap map[string]string) grpc.UnaryServerInterceptor {
+	return FieldMaskUnarySource(func() map[string]string { return verbMap })
+}
+
+// FieldMaskUnarySource is FieldMaskUnary over a lazily-resolved verb map, so the
+// interceptor sees verbs for rules contributed after construction (e.g. the
+// server's accumulated AddRules set). src is consulted on each request.
+func FieldMaskUnarySource(src func() map[string]string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if verb, ok := verbMap[info.FullMethod]; ok && verb == "update" {
+		if verb, ok := src()[info.FullMethod]; ok && verb == "update" {
 			type maskGetter interface {
 				GetUpdateMask() []string
 			}

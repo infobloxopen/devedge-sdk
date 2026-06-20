@@ -124,8 +124,10 @@ func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T,
 }
 
 // Create implements [Repository]. It generates and stores an ETag for the new
-// entity.
-func (r *MemoryRepository[T, K]) Create(_ context.Context, entity T) (T, error) {
+// entity and surfaces it via [etag.SetNewETag] (mirroring Update), so a handler
+// that simply delegates to the repository — including the generated default CRUD
+// handler — gets the AIP-154 ETag trailer with no extra code.
+func (r *MemoryRepository[T, K]) Create(ctx context.Context, entity T) (T, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := r.keyFn(entity)
@@ -133,9 +135,11 @@ func (r *MemoryRepository[T, K]) Create(_ context.Context, entity T) (T, error) 
 		var zero T
 		return zero, ErrConflict
 	}
+	newETag := uuid.New().String()
 	r.items[key] = entity
-	r.etags[key] = uuid.New().String()
+	r.etags[key] = newETag
 	r.keys = append(r.keys, key)
+	etag.SetNewETag(ctx, newETag)
 	return entity, nil
 }
 

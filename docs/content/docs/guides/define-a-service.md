@@ -187,32 +187,40 @@ You now have:
 |---|---|---|
 | `apikey.pb.go`, `apikey_grpc.pb.go` | base plugins | message types + gRPC stubs |
 | `apikey.authz.go` | `protoc-gen-devedge-authz` | `APIKeyServiceAuthzRules []authz.MethodRule` |
-| `apikey.svc.go` | `protoc-gen-svc` | `RegisterAPIKeyService(srv, impl)` — boot-gate + gRPC/gateway registration (you write the handlers) |
+| `apikey.svc.go` | `protoc-gen-svc` | the generated default CRUD handler `APIKeyServiceCRUDHandler` + `NewAPIKeyServiceHandler` / `RegisterAPIKeyServiceWithRepository` / `RegisterAPIKeyService` (no hand-written handler for pure CRUD) |
 | `apikey.storage.go` | `protoc-gen-storage` | `APIKeyModel` + `APIKeyRepository` (GORM) |
 | `apikey.pb.gw.go` | gateway plugin | HTTP/JSON gateway registration |
 | `ent/schema/api_key.go` | `protoc-gen-ent` | the ent schema (run `go generate ./ent` to build the client) |
 
 ## 4. Wire the server
 
-Pass the generated rules to `server.New` and register the generated service:
+For a pure-CRUD service there is **no hand-written handler and no hand-listed rules** — build the
+repository and register it in one call:
 
 ```go
 srv, err := server.New(server.Config{
     GRPCAddr: ":9090",
     HTTPAddr: ":8080",
-    Rules:    apikeyv1.APIKeyServiceAuthzRules,
+    // No Rules: RegisterAPIKeyServiceWithRepository contributes APIKeyServiceAuthzRules.
     Authorizer: authz.NewDevAuthorizer(/* grants */),
     // Derive the principal from request metadata in dev so grants can match;
     // swap for a verified-token PrincipalFunc in production. See server reference.
     PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 })
-// The generated RegisterAPIKeyService runs the boot-time authz gate and registers
-// the service on both the gRPC server and the HTTP gateway in one call:
-if err := apikeyv1.RegisterAPIKeyService(srv, &apiKeyServer{ /* repo, enc */ }); err != nil {
+// One call: construct the generated default CRUD handler over the repository,
+// register it on gRPC + the HTTP gateway, and contribute the service's authz
+// rules. The boot-time completeness gate runs at srv.Serve.
+repo := apikeyv1.NewAPIKeyRepository(db, enc) // generated GORM repo (enc for the secret field)
+if err := apikeyv1.RegisterAPIKeyServiceWithRepository(srv, repo); err != nil {
     log.Fatal(err)
 }
 // then srv.Serve(ctx)
 ```
+
+**Custom or non-CRUD logic?** Embed the generated `APIKeyServiceCRUDHandler`, override only the
+methods you change (and add any custom RPCs the generator left `Unimplemented`), then register your
+handler with `RegisterAPIKeyService(srv, h)`. See
+[codegen → protoc-gen-svc](../../reference/codegen.md#protoc-gen-svc) for the override recipe.
 
 The generated rules feed both the authz interceptor and the field-mask validator. See the
 [server reference](../../reference/server.md).
