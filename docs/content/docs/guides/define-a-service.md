@@ -223,6 +223,30 @@ The generated rules feed both the authz interceptor and the field-mask validator
 constructor is `NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor)`. See
 [Secret fields](../model-a-resource/#secret-fields).
 
+## Governing the public API locally
+
+The proto is the **public, apx-governed** contract, so run the same gates locally that CI runs before
+you push. A service scaffolded with `devedge-sdk new service` ships Makefile targets for each:
+
+```sh
+make api-lint       # STANDARD lint of the public proto (apx lint)
+make api-breaking   # backward-compatibility check vs the last committed proto (apx breaking --against HEAD)
+make api-release    # prepare a versioned release (apx release prepare … --lifecycle experimental)
+```
+
+Or call `apx` directly: `apx lint`, `apx breaking --against HEAD`, `apx release prepare proto/<svc>/v1
+--version v1.0.0-alpha.1 --lifecycle experimental --dry-run`.
+
+- **`api-breaking`** catches an accidental breaking change before it lands. A brand-new API has nothing
+  to break against (HEAD equals the working tree), so it passes trivially; once released, compare
+  against the released tag instead.
+- **`api-release`** on the **ent** scaffold prints a **non-fatal `go_package` mismatch** warning — `got
+  "<module>/gen/<svc>v1", expected "<module>/proto/<svc>/v1"`. It is **expected and harmless**: the
+  generated Go must be a single directory segment under `gen/` so the sibling generated `ent/` package
+  compiles, which is not the `<module>/<api-id>` layout apx derives by default. The command exits 0 —
+  do not realign the `go_package` (it breaks the ent build) and do not pass `--strict` (that turns the
+  warning fatal). See [codegen → buf.gen.yaml](../../reference/codegen/#putting-them-in-bufgenyaml).
+
 ## Next
 
 - [Storage shapes](../storage-shapes/) — GORM vs ent.

@@ -9,7 +9,10 @@ version: v2
 #   - protoc-gen-ent takes NO `module=` opt (the others do): it derives its
 #     output dir from the proto's Go package, emitting ent/ as a sibling of the
 #     proto package dir (gen/ent, next to gen/{{.GoPkg}}). This is why the proto
-#     go_package is a single segment ("gen/{{.GoPkg}}") — see model.go.
+#     go_package is a single segment ("gen/{{.GoPkg}}"): so the generated ent/
+#     package compiles as a sibling. (Aligning it to <module>/proto/<svc>/v1 — what
+#     apx expects — breaks the ent build; the resulting go_package mismatch warning
+#     from `apx release prepare` is therefore expected and harmless — see README.)
 #   - protoc-gen-ent emits ent SCHEMAS + the repo adapter only; the ent CLIENT
 #     is generated in a SECOND step by entc (`go generate ./gen/ent`), which
 #     `make generate` and the scaffold's first generate run for you.

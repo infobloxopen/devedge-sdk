@@ -56,6 +56,27 @@ gen/                         GENERATED, git-ignored — never edit by hand
 Makefile                     tools / generate / bootstrap / build / test / run
 ```
 
-## Releasing the API
+## Governing the public API (apx)
 
-The public proto is versioned with apx. See `.github/workflows/apx-release.yml` and `make api-release`.
+The proto under `proto/{{.ProtoPathSuffix}}/` is the **public, apx-governed** contract. Run these gates
+locally before you push — CI runs the same ones:
+
+```sh
+make api-lint       # STANDARD lint of the public proto
+make api-breaking   # compatibility check vs the last committed proto (apx breaking --against HEAD)
+make api-release    # prepare a versioned release (dry-run-equivalent; see note below)
+```
+
+`make api-breaking` catches an accidental breaking change before it lands. A brand-new API has nothing
+to break against (HEAD equals the working tree), so it passes trivially; once you've released, compare
+against the released tag instead.
+
+> **Expected, harmless warning.** `make api-release` (and `apx release prepare --dry-run`) prints a
+> **non-fatal `go_package` mismatch** warning — `got "{{.Module}}/gen/{{.GoPkg}}", expected
+> "{{.Module}}/proto/{{.ProtoPathSuffix}}"`. This is by design: the generated Go must live in a single
+> directory segment under `gen/` (`gen/{{.GoPkg}}`) so the sibling generated `ent/` package compiles,
+> which is **not** the `<module>/<api-id>` layout apx derives by default. The command **exits 0** — do
+> not "fix" the `go_package` to silence it (that breaks the build), and do not pass `--strict` (that
+> turns the warning fatal).
+
+See `.github/workflows/apx-release.yml` for the release pipeline.
