@@ -75,17 +75,25 @@ func Generate(ctx context.Context, opts Options, out io.Writer) (*Model, error) 
 		// ent is a TWO-STEP generate, and the steps have an ordering hazard: buf
 		// ran protoc-gen-ent (the ent SCHEMAS + the New<R>EntRepository adapter +
 		// main.go), all of which import the ent CLIENT packages (gen/ent/order,
-		// .../predicate, .../runtime) that entc has NOT generated yet. A plain
-		// `go mod tidy` here would try to resolve those not-yet-existing internal
-		// packages as remote modules and fail. So:
-		//   1. `go mod tidy -e` (best-effort: ignore the unresolvable internal
-		//      client-package errors) just to pull the entc toolchain deps into
-		//      go.sum so entc can run;
-		//   2. `go generate ./gen/ent` → entc turns the schemas into the client;
-		//   3. a clean `go mod tidy` now that every package exists.
-		fmt.Fprintf(out, "• go mod tidy -e (seed entc deps)\n")
-		// Errors expected/ignored: the client packages don't exist until step 2.
-		_ = runCmd(ctx, abs, nil, "go", "mod", "tidy", "-e")
+		// .../predicate, .../runtime) that entc has NOT generated yet. entc also
+		// COMPILES the schema package during `go generate`, so the entc tool AND the
+		// SDK packages the schema/adapter import must be in go.sum first.
+		//
+		// We previously seeded those with `go mod tidy -e`, but tidy BUILDS the
+		// module — so on a fresh clone it tripped over the not-yet-generated
+		// gen/ent/* imports and printed an alarming (but ignored) `fatal: Could not
+		// read from remote repository` / "cannot find module providing package
+		// gen/ent/*". `go get` of the EXACT deps resolves them WITHOUT building the
+		// module, so the cold-start is clean. Then entc runs; the clean tidy is last.
+		fmt.Fprintf(out, "• seeding ent codegen toolchain (go.sum)\n")
+		if err := runCmd(ctx, abs, nil, "go", "get",
+			"entgo.io/ent/cmd/ent",
+			"github.com/infobloxopen/devedge-sdk/persistence/entrepo",
+			"github.com/infobloxopen/devedge-sdk/middleware",
+			"github.com/infobloxopen/devedge-sdk/persistence/resourcename",
+		); err != nil {
+			return nil, fmt.Errorf("seed ent codegen toolchain (go get): %w", err)
+		}
 		fmt.Fprintf(out, "• go generate ./gen/ent (entc client)\n")
 		if err := runCmd(ctx, abs, nil, "go", "generate", "./gen/ent"); err != nil {
 			return nil, fmt.Errorf("go generate ./gen/ent (entc): %w", err)
