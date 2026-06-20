@@ -87,8 +87,12 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 		},
 		Update_: func(ctx context.Context, key string, entity *APIKeySummary, fieldMask ...string) (*APIKeySummary, error) {
 			u := client.APIKey.UpdateOneID(key)
-			u = u.SetKeyPrefix(entity.GetKeyPrefix())
-			u = u.SetLabel(entity.GetLabel())
+			if apikeysummaryInMask(fieldMask, "key_prefix") {
+				u = u.SetKeyPrefix(entity.GetKeyPrefix())
+			}
+			if apikeysummaryInMask(fieldMask, "label") {
+				u = u.SetLabel(entity.GetLabel())
+			}
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entapikey.AccountID(tenantID))
 			}

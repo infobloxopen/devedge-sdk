@@ -229,3 +229,89 @@ func TestEntRepository_ResourceNamePopulated(t *testing.T) {
 		t.Errorf("ParseAPIKeyName(%q) = (%q, %v), want (\"k1\", nil)", got.GetName(), id, perr)
 	}
 }
+
+// TestEntRepository_UpdateHonorsFieldMask is the GH #60 runtime regression: the ent
+// Update_ must write ONLY the masked proto fields, leaving unmasked fields intact —
+// matching the documented "Update and the field mask" contract, the GORM Update, and
+// the ent batch wrapper (G-005 cross-backend parity). Before the fix the closure set
+// every mutable field unconditionally, so a partial update (mask=["label"]) clobbered
+// the unmasked key_prefix with its zero value (and on a not_null+unique business key
+// would have failed the ent validator outright).
+func TestEntRepository_UpdateHonorsFieldMask(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:update_mask_ent_rt?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
+	ctx := tenantCtx("t1")
+
+	if _, err := repo.Create(ctx, &apikeyv1.APIKey{
+		Id:        "k1",
+		AccountId: "t1",
+		KeyPrefix: "sk_orig",
+		Label:     "initial-label",
+		KeyValue:  "sk_secret_xyz",
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Masked update of ONLY "label" — supply an empty KeyPrefix in the entity. The
+	// pre-fix bug would set KeyPrefix("") because it ignored the mask.
+	updated, err := repo.Update(ctx, "k1", &apikeyv1.APIKey{
+		Id:    "k1",
+		Label: "updated-label",
+		// KeyPrefix intentionally empty; it is NOT in the mask and must be preserved.
+	}, "label")
+	if err != nil {
+		t.Fatalf("masked update: %v", err)
+	}
+	if updated.Label != "updated-label" {
+		t.Errorf("masked field not written: Label=%q, want updated-label", updated.Label)
+	}
+	if updated.KeyPrefix != "sk_orig" {
+		t.Errorf("unmasked field clobbered (#60): KeyPrefix=%q, want sk_orig", updated.KeyPrefix)
+	}
+
+	// Re-read to confirm what is persisted, not just the in-flight projection.
+	got, err := repo.Get(ctx, "k1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Label != "updated-label" {
+		t.Errorf("persisted Label=%q, want updated-label", got.Label)
+	}
+	if got.KeyPrefix != "sk_orig" {
+		t.Errorf("persisted unmasked KeyPrefix clobbered (#60): %q, want sk_orig", got.KeyPrefix)
+	}
+
+	// The secret was not in the mask and no new value was supplied — it must survive.
+	row, err := client.APIKey.Get(ctx, "k1")
+	if err != nil {
+		t.Fatalf("read ent row: %v", err)
+	}
+	if row.KeyValueCipher == "" || row.KeyValueHash == "" {
+		t.Error("secret columns wiped by a masked non-secret update (#60)")
+	}
+
+	// Empty mask is still a full update: clearing Label to "" persists, KeyPrefix is
+	// rewritten from the entity (here back to sk_orig). This keeps the no-mask
+	// zero-value behavior green alongside the masked path.
+	if _, err := repo.Update(ctx, "k1", &apikeyv1.APIKey{
+		Id:        "k1",
+		AccountId: "t1",
+		KeyPrefix: "sk_orig",
+		Label:     "", // zero value — full update must persist it
+	}); err != nil {
+		t.Fatalf("full update: %v", err)
+	}
+	full, err := repo.Get(ctx, "k1")
+	if err != nil {
+		t.Fatalf("get after full update: %v", err)
+	}
+	if full.Label != "" {
+		t.Errorf("full (empty-mask) update dropped zero value: Label=%q, want empty", full.Label)
+	}
+	if full.KeyPrefix != "sk_orig" {
+		t.Errorf("full update KeyPrefix=%q, want sk_orig", full.KeyPrefix)
+	}
+}

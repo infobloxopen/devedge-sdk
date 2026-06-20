@@ -132,6 +132,107 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 	}
 }
 
+// TestRenderEntRepoAdapter_updateHonorsFieldMask is the GH #60 gate: the single
+// Update_ adapter must honor the field mask exactly like the GORM Update and the ent
+// batch wrapper (G-005 cross-backend parity). Every writable Set — plain scalar,
+// foreign key, and secret — is gated on the sibling <maskLower>InMask helper, which
+// returns true for an empty mask (full update) and only the named proto fields for a
+// non-empty mask. Without this, a partial update overwrites an unmasked not_null +
+// unique business key (e.g. code) with its zero value and fails the ent validator.
+func TestRenderEntRepoAdapter_updateHonorsFieldMask(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Coupon",
+		SoftDelete:  true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "code", SnakeName: "code", EntType: "String", Unique: true, NotNull: true},
+			{Name: "discount_bps", SnakeName: "discount_bps", EntType: "Int32"},
+			{Name: "fleet_id", SnakeName: "fleet_id", EntType: "String"},
+			{Name: "fleet", SnakeName: "fleet", IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "fleet_id"}},
+			{Name: "signing_key", SnakeName: "signing_key", EntType: "String", IsSecret: true},
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "couponv1", "github.com/example/coupond/couponv1")
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+
+	// Isolate the Update_ closure so the assertions below cannot accidentally match
+	// the Create_ / batch sets, which legitimately set fields unconditionally.
+	start := strings.Index(out, "Update_: func(ctx context.Context, key string, entity *Coupon")
+	if start < 0 {
+		t.Fatal("Update_ closure not found in generated adapter")
+	}
+	end := strings.Index(out[start:], "Delete_: func(")
+	if end < 0 {
+		t.Fatal("could not bound the Update_ closure (Delete_ not found)")
+	}
+	upd := out[start : start+end]
+
+	// Plain scalar set must be gated on the InMask helper (matching the batch wrapper
+	// name strings.ToLower(res) = "coupon").
+	wantGates := []string{
+		`if couponInMask(fieldMask, "discount_bps") {`,
+		`u = u.SetDiscountBps(entity.GetDiscountBps())`,
+		// Foreign key: mask AND non-empty value.
+		`if couponInMask(fieldMask, "fleet_id") && entity.GetFleetId() != "" {`,
+		// Secret: mask AND enc != nil AND non-empty value.
+		`if couponInMask(fieldMask, "signing_key") && enc != nil && entity.GetSigningKey() != "" {`,
+	}
+	for _, w := range wantGates {
+		if !strings.Contains(upd, w) {
+			t.Errorf("masked Update_ missing gate %q\n--- Update_ ---\n%s", w, upd)
+		}
+	}
+
+	// Regression guard for the exact #60 bug: the plain scalar must never be set
+	// unconditionally. The old code emitted a bare, un-indented `u = u.SetX(...)` as
+	// a top-level statement in the closure (one tab past the closure body). The fixed
+	// code only ever emits that statement inside an `if couponInMask(...) {` block, so
+	// the bare statement must not appear immediately after the UpdateOneID line.
+	if strings.Contains(upd, "u := client.Coupon.UpdateOneID(key)\n\t\t\tu = u.SetDiscountBps(entity.GetDiscountBps())") {
+		t.Error("plain scalar set is ungated in Update_ — #60 regression")
+	}
+	// The tenant key is never a Set in Update_ (only the WHERE guard).
+	if strings.Contains(upd, "SetAccountID(entity.GetAccountId())") {
+		t.Error("account_id (tenant key) must never be Set in Update_; it is only the WHERE guard")
+	}
+	if !strings.Contains(upd, "entcoupon.AccountID(tenantID)") {
+		t.Error("Update_ must still apply the tenant WHERE guard")
+	}
+
+	// The empty-mask (full update) path is provided by couponInMask returning true on
+	// an empty mask. That helper is emitted by the sibling batch wrapper; the adapter
+	// must NOT redefine it (duplicate symbol). Confirm the adapter only CALLS it.
+	if strings.Contains(out, "func couponInMask(") {
+		t.Error("adapter must reuse the batch wrapper's couponInMask helper, not redefine it")
+	}
+}
+
+// TestRenderEntRepository_emitsInMaskHelper proves the sibling batch wrapper (always
+// generated alongside the adapter for the same message) defines the couponInMask
+// helper the masked Update_ relies on, with an empty-mask-returns-true contract.
+func TestRenderEntRepository_emitsInMaskHelper(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Coupon",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "code", SnakeName: "code", EntType: "String"},
+		},
+	}
+	out := renderEntRepository(msg, msg, "couponv1", "github.com/example/coupond/couponv1")
+	if !strings.Contains(out, "func couponInMask(mask []string, field string) bool {") {
+		t.Fatal("batch wrapper must define couponInMask for the masked adapter to reuse")
+	}
+	if !strings.Contains(out, "if len(mask) == 0 {\n\t\treturn true\n\t}") {
+		t.Error("couponInMask must return true for an empty mask (full update semantics)")
+	}
+}
+
 // TestRenderEntRepoAdapter_noTenantNoSecretHardDelete covers the minimal shape:
 // no account_id (no tenant guard / no middleware import), no secret (no enc
 // param), no soft-delete (hard-delete path, no Undelete_).

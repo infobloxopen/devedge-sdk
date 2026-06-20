@@ -105,13 +105,19 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 		},
 		Update_: func(ctx context.Context, key string, entity *APIKey, fieldMask ...string) (*APIKey, error) {
 			u := client.APIKey.UpdateOneID(key)
-			u = u.SetKeyPrefix(entity.GetKeyPrefix())
-			u = u.SetLabel(entity.GetLabel())
-			u = u.SetTags(entity.GetTags())
+			if apikeyInMask(fieldMask, "key_prefix") {
+				u = u.SetKeyPrefix(entity.GetKeyPrefix())
+			}
+			if apikeyInMask(fieldMask, "label") {
+				u = u.SetLabel(entity.GetLabel())
+			}
+			if apikeyInMask(fieldMask, "tags") {
+				u = u.SetTags(entity.GetTags())
+			}
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entapikey.AccountID(tenantID))
 			}
-			if enc != nil && entity.GetKeyValue() != "" {
+			if apikeyInMask(fieldMask, "key_value") && enc != nil && entity.GetKeyValue() != "" {
 				h, herr := enc.Hash(ctx, entity.GetKeyValue())
 				if herr != nil {
 					return nil, fmt.Errorf("hash key_value: %w", herr)
