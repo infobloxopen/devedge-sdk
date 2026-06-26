@@ -130,6 +130,37 @@ func TestMakefileSDKVersionFromGoMod(t *testing.T) {
 	}
 }
 
+// TestMakefileGenerateLocksDeps is the dogfood-F-4 regression: the generated
+// Makefile's `generate` target must lock the buf deps (googleapis: google/api/*)
+// before `buf generate`, so a tree that never locked them — e.g. scaffolded with
+// `--no-generate` — does not fail with `import "google/api/annotations.proto": file
+// does not exist`. The scaffold pipeline runs `buf dep update` itself on the default
+// path; the Makefile must do the same for the user-driven generate step. It is
+// guarded on a missing buf.lock so a committed lock is left untouched.
+func TestMakefileGenerateLocksDeps(t *testing.T) {
+	for _, backend := range []Backend{BackendGORM, BackendEnt} {
+		t.Run(string(backend), func(t *testing.T) {
+			m, err := Options{Service: "orders", Resource: "Order", Backend: backend}.Validate()
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			out, err := renderTemplate("Makefile.tmpl", m)
+			if err != nil {
+				t.Fatalf("render Makefile.tmpl: %v", err)
+			}
+			mk := string(out)
+			if !strings.Contains(mk, "buf dep update") {
+				t.Errorf("generate target must run `buf dep update` to lock googleapis deps:\n%s", mk)
+			}
+			// The lock must be created only when absent, so a committed buf.lock
+			// (fresh-clone, reproducible) is not silently rewritten on every generate.
+			if !strings.Contains(mk, "test -f buf.lock || buf dep update") {
+				t.Errorf("`buf dep update` must be guarded on a missing buf.lock:\n%s", mk)
+			}
+		})
+	}
+}
+
 func assertEq(t *testing.T, field, got, want string) {
 	t.Helper()
 	if got != want {
