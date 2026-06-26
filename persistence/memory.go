@@ -5,10 +5,17 @@ import (
 	"encoding/base64"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 )
+
+// memRepoSeq assigns each MemoryRepository a process-unique, monotonically
+// increasing id at construction. The id is the stable lock-ordering key used by
+// MemoryTxRunner to acquire participant locks in a consistent order (deadlock
+// avoidance). Unlike a pointer-derived key it is GC-move-safe and deterministic.
+var memRepoSeq atomic.Uint64
 
 // SetIfMatchExpectation injects an expected ETag into ctx for testing the
 // precondition check in Update.
@@ -29,6 +36,7 @@ type MemoryRepository[T any, K comparable] struct {
 	keys    []K
 	deleted map[K]bool
 	keyFn   func(T) K
+	id      uint64 // stable lock-ordering key (see memRepoSeq)
 }
 
 // NewMemoryRepository returns an in-memory repository. keyFn extracts the key
@@ -40,6 +48,7 @@ func NewMemoryRepository[T any, K comparable](keyFn func(T) K) *MemoryRepository
 		keys:    []K{},
 		deleted: map[K]bool{},
 		keyFn:   keyFn,
+		id:      memRepoSeq.Add(1),
 	}
 }
 
@@ -47,8 +56,10 @@ func NewMemoryRepository[T any, K comparable](keyFn func(T) K) *MemoryRepository
 // into ctx via [etag.SetNewETag] so callers (and interceptors) can read it.
 // Returns ErrNotFound for soft-deleted entities.
 func (r *MemoryRepository[T, K]) Get(ctx context.Context, key K) (T, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if !r.inThisTx(ctx) {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+	}
 	v, ok := r.items[key]
 	if !ok || r.deleted[key] {
 		var zero T
@@ -72,9 +83,11 @@ func (r *MemoryRepository[T, K]) GetETagForKey(key K) string {
 // PageToken is a base64-encoded decimal offset. PageSize defaults to 50.
 // Filter and OrderBy are ignored by the in-memory implementation.
 // Soft-deleted entities are excluded unless opts.ShowDeleted is true.
-func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T, string, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+func (r *MemoryRepository[T, K]) List(ctx context.Context, opts ListOptions) ([]T, string, error) {
+	if !r.inThisTx(ctx) {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+	}
 
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
@@ -100,14 +113,9 @@ func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T,
 	}
 
 	total := len(visible)
-	if offset > total {
-		offset = total
-	}
+	offset = min(offset, total)
 
-	end := offset + pageSize
-	if end > total {
-		end = total
-	}
+	end := min(offset+pageSize, total)
 
 	page := visible[offset:end]
 	items := make([]T, 0, len(page))
@@ -128,8 +136,10 @@ func (r *MemoryRepository[T, K]) List(_ context.Context, opts ListOptions) ([]T,
 // that simply delegates to the repository — including the generated default CRUD
 // handler — gets the AIP-154 ETag trailer with no extra code.
 func (r *MemoryRepository[T, K]) Create(ctx context.Context, entity T) (T, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	if !r.inThisTx(ctx) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 	key := r.keyFn(entity)
 	if _, ok := r.items[key]; ok {
 		var zero T
@@ -149,8 +159,10 @@ func (r *MemoryRepository[T, K]) Create(ctx context.Context, entity T) (T, error
 // match the stored ETag, Update returns [ErrPreconditionFailed]. On success the
 // new ETag is written into ctx via [etag.SetNewETag].
 func (r *MemoryRepository[T, K]) Update(ctx context.Context, key K, entity T, _ ...string) (T, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	if !r.inThisTx(ctx) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 	if _, ok := r.items[key]; !ok {
 		var zero T
 		return zero, ErrNotFound
@@ -175,9 +187,11 @@ func (r *MemoryRepository[T, K]) Update(ctx context.Context, key K, entity T, _ 
 // marked deleted but not removed. Get returns ErrNotFound; List excludes it
 // unless opts.ShowDeleted is set. Returns ErrNotFound when the key is absent
 // or already soft-deleted.
-func (r *MemoryRepository[T, K]) Delete(_ context.Context, key K) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *MemoryRepository[T, K]) Delete(ctx context.Context, key K) error {
+	if !r.inThisTx(ctx) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 	if _, ok := r.items[key]; !ok {
 		return ErrNotFound
 	}
@@ -191,12 +205,14 @@ func (r *MemoryRepository[T, K]) Delete(_ context.Context, key K) error {
 // BatchGet implements [BatchRepository]. Returns items in the same order as keys.
 // Returns ErrNotFound if any key does not exist or is soft-deleted. An empty
 // keys slice returns an empty slice with no error.
-func (r *MemoryRepository[T, K]) BatchGet(_ context.Context, keys []K) ([]T, error) {
+func (r *MemoryRepository[T, K]) BatchGet(ctx context.Context, keys []K) ([]T, error) {
 	if len(keys) == 0 {
 		return []T{}, nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if !r.inThisTx(ctx) {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+	}
 	items := make([]T, 0, len(keys))
 	for _, k := range keys {
 		if _, ok := r.items[k]; !ok || r.deleted[k] {
@@ -214,12 +230,14 @@ func (r *MemoryRepository[T, K]) BatchGet(_ context.Context, keys []K) ([]T, err
 // ignored, matching Update) and gets a fresh ETag. ETag preconditions are not
 // applied to batch updates. Returns updated entities in the same order as items;
 // an empty items slice returns an empty slice with no error.
-func (r *MemoryRepository[T, K]) BatchUpdate(_ context.Context, items []BatchUpdateItem[T, K]) ([]T, error) {
+func (r *MemoryRepository[T, K]) BatchUpdate(ctx context.Context, items []BatchUpdateItem[T, K]) ([]T, error) {
 	if len(items) == 0 {
 		return []T{}, nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	if !r.inThisTx(ctx) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 	for _, it := range items {
 		if _, ok := r.items[it.Key]; !ok || r.deleted[it.Key] {
 			return nil, ErrNotFound
@@ -237,12 +255,14 @@ func (r *MemoryRepository[T, K]) BatchUpdate(_ context.Context, items []BatchUpd
 // BatchDelete implements [BatchRepository]. Soft-deletes all keys atomically.
 // Pre-checks all keys before mutating: if any key is missing or already
 // soft-deleted, returns ErrNotFound without deleting anything.
-func (r *MemoryRepository[T, K]) BatchDelete(_ context.Context, keys []K) error {
+func (r *MemoryRepository[T, K]) BatchDelete(ctx context.Context, keys []K) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	if !r.inThisTx(ctx) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 	for _, k := range keys {
 		if _, ok := r.items[k]; !ok || r.deleted[k] {
 			return ErrNotFound
@@ -257,9 +277,11 @@ func (r *MemoryRepository[T, K]) BatchDelete(_ context.Context, keys []K) error 
 // Undelete implements [Repository]: clears the soft-delete mark so the entity
 // reappears in Get and List. Returns ErrNotFound when the key is absent or not
 // currently soft-deleted.
-func (r *MemoryRepository[T, K]) Undelete(_ context.Context, key K) (T, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *MemoryRepository[T, K]) Undelete(ctx context.Context, key K) (T, error) {
+	if !r.inThisTx(ctx) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 	if _, ok := r.items[key]; !ok {
 		var zero T
 		return zero, ErrNotFound

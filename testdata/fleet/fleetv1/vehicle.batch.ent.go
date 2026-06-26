@@ -36,11 +36,30 @@ func vehicleInMask(mask []string, field string) bool {
 	return false
 }
 
+func (r *VehicleEntRepository) batchModelClient(ctx context.Context) *ent.VehicleClient {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*ent.Tx); ok {
+			return tx.Vehicle
+		}
+	}
+	return r.client.Vehicle
+}
+
+func (r *VehicleEntRepository) batchTx(ctx context.Context) (*ent.Tx, bool, error) {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*ent.Tx); ok {
+			return tx, false, nil
+		}
+	}
+	tx, err := r.client.Tx(ctx)
+	return tx, true, err
+}
+
 func (r *VehicleEntRepository) BatchGet(ctx context.Context, keys []string) ([]*Vehicle, error) {
 	if len(keys) == 0 {
 		return []*Vehicle{}, nil
 	}
-	rows, err := r.client.Vehicle.Query().Where(entvehicle.IDIn(keys...)).All(ctx)
+	rows, err := r.batchModelClient(ctx).Query().Where(entvehicle.IDIn(keys...)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("batch get vehicle: %w", err)
 	}
@@ -64,9 +83,14 @@ func (r *VehicleEntRepository) BatchUpdate(ctx context.Context, items []persiste
 		return []*Vehicle{}, nil
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	tx, err := r.client.Tx(ctx)
+	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	rollback := func() {
+		if ownTx {
+			_ = tx.Rollback()
+		}
 	}
 	out := make([]*Vehicle, 0, len(items))
 	for _, it := range items {
@@ -82,7 +106,7 @@ func (r *VehicleEntRepository) BatchUpdate(ctx context.Context, items []persiste
 		}
 		saved, serr := u.Save(ctx)
 		if serr != nil {
-			_ = tx.Rollback()
+			rollback()
 			if ent.IsNotFound(serr) {
 				return nil, persistence.ErrNotFound
 			}
@@ -90,8 +114,10 @@ func (r *VehicleEntRepository) BatchUpdate(ctx context.Context, items []persiste
 		}
 		out = append(out, fromEntVehicle(saved))
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit tx: %w", err)
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit tx: %w", err)
+		}
 	}
 	return out, nil
 }
@@ -110,9 +136,14 @@ func (r *VehicleEntRepository) BatchDelete(ctx context.Context, keys []string) e
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	tx, err := r.client.Tx(ctx)
+	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
+	}
+	rollback := func() {
+		if ownTx {
+			_ = tx.Rollback()
+		}
 	}
 	del := tx.Vehicle.Delete().Where(entvehicle.IDIn(uniq...))
 	if tenantID != "" {
@@ -120,14 +151,17 @@ func (r *VehicleEntRepository) BatchDelete(ctx context.Context, keys []string) e
 	}
 	n, derr := del.Exec(ctx)
 	if derr != nil {
-		_ = tx.Rollback()
+		rollback()
 		return fmt.Errorf("batch delete vehicle: %w", derr)
 	}
 	if n != len(uniq) {
-		_ = tx.Rollback()
+		rollback()
 		return persistence.ErrNotFound
 	}
-	return tx.Commit()
+	if ownTx {
+		return tx.Commit()
+	}
+	return nil
 }
 
 // compile-time check.

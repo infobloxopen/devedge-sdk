@@ -740,10 +740,33 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	b.WriteString("\tif len(mask) == 0 {\n\t\treturn true\n\t}\n")
 	b.WriteString("\tfor _, m := range mask {\n\t\tif m == field {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\n")
 
+	// batchModelClient resolves the <Model> client to use for batch reads/writes:
+	// the transaction's client when persistence.TxRunner.Atomically has enrolled the
+	// context with an *ent.Tx, else the constructor client. This is what makes a
+	// batch op issued inside Atomically participate in the surrounding transaction
+	// (F030, D-1 option a) — the same tx-or-client resolution the single-op adapter
+	// uses, applied to the AIP-137 batch methods.
+	fmt.Fprintf(&b, "func (r *%sEntRepository) batchModelClient(ctx context.Context) *ent.%sClient {\n", res, model)
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	fmt.Fprintf(&b, "\t\tif tx, ok := h.(*ent.Tx); ok {\n\t\t\treturn tx.%s\n\t\t}\n\t}\n", model)
+	fmt.Fprintf(&b, "\treturn r.client.%s\n}\n\n", model)
+
+	// batchTx returns the *ent.Tx the batch write runs in plus whether THIS call owns
+	// it. When Atomically already enrolled an *ent.Tx on ctx the batch JOINS it
+	// (owns=false): it must not Commit/Rollback — the outer Atomically owns the
+	// commit/rollback decision, so a returned error rolls the whole unit back.
+	// Otherwise it opens its own tx (owns=true) and commits/rolls back locally.
+	fmt.Fprintf(&b, "func (r *%sEntRepository) batchTx(ctx context.Context) (*ent.Tx, bool, error) {\n", res)
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif tx, ok := h.(*ent.Tx); ok {\n\t\t\treturn tx, false, nil\n\t\t}\n\t}\n")
+	b.WriteString("\ttx, err := r.client.Tx(ctx)\n\treturn tx, true, err\n}\n\n")
+
 	// BatchGet — rides the tenant + soft-delete query interceptors automatically.
+	// Resolves the client from ctx so a batch read inside Atomically sees the
+	// transaction's own uncommitted writes (consistent with the single-op Get).
 	fmt.Fprintf(&b, "func (r *%sEntRepository) BatchGet(ctx context.Context, keys []string) ([]*%s, error) {\n", res, res)
 	fmt.Fprintf(&b, "\tif len(keys) == 0 {\n\t\treturn []*%s{}, nil\n\t}\n", res)
-	fmt.Fprintf(&b, "\trows, err := r.client.%s.Query().Where(ent%s.IDIn(keys...)).All(ctx)\n", model, lower)
+	fmt.Fprintf(&b, "\trows, err := r.batchModelClient(ctx).Query().Where(ent%s.IDIn(keys...)).All(ctx)\n", lower)
 	fmt.Fprintf(&b, "\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"batch get %s: %%w\", err)\n\t}\n", lower)
 	fmt.Fprintf(&b, "\tbyID := make(map[string]*%s, len(rows))\n", res)
 	fmt.Fprintf(&b, "\tfor _, e := range rows {\n\t\tbyID[e.ID] = fromEnt%s(e)\n\t}\n", res)
@@ -758,7 +781,8 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 	}
-	b.WriteString("\ttx, err := r.client.Tx(ctx)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
+	b.WriteString("\ttx, ownTx, err := r.batchTx(ctx)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
+	b.WriteString("\trollback := func() {\n\t\tif ownTx {\n\t\t\t_ = tx.Rollback()\n\t\t}\n\t}\n")
 	fmt.Fprintf(&b, "\tout := make([]*%s, 0, len(items))\n", res)
 	b.WriteString("\tfor _, it := range items {\n")
 	fmt.Fprintf(&b, "\t\tu := tx.%s.UpdateOneID(it.Key)\n", model)
@@ -778,19 +802,20 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 		setName := entSetterGoName(f.SnakeName)
 		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) && it.Entity.Get%s() != \"\" {\n", maskLower, f.SnakeName, getName)
 		fmt.Fprintf(&b, "\t\t\th, herr := r.enc.Hash(ctx, it.Entity.Get%s())\n", getName)
-		fmt.Fprintf(&b, "\t\t\tif herr != nil {\n\t\t\t\t_ = tx.Rollback()\n\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif herr != nil {\n\t\t\t\trollback()\n\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\tc, cerr := r.enc.Encrypt(ctx, it.Entity.Get%s())\n", getName)
-		fmt.Fprintf(&b, "\t\t\tif cerr != nil {\n\t\t\t\t_ = tx.Rollback()\n\t\t\t\treturn nil, fmt.Errorf(\"encrypt %s: %%w\", cerr)\n\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif cerr != nil {\n\t\t\t\trollback()\n\t\t\t\treturn nil, fmt.Errorf(\"encrypt %s: %%w\", cerr)\n\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\tu = u.Set%sHash(h).Set%sCipher(c)\n", setName, setName)
 		b.WriteString("\t\t}\n")
 	}
 	b.WriteString("\t\tsaved, serr := u.Save(ctx)\n")
-	b.WriteString("\t\tif serr != nil {\n\t\t\t_ = tx.Rollback()\n")
+	b.WriteString("\t\tif serr != nil {\n\t\t\trollback()\n")
 	b.WriteString("\t\t\tif ent.IsNotFound(serr) {\n\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\treturn nil, fmt.Errorf(\"batch update %s: %%w\", serr)\n\t\t}\n", lower)
 	fmt.Fprintf(&b, "\t\tout = append(out, fromEnt%s(saved))\n", res)
 	b.WriteString("\t}\n")
-	b.WriteString("\tif err := tx.Commit(); err != nil {\n\t\treturn nil, fmt.Errorf(\"commit tx: %w\", err)\n\t}\n")
+	// Only the owner commits; when joined to an outer Atomically the outer call commits.
+	b.WriteString("\tif ownTx {\n\t\tif err := tx.Commit(); err != nil {\n\t\t\treturn nil, fmt.Errorf(\"commit tx: %w\", err)\n\t\t}\n\t}\n")
 	b.WriteString("\treturn out, nil\n}\n\n")
 
 	// BatchDelete — one transactional bulk soft-delete (or hard delete); affected
@@ -802,7 +827,8 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 	}
-	b.WriteString("\ttx, err := r.client.Tx(ctx)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
+	b.WriteString("\ttx, ownTx, err := r.batchTx(ctx)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
+	b.WriteString("\trollback := func() {\n\t\tif ownTx {\n\t\t\t_ = tx.Rollback()\n\t\t}\n\t}\n")
 	if soft {
 		fmt.Fprintf(&b, "\tupd := tx.%s.Update().Where(ent%s.IDIn(uniq...))\n", model, lower)
 		if hasTenant {
@@ -817,10 +843,11 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 		}
 		b.WriteString("\tn, derr := del.Exec(ctx)\n")
 	}
-	b.WriteString("\tif derr != nil {\n\t\t_ = tx.Rollback()\n")
+	b.WriteString("\tif derr != nil {\n\t\trollback()\n")
 	fmt.Fprintf(&b, "\t\treturn fmt.Errorf(\"batch delete %s: %%w\", derr)\n\t}\n", lower)
-	b.WriteString("\tif n != len(uniq) {\n\t\t_ = tx.Rollback()\n\t\treturn persistence.ErrNotFound\n\t}\n")
-	b.WriteString("\treturn tx.Commit()\n}\n\n")
+	b.WriteString("\tif n != len(uniq) {\n\t\trollback()\n\t\treturn persistence.ErrNotFound\n\t}\n")
+	// Only the owner commits; when joined to an outer Atomically the outer call commits.
+	b.WriteString("\tif ownTx {\n\t\treturn tx.Commit()\n\t}\n\treturn nil\n}\n\n")
 
 	fmt.Fprintf(&b, "// compile-time check.\n")
 	fmt.Fprintf(&b, "var _ persistence.BatchRepository[*%s, string] = (*%sEntRepository)(nil)\n", res, res)
@@ -1019,13 +1046,20 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// Constructor signature: enc only when there are secret fields.
 	fmt.Fprintf(&b, "// New%sEntRepository wires the generated ent client into a\n", res)
 	fmt.Fprintf(&b, "// persistence.Repository[*%s, string].\n", res)
+	// txClientVar names the per-resource tx-or-client resolver emitted below. Each
+	// operation resolves its <Model> client through it instead of capturing the bare
+	// constructor client, so a write issued inside persistence.TxRunner.Atomically
+	// participates in the transaction (F030, D-1 option a).
+	txClientVar := lower + "Client"
 	if hasSecret {
 		b.WriteString("// enc may be nil only if no secret values will be written.\n")
 		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*%s, string] {\n", res, res)
+		writeEntTxClientResolver(&b, txClientVar, model)
 		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
 		b.WriteString("\t\tEnc: enc,\n")
 	} else {
 		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client) persistence.Repository[*%s, string] {\n", res, res)
+		writeEntTxClientResolver(&b, txClientVar, model)
 		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
 	}
 
@@ -1036,7 +1070,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		b.WriteString("\t\t\tif entity.GetAccountId() == \"\" && tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")
 	}
 	// Build the create setter chain: id, account_id (if tenant), then writable.
-	b.WriteString("\t\t\tb := client." + model + ".Create().\n")
+	b.WriteString("\t\t\tb := " + txClientVar + "(ctx).Create().\n")
 	chain := []string{"SetID(entity.GetId())"}
 	if ownerTenant {
 		chain = append(chain, "SetAccountID(entity.GetAccountId())")
@@ -1079,7 +1113,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 
 	// ---- Get_ ----
 	fmt.Fprintf(&b, "\t\tGet_: func(ctx context.Context, key string) (*%s, error) {\n", res)
-	fmt.Fprintf(&b, "\t\t\te, err := client.%s.Get(ctx, key)\n", model)
+	fmt.Fprintf(&b, "\t\t\te, err := %s(ctx).Get(ctx, key)\n", txClientVar)
 	b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n\t\t\t\treturn nil, err\n\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(e), nil\n", res)
 	b.WriteString("\t\t},\n")
@@ -1089,7 +1123,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if soft {
 		b.WriteString("\t\t\tif opts.ShowDeleted {\n\t\t\t\tctx = entrepo.WithShowDeleted(ctx)\n\t\t\t}\n")
 	}
-	fmt.Fprintf(&b, "\t\t\tq := client.%s.Query()\n", model)
+	fmt.Fprintf(&b, "\t\t\tq := %s(ctx).Query()\n", txClientVar)
 	b.WriteString("\t\t\tif opts.Filter != \"\" {\n")
 	if hasTags {
 		fmt.Fprintf(&b, "\t\t\t\tpred, perr := entrepo.FilterPredicate(opts.Filter, %sEntColumns, %sEntJSONColumns)\n", res, res)
@@ -1119,7 +1153,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// key (account_id) is never a Set here — only the WHERE guard below.
 	maskHelper := strings.ToLower(res) // matches maskLower in renderEntRepository
 	fmt.Fprintf(&b, "\t\tUpdate_: func(ctx context.Context, key string, entity *%s, fieldMask ...string) (*%s, error) {\n", res, res)
-	fmt.Fprintf(&b, "\t\t\tu := client.%s.UpdateOneID(key)\n", model)
+	fmt.Fprintf(&b, "\t\t\tu := %s(ctx).UpdateOneID(key)\n", txClientVar)
 	for _, f := range plainWritable {
 		fmt.Fprintf(&b, "\t\t\tif %sInMask(fieldMask, %q) {\n\t\t\t\tu = u.Set%s(entity.Get%s())\n\t\t\t}\n", maskHelper, f.SnakeName, entSetterGoName(f.SnakeName), entGoName(f.SnakeName))
 	}
@@ -1156,7 +1190,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// ---- Delete_ ----
 	fmt.Fprintf(&b, "\t\tDelete_: func(ctx context.Context, key string) error {\n")
 	if soft {
-		fmt.Fprintf(&b, "\t\t\tq := client.%s.UpdateOneID(key)\n", model)
+		fmt.Fprintf(&b, "\t\t\tq := %s(ctx).UpdateOneID(key)\n", txClientVar)
 		if ownerTenant {
 			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tq = q.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
 		}
@@ -1164,7 +1198,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		b.WriteString("\t\t\terr := q.SetDeleteTime(time.Now()).Exec(ctx)\n")
 		b.WriteString("\t\t\tif ent.IsNotFound(err) {\n\t\t\t\treturn persistence.ErrNotFound\n\t\t\t}\n\t\t\treturn err\n")
 	} else {
-		fmt.Fprintf(&b, "\t\t\tdel := client.%s.Delete().Where(ent%s.ID(key))\n", model, lower)
+		fmt.Fprintf(&b, "\t\t\tdel := %s(ctx).Delete().Where(ent%s.ID(key))\n", txClientVar, lower)
 		if ownerTenant {
 			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tdel = del.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
 		}
@@ -1177,7 +1211,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if soft {
 		fmt.Fprintf(&b, "\t\tUndelete_: func(ctx context.Context, key string) (*%s, error) {\n", res)
 		b.WriteString("\t\t\tshowCtx := entrepo.WithShowDeleted(ctx)\n")
-		fmt.Fprintf(&b, "\t\t\texisting, err := client.%s.Query().Where(\n\t\t\t\tent%s.ID(key),\n\t\t\t\tent%s.DeleteTimeNotNil(),\n\t\t\t).Only(showCtx)\n", model, lower, lower)
+		fmt.Fprintf(&b, "\t\t\texisting, err := %s(ctx).Query().Where(\n\t\t\t\tent%s.ID(key),\n\t\t\t\tent%s.DeleteTimeNotNil(),\n\t\t\t).Only(showCtx)\n", txClientVar, lower, lower)
 		b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n")
 		fmt.Fprintf(&b, "\t\t\t\treturn nil, fmt.Errorf(\"undelete %s: %%w\", err)\n\t\t\t}\n", lower)
 		b.WriteString("\t\t\trestored, err := existing.Update().ClearDeleteTime().Save(ctx)\n")
@@ -1277,4 +1311,72 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	}
 
 	return b.String()
+}
+
+// renderEntTxRunner emits the package-level ent-backed persistence.TxRunner
+// (F030, T5). One runner per generated package wraps the *ent.Client: Atomically
+// opens client.Tx(ctx), stashes the *ent.Tx on ctx (via persistence.WithTx) so the
+// tx-aware repository resolvers in this package bind to it, runs fn, then commits
+// on nil or rolls back on error/panic. A nested Atomically already carrying this
+// backend's *ent.Tx joins the outer transaction (no second Begin/Commit).
+//
+// pkgName is the proto Go package (for the file's package clause); entImport is the
+// generated ent client import path.
+func renderEntTxRunner(pkgName, entImport string) string {
+	var b strings.Builder
+	b.WriteString("// Code generated by protoc-gen-ent. DO NOT EDIT.\n")
+	fmt.Fprintf(&b, "package %s\n\n", pkgName)
+	b.WriteString("import (\n")
+	b.WriteString("\t\"context\"\n")
+	b.WriteString("\t\"fmt\"\n\n")
+	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
+	fmt.Fprintf(&b, "\tent %q\n", entImport)
+	b.WriteString(")\n\n")
+
+	b.WriteString("// EntTxRunner is the ent-backed persistence.TxRunner for this package. Construct\n")
+	b.WriteString("// it with the same *ent.Client the New<R>EntRepository constructors use; the\n")
+	b.WriteString("// generated repositories resolve their client from the transaction it stashes on\n")
+	b.WriteString("// ctx, so writes issued inside Atomically participate in the transaction.\n")
+	b.WriteString("type EntTxRunner struct {\n\tclient *ent.Client\n}\n\n")
+
+	b.WriteString("// NewEntTxRunner returns the ent TxRunner over client.\n")
+	b.WriteString("func NewEntTxRunner(client *ent.Client) *EntTxRunner {\n\treturn &EntTxRunner{client: client}\n}\n\n")
+
+	b.WriteString("// Atomically implements persistence.TxRunner.\n")
+	b.WriteString("func (r *EntTxRunner) Atomically(ctx context.Context, fn func(ctx context.Context) error) (err error) {\n")
+	b.WriteString("\t// Nested: join an ent transaction already on ctx (no second Begin/Commit).\n")
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif _, ok := h.(*ent.Tx); ok {\n\t\t\treturn fn(ctx)\n\t\t}\n\t}\n")
+	b.WriteString("\ttx, err := r.client.Tx(ctx)\n")
+	b.WriteString("\tif err != nil {\n\t\treturn fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
+	b.WriteString("\tdefer func() {\n")
+	b.WriteString("\t\tif p := recover(); p != nil {\n\t\t\t_ = tx.Rollback()\n\t\t\tpanic(p)\n\t\t}\n")
+	b.WriteString("\t}()\n")
+	b.WriteString("\tif ferr := fn(persistence.WithTx(ctx, tx)); ferr != nil {\n")
+	b.WriteString("\t\t_ = tx.Rollback()\n\t\treturn ferr\n\t}\n")
+	b.WriteString("\tif cerr := tx.Commit(); cerr != nil {\n\t\treturn fmt.Errorf(\"commit tx: %w\", cerr)\n\t}\n")
+	b.WriteString("\treturn nil\n}\n\n")
+
+	b.WriteString("// compile-time check.\n")
+	b.WriteString("var _ persistence.TxRunner = (*EntTxRunner)(nil)\n")
+	return b.String()
+}
+
+// writeEntTxClientResolver emits the per-resource tx-or-client resolver used by
+// every operation in the adapter (F030, D-1 option a). It returns the transaction's
+// <Model> client when persistence.TxRunner.Atomically has enrolled the context with
+// an *ent.Tx, and the constructor client otherwise — so a write issued inside
+// Atomically participates in the transaction without the call site knowing.
+//
+// Both *ent.Client.<Model> and *ent.Tx.<Model> are the same *ent.<Model>Client
+// type (the Tx is the Client configured with a tx-bound driver), so the resolver is
+// a single return type.
+func writeEntTxClientResolver(b *strings.Builder, varName, model string) {
+	fmt.Fprintf(b, "\t%s := func(ctx context.Context) *ent.%sClient {\n", varName, model)
+	b.WriteString("\t\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\t\tif tx, ok := h.(*ent.Tx); ok {\n")
+	fmt.Fprintf(b, "\t\t\t\treturn tx.%s\n", model)
+	b.WriteString("\t\t\t}\n\t\t}\n")
+	fmt.Fprintf(b, "\t\treturn client.%s\n", model)
+	b.WriteString("\t}\n")
 }

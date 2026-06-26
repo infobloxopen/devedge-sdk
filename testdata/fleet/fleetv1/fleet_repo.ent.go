@@ -19,13 +19,21 @@ import (
 // NewFleetEntRepository wires the generated ent client into a
 // persistence.Repository[*Fleet, string].
 func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, string] {
+	fleetClient := func(ctx context.Context) *ent.FleetClient {
+		if h, ok := persistence.TxFromContext(ctx); ok {
+			if tx, ok := h.(*ent.Tx); ok {
+				return tx.Fleet
+			}
+		}
+		return client.Fleet
+	}
 	return &entrepo.EntRepository[*Fleet, string]{
 		Create_: func(ctx context.Context, entity *Fleet) (*Fleet, error) {
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID
 			}
-			b := client.Fleet.Create().
+			b := fleetClient(ctx).Create().
 				SetID(entity.GetId()).
 				SetAccountID(entity.GetAccountId()).
 				SetDisplayName(entity.GetDisplayName())
@@ -42,7 +50,7 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 			return fromEntFleet(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*Fleet, error) {
-			e, err := client.Fleet.Get(ctx, key)
+			e, err := fleetClient(ctx).Get(ctx, key)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -55,7 +63,7 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 			if opts.ShowDeleted {
 				ctx = entrepo.WithShowDeleted(ctx)
 			}
-			q := client.Fleet.Query()
+			q := fleetClient(ctx).Query()
 			if opts.Filter != "" {
 				pred, perr := entrepo.FilterPredicate(opts.Filter, FleetEntColumns, nil)
 				if perr != nil {
@@ -87,7 +95,7 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 			return out, nextToken, nil
 		},
 		Update_: func(ctx context.Context, key string, entity *Fleet, fieldMask ...string) (*Fleet, error) {
-			u := client.Fleet.UpdateOneID(key)
+			u := fleetClient(ctx).UpdateOneID(key)
 			if fleetInMask(fieldMask, "display_name") {
 				u = u.SetDisplayName(entity.GetDisplayName())
 			}
@@ -110,7 +118,7 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 			return fromEntFleet(updated), nil
 		},
 		Delete_: func(ctx context.Context, key string) error {
-			q := client.Fleet.UpdateOneID(key)
+			q := fleetClient(ctx).UpdateOneID(key)
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				q = q.Where(entfleet.AccountID(tenantID))
 			}
@@ -123,7 +131,7 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 		},
 		Undelete_: func(ctx context.Context, key string) (*Fleet, error) {
 			showCtx := entrepo.WithShowDeleted(ctx)
-			existing, err := client.Fleet.Query().Where(
+			existing, err := fleetClient(ctx).Query().Where(
 				entfleet.ID(key),
 				entfleet.DeleteTimeNotNil(),
 			).Only(showCtx)

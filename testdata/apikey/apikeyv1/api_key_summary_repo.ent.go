@@ -17,13 +17,21 @@ import (
 // NewAPIKeySummaryEntRepository wires the generated ent client into a
 // persistence.Repository[*APIKeySummary, string].
 func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*APIKeySummary, string] {
+	apikeyClient := func(ctx context.Context) *ent.APIKeyClient {
+		if h, ok := persistence.TxFromContext(ctx); ok {
+			if tx, ok := h.(*ent.Tx); ok {
+				return tx.APIKey
+			}
+		}
+		return client.APIKey
+	}
 	return &entrepo.EntRepository[*APIKeySummary, string]{
 		Create_: func(ctx context.Context, entity *APIKeySummary) (*APIKeySummary, error) {
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID
 			}
-			b := client.APIKey.Create().
+			b := apikeyClient(ctx).Create().
 				SetID(entity.GetId()).
 				SetAccountID(entity.GetAccountId()).
 				SetKeyPrefix(entity.GetKeyPrefix()).
@@ -41,7 +49,7 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 			return fromEntAPIKeySummary(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*APIKeySummary, error) {
-			e, err := client.APIKey.Get(ctx, key)
+			e, err := apikeyClient(ctx).Get(ctx, key)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -54,7 +62,7 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 			if opts.ShowDeleted {
 				ctx = entrepo.WithShowDeleted(ctx)
 			}
-			q := client.APIKey.Query()
+			q := apikeyClient(ctx).Query()
 			if opts.Filter != "" {
 				pred, perr := entrepo.FilterPredicate(opts.Filter, APIKeySummaryEntColumns, nil)
 				if perr != nil {
@@ -86,7 +94,7 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 			return out, nextToken, nil
 		},
 		Update_: func(ctx context.Context, key string, entity *APIKeySummary, fieldMask ...string) (*APIKeySummary, error) {
-			u := client.APIKey.UpdateOneID(key)
+			u := apikeyClient(ctx).UpdateOneID(key)
 			if apikeysummaryInMask(fieldMask, "key_prefix") {
 				u = u.SetKeyPrefix(entity.GetKeyPrefix())
 			}
@@ -112,7 +120,7 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 			return fromEntAPIKeySummary(updated), nil
 		},
 		Delete_: func(ctx context.Context, key string) error {
-			q := client.APIKey.UpdateOneID(key)
+			q := apikeyClient(ctx).UpdateOneID(key)
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				q = q.Where(entapikey.AccountID(tenantID))
 			}
@@ -125,7 +133,7 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 		},
 		Undelete_: func(ctx context.Context, key string) (*APIKeySummary, error) {
 			showCtx := entrepo.WithShowDeleted(ctx)
-			existing, err := client.APIKey.Query().Where(
+			existing, err := apikeyClient(ctx).Query().Where(
 				entapikey.ID(key),
 				entapikey.DeleteTimeNotNil(),
 			).Only(showCtx)

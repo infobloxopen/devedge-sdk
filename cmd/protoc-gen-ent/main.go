@@ -17,6 +17,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
@@ -314,6 +315,15 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		rg := gen.NewGeneratedFile(outPath, f.GoImportPath)
 		rg.P(content)
 	}
+
+	// F030 (T5): one ent-backed persistence.TxRunner per package, wrapping the
+	// *ent.Client. The tx-aware repository resolvers emitted above bind to the
+	// *ent.Tx it stashes on ctx, so writes issued inside Atomically are
+	// transaction-scoped. The ent import path is the same one the adapters use
+	// (path.Dir(goImportPath) + "/ent").
+	entImport := path.Dir(string(f.GoImportPath)) + "/ent"
+	txg := gen.NewGeneratedFile(pkgName+"/tx.ent.go", f.GoImportPath)
+	txg.P(renderEntTxRunner(pkgName, entImport))
 }
 
 // validateSurfaces enforces the F027 Phase 5b multi-surface contract fail-closed.
