@@ -55,3 +55,37 @@ jobs:
 
       - name: Security gate
         run: make security-check
+
+  scaffold-e2e:
+    name: Scaffold E2E (apx + buf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The TestScaffold_* gates (F028/F029 end-to-end + the make-driven hardening)
+      # shell out to a real toolchain — apx (governs the public API surface), buf
+      # (codegen), and the public protoc plugins. Without these on PATH the tests
+      # requireTools-SKIP, so until now those gates ran only on maintainer machines.
+      # Install them (all public, no secrets) so CI enforces the scaffold contract.
+      # apx/buf are pinned to the scaffold preflight floor; the protoc plugins track
+      # @latest, matching what the generated `make tools` installs for real users.
+      - name: Install apx + buf + protoc plugins
+        run: |
+          go install github.com/infobloxopen/apx/cmd/apx@v0.12.1
+          go install github.com/bufbuild/buf/cmd/buf@v1.40.1
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Network-dependent (buf dep update hits the buf.build registry; go mod tidy /
+      # go get hit the module proxy). Runs the scaffold suite explicitly rather than
+      # relying on `make test` (which the unit job runs without these tools, so the
+      # scaffold tests skip there — kept that way to keep the unit job hermetic).
+      - name: Scaffold integration tests
+        run: go test ./cmd/devedge-sdk -run TestScaffold -v
