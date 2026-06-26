@@ -13,22 +13,24 @@ import (
 )
 
 // TestScaffold_GORM_BuildsAndPasses is the F028 end-to-end gate (AC-001, AC-005
-// gorm, AC-007): scaffold a gorm service into a temp dir, then
-// `buf generate && go build ./... && go vet ./...` and the generated smoke test
-// must all pass with ZERO hand-edits.
+// gorm, AC-007): scaffold a gorm service into a temp dir, then drive the generated
+// project's REAL make targets — `make generate && make build && make test` (plus
+// `go vet`) — which must all pass with ZERO hand-edits. Running the actual Makefile
+// (not a copy of its recipe) is what guards against the dogfood-F-4 class of
+// "harness compensates for a Makefile gap" regressions.
 //
 // It also exercises HEAD (not the module proxy): the generated go.mod requires
 // the released SDK, but the test injects a local `replace` pointing at this
 // checkout, and points buf at SDK plugins built from this checkout
 // (DEVEDGE_SDK_PLUGIN_BIN). Real scaffolds emit no replace.
 //
-// Requires apx + buf + go on PATH and network access (buf dep update + go mod
-// tidy). Skipped under -short.
+// Requires apx + buf + go + make on PATH and network access (buf dep update + go
+// mod tidy). Skipped under -short.
 func TestScaffold_GORM_BuildsAndPasses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping scaffold integration test in -short mode")
 	}
-	requireTools(t, "apx", "buf", "go")
+	requireTools(t, "apx", "buf", "go", "make")
 
 	sdkDir := sdkModuleDir(t)
 	pluginBin := buildSDKPlugins(t, sdkDir)
@@ -67,25 +69,26 @@ func TestScaffold_GORM_BuildsAndPasses(t *testing.T) {
 	injectLocalReplace(t, target, sdkDir)
 	generate(t, target, pluginBin)
 
-	run(t, target, nil, "go", "build", "./...")
-	run(t, target, nil, "go", "vet", "./...")
-	run(t, target, nil, "go", "test", "./...") // includes the generated smoke test (AC-007)
+	makeTarget(t, target, pluginBin, "build")
+	run(t, target, nil, "go", "vet", "./...") // no `vet` make target; check directly
+	makeTarget(t, target, pluginBin, "test")  // includes the generated smoke test (AC-007)
 }
 
 // TestScaffold_ENT_BuildsAndPasses is the F028 Phase-4 end-to-end gate (AC-005
 // ent, in parity with the gorm gate above): scaffold an ent service into a temp
-// dir, run the FULL ent two-step generate (buf generate → entc client gen), then
-// `go build ./... && go vet ./...` and the generated smoke test must all pass
-// with ZERO hand-written ent wiring — the persistence layer is F027's generated
-// New<R>EntRepository adapter, not a hand-authored ent_wiring.go.
+// dir, drive the real `make generate` (whose ent recipe is the FULL two-step buf
+// generate → entc client gen), then `make build && make test` (plus `go vet`) must
+// all pass with ZERO hand-written ent wiring — the persistence layer is F027's
+// generated New<R>EntRepository adapter, not a hand-authored ent_wiring.go.
 //
 // Like the gorm test it exercises HEAD: a local SDK `replace` + SDK plugins built
-// from this checkout (incl. protoc-gen-ent). Requires apx + buf + go + network.
+// from this checkout (incl. protoc-gen-ent), and the real Makefile targets.
+// Requires apx + buf + go + make + network.
 func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping scaffold integration test in -short mode")
 	}
-	requireTools(t, "apx", "buf", "go")
+	requireTools(t, "apx", "buf", "go", "make")
 
 	sdkDir := sdkModuleDir(t)
 	pluginBin := buildSDKPlugins(t, sdkDir)
@@ -146,19 +149,19 @@ func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 		t.Fatalf("found hand-written server/ent_wiring.go; the ent backend must need ZERO hand-written wiring (F027)")
 	}
 
-	run(t, target, nil, "go", "build", "./...")
-	run(t, target, nil, "go", "vet", "./...")
-	run(t, target, nil, "go", "test", "./...") // includes the generated smoke test (AC-007 ent)
+	makeTarget(t, target, pluginBin, "build")
+	run(t, target, nil, "go", "vet", "./...") // no `vet` make target; check directly
+	makeTarget(t, target, pluginBin, "test")  // includes the generated smoke test (AC-007 ent)
 }
 
 // TestScaffold_GORM_AuthzGateRegression is AC-002 (T-303): delete one authz rule
-// from the example proto, regenerate, and the server must FAIL to boot with the
-// completeness-gate error.
+// from the example proto, regenerate (via the real `make generate`), and the server
+// must FAIL to boot with the completeness-gate error.
 func TestScaffold_GORM_AuthzGateRegression(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping authz-gate regression test in -short mode")
 	}
-	requireTools(t, "apx", "buf", "go")
+	requireTools(t, "apx", "buf", "go", "make")
 
 	sdkDir := sdkModuleDir(t)
 	pluginBin := buildSDKPlugins(t, sdkDir)
@@ -310,12 +313,18 @@ func TestScaffold_ENT_Boundary(t *testing.T) {
 // version, so nothing can break. That is exactly what the generated
 // apx-release.yml CI does (`apx breaking --against HEAD^`).
 //
-// Requires apx + buf + git + go + network (buf dep update). Skipped under -short.
+// The lint and breaking gates are driven through the generated project's REAL
+// `make api-lint` / `make api-breaking` targets (so the Makefile's api-* wrappers,
+// incl. api-breaking's git-repo guard, are themselves under test); config-validate,
+// release-prepare --dry-run, and policy-check have no make wrapper and are invoked
+// on apx directly.
+//
+// Requires apx + buf + git + make + network (buf dep update). Skipped under -short.
 func TestScaffold_APXGovernance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping apx governance integration test in -short mode")
 	}
-	requireTools(t, "apx", "buf", "git")
+	requireTools(t, "apx", "buf", "git", "make")
 
 	target := filepath.Join(t.TempDir(), "orders")
 	var out bytes.Buffer
@@ -338,11 +347,13 @@ func TestScaffold_APXGovernance(t *testing.T) {
 	// AC-006: the emitted apx.yaml validates against apx's canonical schema.
 	run(t, target, nil, "apx", "config", "validate")
 
-	// AC-003: lint clean.
-	run(t, target, nil, "apx", "lint")
+	// AC-003: lint clean — through the generated `make api-lint` wrapper.
+	makeTarget(t, target, "", "api-lint")
 
-	// AC-003: no breaking changes vs the initial baseline (proto unchanged).
-	run(t, target, nil, "apx", "breaking", "--against", "HEAD")
+	// AC-003: no breaking changes vs the initial baseline (proto unchanged) —
+	// through `make api-breaking`, which also exercises its git-repo guard (the
+	// baseline commit above satisfies it).
+	makeTarget(t, target, "", "api-breaking")
 
 	// AC-003: a versioned experimental release would prepare successfully.
 	// NOTE: this emits a NON-FATAL go_package mismatch warning ("got
@@ -419,70 +430,60 @@ func injectLocalReplace(t *testing.T, target, sdkDir string) {
 	}
 }
 
-// generate runs buf dep update + buf generate (with the local SDK plugins on
-// PATH) + go mod tidy in target.
-func generate(t *testing.T, target, pluginBin string) {
-	t.Helper()
-	gobin := filepath.Join(build0(t, "GOPATH"), "bin")
-	pathEnv := "PATH=" + pluginBin + string(os.PathListSeparator) + gobin +
-		string(os.PathListSeparator) + os.Getenv("PATH")
-	env := append(os.Environ(), pathEnv)
-	run(t, target, env, "buf", "dep", "update")
-	run(t, target, env, "buf", "generate")
-	run(t, target, nil, "go", "mod", "tidy")
-}
-
-// generateEnt runs the ent two-step generate (buf generate then entc client gen)
-// in target, mirroring the generated Makefile's ent `generate` target EXACTLY
-// (so the cold-start it validates is the one a fresh clone actually runs):
+// makeTarget runs the generated project's REAL `make <args...>` target in target,
+// returning combined output and failing on error. Driving the actual Makefile (not
+// a hand-rolled copy of its recipe) is deliberate: it is the only way the test can
+// catch a Makefile-level regression. The dogfood-F-4 bug hid for exactly the
+// opposite reason — the old helpers ran `buf dep update` that the Makefile's
+// generate target lacked, so the harness silently "fixed" the very gap under test.
 //
-//	buf dep update → buf generate →
-//	go get <entc tool + SDK pkgs> (seed go.sum WITHOUT building the module) →
-//	go generate ./gen/ent (entc client) → go mod tidy.
-//
-// The `go get` (not `go mod tidy -e`) is the #4 fix: tidy -e tolerated the
-// not-yet-generated gen/ent/* imports but printed an alarming `fatal: Could not
-// read from remote repository`; `go get` of the exact deps never builds the
-// module, so the cold-start is CLEAN. Output is asserted clean by the caller.
-func generateEnt(t *testing.T, target, pluginBin string) {
+// When pluginBin != "", the SDK codegen plugins built from this checkout are
+// prepended to PATH so the `generate` recipe's `buf generate` resolves HEAD's
+// plugins. A real user's `make tools` installs those plugins at the pinned SDK
+// version; the test supplies them directly and skips `make tools` (build/test/
+// api-* targets never invoke tools once gen/ exists).
+func makeTarget(t *testing.T, target, pluginBin string, args ...string) []byte {
 	t.Helper()
-	gobin := filepath.Join(build0(t, "GOPATH"), "bin")
-	pathEnv := "PATH=" + pluginBin + string(os.PathListSeparator) + gobin +
-		string(os.PathListSeparator) + os.Getenv("PATH")
-	env := append(os.Environ(), pathEnv)
-	run(t, target, env, "buf", "dep", "update")
-	run(t, target, env, "buf", "generate")
-	// Seed the entc toolchain + the SDK packages the schema/adapter import, into
-	// go.sum, without building this module — so it never trips over the
-	// not-yet-generated gen/ent/* packages (the #4 cold-start fix).
-	runNoScaryOutput(t, target, env, "go", "get",
-		"entgo.io/ent/cmd/ent",
-		"github.com/infobloxopen/devedge-sdk/persistence/entrepo",
-		"github.com/infobloxopen/devedge-sdk/middleware",
-		"github.com/infobloxopen/devedge-sdk/persistence/resourcename",
-	)
-	run(t, target, env, "go", "generate", "./gen/ent")
-	run(t, target, nil, "go", "mod", "tidy")
-}
-
-// runNoScaryOutput runs a command, fails on error, AND fails if the combined
-// output contains the alarming cold-start noise the #4 fix eliminates — a guard
-// that the clean cold-start does not regress back into fake "fatal" errors.
-func runNoScaryOutput(t *testing.T, dir string, env []string, name string, args ...string) {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
+	var env []string
+	if pluginBin != "" {
+		gobin := filepath.Join(build0(t, "GOPATH"), "bin")
+		pathEnv := "PATH=" + pluginBin + string(os.PathListSeparator) + gobin +
+			string(os.PathListSeparator) + os.Getenv("PATH")
+		env = append(os.Environ(), pathEnv)
+	}
+	cmd := exec.Command("make", args...)
+	cmd.Dir = target
 	if env != nil {
 		cmd.Env = env
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, out)
+		t.Fatalf("make %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
+	return out
+}
+
+// generate drives the generated Makefile's REAL `generate` target (gorm) with the
+// local SDK plugins on PATH. buf.lock is absent here (the scaffold ran with
+// NoGenerate), so the target's own guarded `buf dep update` must create it before
+// `buf generate` — exactly the dogfood-F-4 path, now exercised through the Makefile.
+func generate(t *testing.T, target, pluginBin string) {
+	t.Helper()
+	makeTarget(t, target, pluginBin, "generate")
+}
+
+// generateEnt drives the SAME real `make generate` target for the ent backend (its
+// recipe is the buf→entc two-step: guarded buf dep update → buf generate → go get
+// seed → go generate ./gen/ent → go mod tidy). It additionally asserts the
+// cold-start prints none of the alarming "#4 fix" noise — and because it runs the
+// actual Makefile recipe, that guard now validates the real cold-start a fresh
+// clone runs, not a copy that could drift from it.
+func generateEnt(t *testing.T, target, pluginBin string) {
+	t.Helper()
+	out := makeTarget(t, target, pluginBin, "generate")
 	for _, scary := range []string{"Could not read from remote repository", "cannot find module providing package"} {
 		if strings.Contains(string(out), scary) {
-			t.Fatalf("cold-start %s %s printed alarming output %q (the #4 fix must keep it clean):\n%s",
-				name, strings.Join(args, " "), scary, out)
+			t.Fatalf("ent `make generate` cold-start printed alarming output %q (the #4 fix must keep it clean):\n%s", scary, out)
 		}
 	}
 }
