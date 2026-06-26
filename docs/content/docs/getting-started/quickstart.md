@@ -23,7 +23,7 @@ make test            # boots the server + one tenant-scoped CRUD round-trip — 
 What you get, wired together: the public `proto/orders/v1/orders.proto` (a CRUD `OrderService`
 with an `(infoblox.authz.v1.rule)` on every RPC); the apx app-repo files (`apx.yaml`,
 `.github/workflows/apx-release.yml`); the `buf.yaml`/`buf.gen.yaml` with the six SDK codegen
-plugins pre-wired; the vendored `infoblox/{authz,field}` annotation mirrors; `server/main.go`
+plugins pre-wired; the vendored `infoblox/{authz,field,storage}` annotation mirrors; `server/main.go`
 already calling `server.New(...)` with the generated `OrderServiceAuthzRules`; a generated GORM
 model + repository (git-ignored, engine deps in *your* go.mod only); and a passing smoke test.
 

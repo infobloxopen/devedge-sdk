@@ -42,7 +42,14 @@ tools:
 # entirely: `go get` seeds JUST the toolchain + SDK deps into go.sum WITHOUT
 # building this module (so it never sees the missing gen/ent/* packages). entc can
 # then compile the schema; the clean `go mod tidy` runs last, once the client exists.
+#
+# The guarded `buf dep update` first locks the googleapis deps (google/api/*) the
+# proto imports when no buf.lock exists yet — without it a bare `buf generate` on a
+# tree that never locked deps (e.g. scaffolded with `--no-generate`) fails with
+# `import "google/api/annotations.proto": file does not exist`. A committed buf.lock
+# is left untouched, so reproducibility is preserved.
 generate:
+	@test -f buf.lock || buf dep update
 	buf generate
 	@echo "  seeding ent codegen toolchain (go.sum)…"
 	@go get entgo.io/ent/cmd/ent \
@@ -53,7 +60,13 @@ generate:
 	go generate ./gen/ent
 	go mod tidy
 {{- else }}
+# The guarded `buf dep update` locks the googleapis deps (google/api/*) the proto
+# imports if no buf.lock exists yet — self-heals a tree scaffolded with
+# `--no-generate` (a bare `buf generate` there fails with `import
+# "google/api/annotations.proto": file does not exist`). A committed buf.lock is
+# left untouched, so reproducibility is preserved.
 generate:
+	@test -f buf.lock || buf dep update
 	buf generate
 	go mod tidy
 {{- end }}
