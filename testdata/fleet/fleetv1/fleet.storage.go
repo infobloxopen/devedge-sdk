@@ -98,10 +98,19 @@ func NewFleetRepository(db *gorm.DB) *FleetRepository {
 	return &FleetRepository{db: db}
 }
 
+func (r *FleetRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *FleetRepository) Get(ctx context.Context, key string) (*Fleet, error) {
 	var m FleetModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -116,7 +125,7 @@ func (r *FleetRepository) Get(ctx context.Context, key string) (*Fleet, error) {
 
 func (r *FleetRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Fleet, string, error) {
 	var models []FleetModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	if opts.ShowDeleted {
 		q = q.Unscoped()
 	}
@@ -176,7 +185,7 @@ func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, er
 	if ToModelFleetOnCreate != nil {
 		ToModelFleetOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -195,7 +204,7 @@ func (r *FleetRepository) Update(ctx context.Context, key string, entity *Fleet,
 		ToModelFleetOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -240,7 +249,7 @@ func (r *FleetRepository) Update(ctx context.Context, key string, entity *Fleet,
 
 func (r *FleetRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -256,7 +265,7 @@ func (r *FleetRepository) Delete(ctx context.Context, key string) error {
 
 func (r *FleetRepository) Undelete(ctx context.Context, key string) (*Fleet, error) {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Unscoped().Model(&FleetModel{}).Where("id = ?", key)
+	q := r.conn(ctx).Unscoped().Model(&FleetModel{}).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -276,7 +285,7 @@ func (r *FleetRepository) BatchGet(ctx context.Context, keys []string) ([]*Fleet
 		return []*Fleet{}, nil
 	}
 	var models []FleetModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -304,8 +313,7 @@ func (r *FleetRepository) BatchUpdate(ctx context.Context, items []persistence.B
 		return []*Fleet{}, nil
 	}
 	out := make([]*Fleet, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &FleetRepository{db: tx}
+	run := func(txRepo *FleetRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -314,6 +322,17 @@ func (r *FleetRepository) BatchUpdate(ctx context.Context, items []persistence.B
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&FleetRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&FleetRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -335,8 +354,8 @@ func (r *FleetRepository) BatchDelete(ctx context.Context, keys []string) error 
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -348,6 +367,14 @@ func (r *FleetRepository) BatchDelete(ctx context.Context, keys []string) error 
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
@@ -419,10 +446,19 @@ func NewVehicleRepository(db *gorm.DB) *VehicleRepository {
 	return &VehicleRepository{db: db}
 }
 
+func (r *VehicleRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *VehicleRepository) Get(ctx context.Context, key string) (*Vehicle, error) {
 	var m VehicleModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -437,7 +473,7 @@ func (r *VehicleRepository) Get(ctx context.Context, key string) (*Vehicle, erro
 
 func (r *VehicleRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Vehicle, string, error) {
 	var models []VehicleModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -493,7 +529,7 @@ func (r *VehicleRepository) Create(ctx context.Context, entity *Vehicle) (*Vehic
 	if ToModelVehicleOnCreate != nil {
 		ToModelVehicleOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -511,7 +547,7 @@ func (r *VehicleRepository) Update(ctx context.Context, key string, entity *Vehi
 		ToModelVehicleOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -555,7 +591,7 @@ func (r *VehicleRepository) Update(ctx context.Context, key string, entity *Vehi
 
 func (r *VehicleRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -578,7 +614,7 @@ func (r *VehicleRepository) BatchGet(ctx context.Context, keys []string) ([]*Veh
 		return []*Vehicle{}, nil
 	}
 	var models []VehicleModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -606,8 +642,7 @@ func (r *VehicleRepository) BatchUpdate(ctx context.Context, items []persistence
 		return []*Vehicle{}, nil
 	}
 	out := make([]*Vehicle, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &VehicleRepository{db: tx}
+	run := func(txRepo *VehicleRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -616,6 +651,17 @@ func (r *VehicleRepository) BatchUpdate(ctx context.Context, items []persistence
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&VehicleRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&VehicleRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -637,8 +683,8 @@ func (r *VehicleRepository) BatchDelete(ctx context.Context, keys []string) erro
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -650,6 +696,14 @@ func (r *VehicleRepository) BatchDelete(ctx context.Context, keys []string) erro
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 

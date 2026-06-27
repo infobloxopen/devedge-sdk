@@ -754,16 +754,27 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 		fmt.Fprintf(b, "\treturn &%sRepository{db: db}\n}\n\n", msg.MessageName)
 	}
 
+	// conn resolves the *gorm.DB to use for an operation: the transaction-scoped
+	// handle when persistence.TxRunner.Atomically (e.g. gormtx.GormTxRunner) has
+	// enrolled ctx with a *gorm.DB, else the constructor-time db. This is what
+	// makes a CRUD/batch op issued inside Atomically participate in the
+	// surrounding transaction (F030); the same tx-or-db resolution is applied to
+	// every generated repository, including surface adapters.
+	fmt.Fprintf(b, "func (r *%sRepository) conn(ctx context.Context) *gorm.DB {\n", msg.MessageName)
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif tx, ok := h.(*gorm.DB); ok {\n\t\t\treturn tx.WithContext(ctx)\n\t\t}\n\t}\n")
+	b.WriteString("\treturn r.db.WithContext(ctx)\n}\n\n")
+
 	// Get. Model type follows the OWNER.
 	fmt.Fprintf(b, "func (r *%sRepository) Get(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tvar m %sModel\n", model)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
+		b.WriteString("\tq := r.conn(ctx).Where(\"id = ?\", key)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
 	} else {
-		b.WriteString("\tif err := r.db.WithContext(ctx).Where(\"id = ?\", key).First(&m).Error; err != nil {\n")
+		b.WriteString("\tif err := r.conn(ctx).Where(\"id = ?\", key).First(&m).Error; err != nil {\n")
 	}
 	b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n")
 	fmt.Fprintf(b, "\t\t\treturn nil, persistence.ErrNotFound\n")
@@ -775,7 +786,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	// List. Model type and soft-delete scope follow the OWNER; column map uses the SURFACE.
 	fmt.Fprintf(b, "func (r *%sRepository) List(ctx context.Context, opts persistence.ListOptions) ([]%s, string, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tvar models []%sModel\n", model)
-	b.WriteString("\tq := r.db.WithContext(ctx)\n")
+	b.WriteString("\tq := r.conn(ctx)\n")
 	// AIP-148: lift soft-delete scope BEFORE tenant predicate (FR-008, FR-014).
 	// Scope follows the OWNER's soft-delete setting.
 	if owner.SoftDelete {
@@ -863,7 +874,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	}
 	// ToModel hook before write.
 	fmt.Fprintf(b, "\tif ToModel%sOnCreate != nil {\n\t\tToModel%sOnCreate(entity, m)\n\t}\n", msg.MessageName, msg.MessageName)
-	b.WriteString("\tif err := r.db.WithContext(ctx).Create(m).Error; err != nil {\n")
+	b.WriteString("\tif err := r.conn(ctx).Create(m).Error; err != nil {\n")
 	b.WriteString("\t\t// Map driver constraint violations to clean sentinels so callers see\n")
 	b.WriteString("\t\t// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.\n")
 	b.WriteString("\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\treturn nil, ce\n\t\t}\n")
@@ -898,10 +909,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	fmt.Fprintf(b, "\tif ToModel%sOnUpdate != nil {\n\t\tToModel%sOnUpdate(entity, m)\n\t}\n", msg.MessageName, msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
+		b.WriteString("\tq := r.conn(ctx).Model(m).Where(\"id = ?\", key)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	} else {
-		b.WriteString("\tq := r.db.WithContext(ctx).Model(m).Where(\"id = ?\", key)\n")
+		b.WriteString("\tq := r.conn(ctx).Model(m).Where(\"id = ?\", key)\n")
 	}
 	// Collect the regular (scalar, persisted) columns that a full update writes.
 	// The tenant scoping key (account_id) is deliberately excluded: it is assigned at
@@ -993,7 +1004,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	fmt.Fprintf(b, "func (r *%sRepository) Delete(ctx context.Context, key string) error {\n", msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id = ?\", key)\n")
+		b.WriteString("\tq := r.conn(ctx).Where(\"id = ?\", key)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		switch {
 		case useSentinel:
@@ -1009,9 +1020,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 		}
 	} else {
 		if owner.SoftDelete {
-			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Delete(&%sModel{})\n", model)
+			fmt.Fprintf(b, "\tres := r.conn(ctx).Where(\"id = ?\", key).Delete(&%sModel{})\n", model)
 		} else {
-			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Where(\"id = ?\", key).Unscoped().Delete(&%sModel{})\n", model)
+			fmt.Fprintf(b, "\tres := r.conn(ctx).Where(\"id = ?\", key).Unscoped().Delete(&%sModel{})\n", model)
 		}
 	}
 	b.WriteString("\tif res.Error != nil {\n")
@@ -1025,11 +1036,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 		fmt.Fprintf(b, "func (r *%sRepository) Undelete(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
+			fmt.Fprintf(b, "\tq := r.conn(ctx).Unscoped().Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 			b.WriteString("\tq = q.Where(\"deleted_at IS NOT NULL\")\n")
 		} else {
-			fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Unscoped().Model(&%sModel{}).\n", model)
+			fmt.Fprintf(b, "\tq := r.conn(ctx).Unscoped().Model(&%sModel{}).\n", model)
 			b.WriteString("\t\tWhere(\"id = ?\", key).Where(\"deleted_at IS NOT NULL\")\n")
 		}
 		if useSentinel {
@@ -1060,11 +1071,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 		fmt.Fprintf(b, "func (r *%sRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {\n", msg.MessageName)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-			b.WriteString("\tq := r.db.WithContext(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC())\n")
+			b.WriteString("\tq := r.conn(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC())\n")
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", model)
 		} else {
-			fmt.Fprintf(b, "\tres := r.db.WithContext(ctx).Unscoped().\n")
+			fmt.Fprintf(b, "\tres := r.conn(ctx).Unscoped().\n")
 			b.WriteString("\t\tWhere(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC()).\n")
 			fmt.Fprintf(b, "\t\tDelete(&%sModel{})\n", model)
 		}
@@ -1089,7 +1100,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		}
-		fmt.Fprintf(b, "\tq := r.db.WithContext(ctx).Where(\"%s_hash = ?\", hash)\n", f.SnakeName)
+		fmt.Fprintf(b, "\tq := r.conn(ctx).Where(\"%s_hash = ?\", hash)\n", f.SnakeName)
 		if hasTenant {
 			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		}
@@ -1109,7 +1120,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	fmt.Fprintf(b, "func (r *%sRepository) BatchGet(ctx context.Context, keys []string) ([]%s, error) {\n", msg.MessageName, pbType)
 	fmt.Fprintf(b, "\tif len(keys) == 0 {\n\t\treturn []%s{}, nil\n\t}\n", pbType)
 	fmt.Fprintf(b, "\tvar models []%sModel\n", model)
-	b.WriteString("\tq := r.db.WithContext(ctx).Where(\"id IN ?\", keys)\n")
+	b.WriteString("\tq := r.conn(ctx).Where(\"id IN ?\", keys)\n")
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
@@ -1129,24 +1140,42 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn out, nil\n}\n\n")
 
-	// BatchUpdate: one transaction reusing the single Update per item (which
-	// already applies the field mask, tenant scope, and returns ErrNotFound for a
-	// missing/soft-deleted key); any item error rolls back the whole batch.
+	// txRepoExpr builds a tx-bound repository literal (&<R>Repository{db: tx[, enc: r.enc]}),
+	// used to run a batch loop against a transaction's *gorm.DB.
+	txRepoExpr := func(db string) string {
+		if msgHasSecrets {
+			return fmt.Sprintf("&%sRepository{db: %s, enc: r.enc}", msg.MessageName, db)
+		}
+		return fmt.Sprintf("&%sRepository{db: %s}", msg.MessageName, db)
+	}
+
+	// BatchUpdate: reuses the single Update per item (which already applies the
+	// field mask, tenant scope, and returns ErrNotFound for a missing/soft-deleted
+	// key); any item error rolls back the whole batch. F030 batch reconciliation:
+	// when Atomically has already enrolled a *gorm.DB on ctx, the batch JOINS it —
+	// it runs directly against the ctx-tx repo with NO inner db.Transaction, so the
+	// outer Atomically owns commit/rollback and an error rolls the whole unit back.
+	// Otherwise it opens its own transaction.
 	fmt.Fprintf(b, "func (r *%sRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[%s, string]) ([]%s, error) {\n", msg.MessageName, pbType, pbType)
 	fmt.Fprintf(b, "\tif len(items) == 0 {\n\t\treturn []%s{}, nil\n\t}\n", pbType)
 	fmt.Fprintf(b, "\tout := make([]%s, 0, len(items))\n", pbType)
-	b.WriteString("\terr := r.db.Transaction(func(tx *gorm.DB) error {\n")
-	if msgHasSecrets {
-		fmt.Fprintf(b, "\t\ttxRepo := &%sRepository{db: tx, enc: r.enc}\n", msg.MessageName)
-	} else {
-		fmt.Fprintf(b, "\t\ttxRepo := &%sRepository{db: tx}\n", msg.MessageName)
-	}
+	fmt.Fprintf(b, "\trun := func(txRepo *%sRepository) error {\n", msg.MessageName)
 	b.WriteString("\t\tfor _, it := range items {\n")
 	b.WriteString("\t\t\tupdated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)\n")
 	b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
 	b.WriteString("\t\t\tout = append(out, updated)\n")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t}\n")
+	// Join an outer ctx tx (no inner transaction): the outer Atomically commits/rolls back.
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif tx, ok := h.(*gorm.DB); ok {\n")
+	fmt.Fprintf(b, "\t\t\tif err := run(%s); err != nil {\n\t\t\t\treturn nil, err\n\t\t\t}\n", txRepoExpr("tx"))
+	b.WriteString("\t\t\treturn out, nil\n")
+	b.WriteString("\t\t}\n\t}\n")
+	// No ctx tx: open our own transaction.
+	b.WriteString("\terr := r.db.Transaction(func(tx *gorm.DB) error {\n")
+	fmt.Fprintf(b, "\t\treturn run(%s)\n", txRepoExpr("tx"))
 	b.WriteString("\t})\n")
 	b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
 	b.WriteString("\treturn out, nil\n}\n\n")
@@ -1166,8 +1195,12 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 	}
-	b.WriteString("\treturn r.db.Transaction(func(tx *gorm.DB) error {\n")
-	b.WriteString("\t\tq := tx.WithContext(ctx).Where(\"id IN ?\", uniq)\n")
+	// run performs the bulk delete against db (a tx-scoped *gorm.DB). F030 batch
+	// reconciliation: when ctx already carries a *gorm.DB the delete JOINS it (no
+	// inner db.Transaction) so the outer Atomically owns commit/rollback;
+	// otherwise we open our own transaction.
+	b.WriteString("\trun := func(db *gorm.DB) error {\n")
+	b.WriteString("\t\tq := db.WithContext(ctx).Where(\"id IN ?\", uniq)\n")
 	if hasTenant {
 		b.WriteString("\t\tif tenantID != \"\" {\n\t\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t\t}\n")
 	}
@@ -1181,6 +1214,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t\tif res.RowsAffected != int64(len(uniq)) {\n\t\t\treturn persistence.ErrNotFound\n\t\t}\n")
 	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t}\n")
+	// Join an outer ctx tx (no inner transaction).
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif tx, ok := h.(*gorm.DB); ok {\n\t\t\treturn run(tx)\n\t\t}\n\t}\n")
+	// No ctx tx: open our own transaction.
+	b.WriteString("\treturn r.db.Transaction(func(tx *gorm.DB) error {\n")
+	b.WriteString("\t\treturn run(tx)\n")
 	b.WriteString("\t})\n}\n\n")
 
 	// Compile-time interface check.

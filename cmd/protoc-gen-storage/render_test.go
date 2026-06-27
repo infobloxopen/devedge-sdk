@@ -882,6 +882,99 @@ func TestRenderStorageFile_multiSurface(t *testing.T) {
 	mustContain(t, out, "func fromModel_Coupon(m *CouponModel) *Coupon")
 }
 
+// F030 GORM tx seam: every generated repository must emit a conn(ctx) resolver
+// that returns the ctx-bound transaction *gorm.DB when one is enrolled, and the
+// CRUD bodies must route through r.conn(ctx) (never r.db.WithContext directly,
+// except inside the resolver itself), so a write issued inside Atomically
+// participates in the surrounding transaction.
+func TestRenderStorageFile_txConnResolver(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Widget",
+		PbPkgName:   "widgetsv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg}, nil)
+
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+
+	// The resolver itself.
+	mustContain(t, out, "func (r *WidgetRepository) conn(ctx context.Context) *gorm.DB {")
+	mustContain(t, out, "if h, ok := persistence.TxFromContext(ctx); ok {")
+	mustContain(t, out, "if tx, ok := h.(*gorm.DB); ok {")
+	mustContain(t, out, "return tx.WithContext(ctx)")
+
+	// CRUD routes through r.conn(ctx).
+	mustContain(t, out, "r.conn(ctx)")
+	// The only r.db.WithContext(ctx) left is inside the resolver (the fallback).
+	if n := strings.Count(out, "r.db.WithContext(ctx)"); n != 1 {
+		t.Errorf("expected exactly one r.db.WithContext(ctx) (the resolver fallback), got %d", n)
+	}
+}
+
+// F030 batch reconciliation: BatchUpdate/BatchDelete must JOIN an already-present
+// ctx transaction (run directly against the ctx-tx repo, no inner db.Transaction)
+// when one is enrolled, and open their own r.db.Transaction otherwise.
+func TestRenderStorageFile_batchJoinsOuterTx(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Widget",
+		PbPkgName:   "widgetsv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "name", GoType: "string", SnakeName: "name"},
+		},
+	}
+	out := renderStorageFile("widgetsv1storage", []messageInfo{msg}, nil)
+
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+
+	// Both batch methods consult ctx for an existing *gorm.DB before opening a tx.
+	if n := strings.Count(out, "if tx, ok := h.(*gorm.DB); ok {"); n < 3 {
+		// conn resolver (1) + BatchUpdate join (1) + BatchDelete join (1) = 3
+		t.Errorf("expected the *gorm.DB ctx check in conn + both batch methods (>=3), got %d", n)
+	}
+	// The own-tx fallback is still present.
+	mustContain(t, out, "r.db.Transaction(func(tx *gorm.DB) error")
+	// BatchDelete runs the bulk delete via a run(db) closure so it can join or open.
+	mustContain(t, out, "run := func(db *gorm.DB) error {")
+	mustContain(t, out, "return run(tx)")
+}
+
+// The conn resolver and batch join must also be emitted for SURFACE adapters
+// (a projection over another message's model, e.g. APIKeySummaryRepository).
+func TestRenderStorageFile_txConnResolverOnSurface(t *testing.T) {
+	owner := messageInfo{
+		MessageName: "Coupon",
+		Model:       "Coupon",
+		Fields: []fieldInfo{
+			{Name: "id", GoFieldName: "Id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "code", GoFieldName: "Code", GoType: "string", SnakeName: "code"},
+		},
+	}
+	surface := messageInfo{
+		MessageName: "CouponSummary",
+		Model:       "Coupon",
+		Fields: []fieldInfo{
+			{Name: "id", GoFieldName: "Id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "code", GoFieldName: "Code", GoType: "string", SnakeName: "code"},
+		},
+	}
+	ownerByName := map[string]messageInfo{"Coupon": owner, "CouponSummary": owner}
+	out := renderStorageFile("couponv1", []messageInfo{owner, surface}, ownerByName)
+
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	// The surface adapter gets its own conn resolver.
+	mustContain(t, out, "func (r *CouponSummaryRepository) conn(ctx context.Context) *gorm.DB {")
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
