@@ -315,6 +315,6 @@ de project down
 
 ## Where to go next
 
-- [Vault Transit](../../guides/vault-transit/) — production secret handling.
-- [Storage shapes](../../guides/storage-shapes/) — when to reach for ent's privacy layer.
+- [Secret Fields](../../how-to/secure/secret-fields/) — production secret handling with Vault Transit.
+- [Storage shapes](../../how-to/model-and-persist/storage-shapes/) — when to reach for ent's privacy layer.
 - [server reference](../../reference/server.md) — every `Config` knob.

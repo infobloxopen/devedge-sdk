@@ -1,24 +1,18 @@
 ---
 title: Guides
-weight: 3
+weight: 8
 sidebar:
-  open: true
+  open: false
+aliases:
+  - /docs/guides/
 ---
 
-Task-focused how-tos for common service-building jobs.
-
-{{< cards >}}
-  {{< card link="define-a-service/" title="Define a Service" icon="code" subtitle="proto → buf generate → scaffold." >}}
-  {{< card link="model-a-resource/" title="Model a Resource" icon="cube" subtitle="Resource shape: field types, framework fields, constraints, relationships, secret fields." >}}
-  {{< card link="storage-shapes/" title="Storage Shapes" icon="database" subtitle="GORM vs ent — when to use each." >}}
-  {{< card link="security-check/" title="Security Check" icon="shield-check" subtitle="Prove authz, isolation, and no-secret-leak in CI." >}}
-  {{< card link="deploy/" title="Deploy" icon="server" subtitle="Multi-runtime deploy: Kubernetes/k3s (Helm + Flux GitOps) and Docker Compose." >}}
-{{< /cards >}}
-
-### Production secrets
-
-Secret-at-rest works out of the box (AES-256-GCM in dev); for production, swap in HashiCorp Vault.
-
-{{< cards >}}
-  {{< card link="vault-transit/" title="Vault Transit" icon="lock-closed" subtitle="Optional: production secret handling with Vault." >}}
-{{< /cards >}}
+> **The guides have moved.** The content previously here is now organized under
+> [How-to Guides](../how-to/), grouped by concern:
+>
+> - [Model & Persist](../how-to/model-and-persist/) — Define a Service, Model a Resource, Storage Shapes
+> - [Secure](../how-to/secure/) — Security Check, Secret Fields (including Vault Transit)
+> - [Operate](../how-to/operate/) — Observability, Health, Resilience, Deploy
+> - [Configure](../how-to/configure/) — Configuration sources and env-var reference
+>
+> All old `/docs/guides/*` URLs redirect automatically via Hugo aliases.

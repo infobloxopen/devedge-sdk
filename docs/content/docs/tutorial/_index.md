@@ -1,5 +1,5 @@
 ---
-title: Tutorial
+title: Tutorials
 weight: 5
 sidebar:
   open: true

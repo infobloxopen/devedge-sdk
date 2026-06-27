@@ -259,6 +259,6 @@ details.
 
 ## Next steps
 
-- [Define a service](../../guides/define-a-service/) — the full proto → generate → scaffold loop.
-- [Secret fields](../../guides/model-a-resource/#secret-fields) — encrypt sensitive fields at rest.
+- [Define a service](../../how-to/model-and-persist/define-a-service/) — the full proto → generate → scaffold loop.
+- [Secret fields](../../how-to/model-and-persist/model-a-resource/#secret-fields) — encrypt sensitive fields at rest.
 - [API Key Manager tutorial](../../tutorial/api-key-manager/) — build a complete service.

@@ -510,7 +510,7 @@ A real service uses **one** storage backend — `protoc-gen-storage` (GORM) **or
 both (ent replaces storage). The combined list above is just the menu; the `devedge-sdk new service`
 scaffold emits one or the other.
 
-See [Define a service](../../guides/define-a-service/) for the complete configured example.
+See [Define a service](../../how-to/model-and-persist/define-a-service/) for the complete configured example.
 
 {{< callout type="info" >}}
 **Expected `go_package` mismatch warning (ent scaffold + apx).** On the ent path the proto's
@@ -520,5 +520,5 @@ compiles as a sibling of the proto package. apx, however, derives the expected G
 **non-fatal** `go_package` mismatch warning — `got "<module>/gen/<svc>v1", expected
 "<module>/proto/<svc>/v1"`. The command **exits 0**; the warning is expected and harmless. Do **not**
 align the `go_package` to silence it (it breaks the ent build), and do **not** pass `--strict` (that
-makes the warning fatal). See [Governing the public API locally](../../guides/define-a-service/#governing-the-public-api-locally).
+makes the warning fatal). See [Governing the public API locally](../../how-to/model-and-persist/define-a-service/#governing-the-public-api-locally).
 {{< /callout >}}

@@ -29,17 +29,17 @@ deployment substrate): devedge is **dev- and deploy-time** tooling; devedge-sdk 
   transactional outbox with an in-memory bus → Kafka), the authz decision point, and the secret
   encryptor each ship a dev-suitable default and swap for a production backend **without changing
   service code**.
-- **Codegen from your proto.** `protoc-gen-devedge-authz` (the authz-rules table), `protoc-gen-svc`
-  (service scaffold), `protoc-gen-storage` (GORM repository), and `protoc-gen-ent` (ent schema) — plus
-  the third-party `protoc-gen-grpc-gateway` — turn the proto into a complete service. The proto is the
-  single source of truth; core packages depend only on the standard library (no ORM, no policy engine).
+- **Operational foundation included.** Observability (OTel traces + metrics + logs), health/readiness
+  probes, resilience interceptors (timeouts, rate limiting, circuit breaker), configuration, and
+  deployment artifacts (Kubernetes + Docker Compose) — all wired by the scaffold, zero hand-authoring.
 
-## Sections
+## Documentation funnel
 
 {{< cards >}}
   {{< card link="getting-started/" title="Getting Started" icon="play" subtitle="Install the SDK and stand up a running, fail-closed service in five minutes." >}}
-  {{< card link="concepts/" title="Concepts" icon="light-bulb" subtitle="Architecture and the seam model, the annotation contract, tenant isolation, aggregates, and events." >}}
-  {{< card link="guides/" title="Guides" icon="book-open" subtitle="Task-focused how-tos: define a service, model a resource, pick a storage shape, run seccheck." >}}
+  {{< card link="explanation/" title="Why / Evaluate" icon="light-bulb" subtitle="What devedge-sdk is, its security posture, and its pluggability model — start here if you're evaluating." >}}
+  {{< card link="how-to/" title="How-to Guides" icon="book-open" subtitle="Task-focused guides grouped by concern: Model & Persist, Secure, Operate, Configure." >}}
   {{< card link="reference/" title="Reference" icon="document-text" subtitle="API reference for each package and codegen plugin." >}}
   {{< card link="tutorial/" title="Tutorial" icon="academic-cap" subtitle="Build the API Key Manager service end to end." >}}
+  {{< card link="concepts/" title="Concepts" icon="template" subtitle="Runtime internals: the interceptor chain, the annotation contract, tenant isolation, aggregates, and events." >}}
 {{< /cards >}}
