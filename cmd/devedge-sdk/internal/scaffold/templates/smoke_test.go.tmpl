@@ -29,8 +29,8 @@ func devGrant() authz.Grant {
 func startServer(t *testing.T) {{.GoPkg}}.{{.ServiceType}}Client {
 	t.Helper()
 	// ":0" => kernel-assigned ports, so the test never collides with a real
-	// listener or another test run.
-	s, err := newServer(authz.NewDevAuthorizer(devGrant()), ":0", ":0")
+	// listener or another test run. "" => in-memory sqlite (the scaffold default).
+	s, err := newServer(authz.NewDevAuthorizer(devGrant()), ":0", ":0", "")
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}

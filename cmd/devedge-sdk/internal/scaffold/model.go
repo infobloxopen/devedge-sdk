@@ -107,6 +107,7 @@ type Model struct {
 	RepoName         string // apx repo name (last path element of Module)
 	Backend          Backend
 	BinName          string // server binary name, e.g. "orders"
+	ServiceUpper     string // upper-snake service name for env-var prefix, e.g. "ORDERS"
 
 	ProtoPackage    string // proto package, e.g. "orders.v1"
 	ProtoPathSuffix string // path of the .proto SOURCE under proto/, e.g. "orders/v1"
@@ -219,6 +220,7 @@ func (o Options) Validate() (*Model, error) {
 		RepoName:         repoName,
 		Backend:          o.Backend,
 		BinName:          svc,
+		ServiceUpper:     strings.ToUpper(svc),
 		ProtoPackage:     svc + ".v1",
 		ProtoPathSuffix:  svc + "/v1",
 		ProtoFile:        svc + ".proto",
