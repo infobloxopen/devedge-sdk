@@ -59,7 +59,7 @@ when called from within an outer `Atomically`.
 
 ## Backends
 
-Two `TxRunner` implementations ship as development defaults.
+Three `TxRunner` implementations ship as development defaults.
 
 ### ent
 
@@ -94,11 +94,23 @@ transaction completes and therefore never sees partial state.
 > tests. Pass every repository that may be written in one `Atomically` to
 > `NewMemoryTxRunner`.
 
-### GORM (deferred)
+### GORM
 
-A GORM/`protoc-gen-storage` `TxRunner` is **not** part of this release. Services using the
-GORM backend do not yet have a `TxRunner`; this is tracked so the storage path is not
-silently assumed to be transactional.
+`persistence/gormtx` ships a `GormTxRunner`, the sibling of `EntTxRunner` for the
+`protoc-gen-storage` (GORM) backend:
+
+```go
+txRunner := gormtx.NewGormTxRunner(db) // same *gorm.DB the generated repos use
+```
+
+`Atomically` opens a GORM transaction (`db.WithContext(ctx).Begin()`), stashes the
+transaction-scoped `*gorm.DB` on `ctx`, and the generated repositories resolve that handle
+(via their `conn(ctx)` helper) instead of the constructor `*gorm.DB` — so every
+`Create`/`Update`/`Delete`/`Undelete` inside `fn` runs on the transaction. Commit on
+success; rollback on error or panic. A nested call joins a GORM transaction already on
+`ctx`. `persistence/gormtx` also ships `GormOutboxStore` and `GormIdempotencyStore` (the
+GORM-backed transactional outbox and exactly-once idempotency stores) wired through the
+same `OutboxStore` / `IdempotencyStore` seams.
 
 ## etag is the optimistic-concurrency token
 

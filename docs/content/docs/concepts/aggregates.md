@@ -15,8 +15,11 @@ resource's CRUD handler.
 > (`aggregate` / `member` / `references`), an `AggregateRepository[Root, ID]` with
 > `Load`/`Save`, a fail-closed boundary gate at `Serve`, member write-redirection in the
 > generated handlers, cascade-on-delete for owned members, and `etag`-as-aggregate-version.
-> Backends: ent and in-memory. GORM aggregate support is a non-goal (a `references` field is
-> emitted as a plain scalar FK so the GORM backend keeps building).
+> Backends: ent, GORM, and in-memory. The GORM backend now reaches parity — a tx-aware
+> generated repository (`conn(ctx)`), `Load<Root>Aggregate` eager-load, cascade-on-delete
+> tags, and a reusable `persistence/gormtx` adapter (`GormTxRunner`, `GormOutboxStore`,
+> `GormIdempotencyStore`) wired through the same backend-neutral seams. The IAM fixture runs
+> the F032 transactional-outbox worked example on GORM as well as ent.
 
 ## The decision test: is this an aggregate?
 

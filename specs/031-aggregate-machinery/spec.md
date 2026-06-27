@@ -28,7 +28,7 @@ The annotations are **SDK-owned and generated in-repo** — see F030 *Annotation
 - **G-9 (IAM worked example + docs).** `testdata/iam` (accounts/users/groups/memberships/api-keys) proving account-as-partition, api-key-as-own-aggregate, membership ownership; complete `concepts/aggregates.md`.
 
 ## Non-goals
-- GORM/storage-backend aggregate support (ent + memory only initially; `protoc-gen-storage` must at least not break on `references` — treat as a scalar FK).
+- ~~GORM/storage-backend aggregate support (ent + memory only initially; `protoc-gen-storage` must at least not break on `references` — treat as a scalar FK).~~ **Superseded:** GORM now has full aggregate parity (tx-aware `conn(ctx)`, `Load<Root>Aggregate`, cascade tags) plus the F032 outbox/idempotency stores in the reusable `persistence/gormtx` adapter; the IAM fixture runs the worked example on both ent and GORM.
 - Event sourcing / cross-aggregate transactions / outbox (→ F032).
 - Owning `main.go`.
 
