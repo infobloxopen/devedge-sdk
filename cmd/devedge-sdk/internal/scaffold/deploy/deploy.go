@@ -78,7 +78,7 @@ func (o Options) withDefaults(svc ServiceView) Options {
 		o.ChartRepo = "oci://ghcr.io/infobloxopen/charts"
 	}
 	if o.ChartVersion == "" {
-		o.ChartVersion = "0.1.0"
+		o.ChartVersion = DefaultChartVersion
 	}
 	if o.Namespace == "" {
 		o.Namespace = svc.Name
