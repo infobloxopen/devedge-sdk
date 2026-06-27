@@ -172,6 +172,13 @@ func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem 
 // dedup independently. Multiple handlers may subscribe to one type; all must
 // succeed for the event to be marked delivered.
 func (d *Dispatcher) Subscribe(eventType, name string, fn Handler) {
+	// Fail fast at registration (a setup-time call) rather than letting a nil handler
+	// nil-panic on first delivery — which happens inside the poller goroutine, rolls
+	// back, and re-panics up through Poll, silently crashing delivery without ever
+	// reaching onErr. A nil handler is a programming error; surface it at the call site.
+	if fn == nil {
+		panic("events: Dispatcher.Subscribe called with a nil handler for event type " + eventType)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.handlers[eventType] = append(d.handlers[eventType], registeredHandler{name: name, fn: fn})

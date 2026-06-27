@@ -76,6 +76,14 @@ func ErrorMapperUnary() grpc.UnaryServerInterceptor {
 			}
 			return nil, st.Err()
 
+		case errors.Is(err, persistence.ErrNoTransaction):
+			// A write/Publish path required an enclosing TxRunner.Atomically but ctx
+			// carried none (F030/F032 D-1). This is a SERVER wiring bug, not a client
+			// error, so it maps to Internal — never the raw "persistence: no transaction
+			// on context" string (which would leak as codes.Unknown via the default
+			// branch and tell the client nothing actionable).
+			return nil, status.Error(codes.Internal, "internal error")
+
 		default:
 			return nil, err
 		}

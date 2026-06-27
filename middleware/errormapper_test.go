@@ -77,6 +77,7 @@ func TestErrorMapper_StatusMessage_DoesNotContainPersistencePrefix(t *testing.T)
 		{"not found", persistence.ErrNotFound, codes.NotFound},
 		{"conflict", persistence.ErrConflict, codes.AlreadyExists},
 		{"precondition", persistence.ErrPreconditionFailed, codes.FailedPrecondition},
+		{"no transaction", persistence.ErrNoTransaction, codes.Internal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,6 +93,27 @@ func TestErrorMapper_StatusMessage_DoesNotContainPersistencePrefix(t *testing.T)
 				t.Fatalf("status message must not contain 'persistence:' prefix, got: %q", st.Message())
 			}
 		})
+	}
+}
+
+// TestErrorMapper_NoTransaction_MapsToInternal verifies the F030/F032 "tx not
+// propagated" guard (persistence.ErrNoTransaction) becomes a clean codes.Internal
+// rather than leaking the raw "persistence: no transaction on context" string as
+// codes.Unknown. It is a server wiring bug, not a client-actionable error.
+func TestErrorMapper_NoTransaction_MapsToInternal(t *testing.T) {
+	err := runErrorMapper(t, persistence.ErrNoTransaction)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got: %v", err)
+	}
+	if st.Code() != codes.Internal {
+		t.Fatalf("ErrNoTransaction: expected codes.Internal, got %v", st.Code())
+	}
+	if strings.Contains(st.Message(), "persistence:") || strings.Contains(st.Message(), "transaction") {
+		t.Fatalf("Internal status message must not leak the persistence detail, got: %q", st.Message())
 	}
 }
 

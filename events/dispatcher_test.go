@@ -172,3 +172,18 @@ func TestDispatchRunsHandlerInItsOwnTx(t *testing.T) {
 		t.Fatal("a handler must run inside its own Atomically (RequireTx must pass)")
 	}
 }
+
+// TestSubscribeNilHandlerPanicsAtRegistration guards the nil-handler footgun: a nil
+// handler must fail fast at Subscribe (a setup-time call) instead of nil-panicking
+// on first delivery inside the poller goroutine — which would roll back, re-panic up
+// through Poll, and silently crash all delivery without ever reaching onErr.
+func TestSubscribeNilHandlerPanicsAtRegistration(t *testing.T) {
+	_, _, store, tx := setup()
+	d := events.NewDispatcher(store, tx, nil)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Subscribe with a nil handler must panic at registration")
+		}
+	}()
+	d.Subscribe("Thing", "nil-handler", nil)
+}

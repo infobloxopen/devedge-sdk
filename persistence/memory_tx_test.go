@@ -312,6 +312,150 @@ func TestMemoryAtomically_DuplicateRepoNoSelfDeadlock(t *testing.T) {
 	}
 }
 
+// nested models an entity whose fields are themselves reference types (a slice, a
+// map, and a pointer to a struct that also owns a slice). A one-level clone of the
+// top struct would share all of that nested state with the snapshot, so an in-place
+// mutation reached through a Get-returned entity would survive a rollback. This is
+// the exact shape of a real aggregate root (e.g. `order` with `Items []*item`).
+type nested struct {
+	ID   string
+	Tags []string
+	Meta map[string]string
+	Sub  *nestedSub
+}
+
+type nestedSub struct {
+	Note  string
+	Codes []int
+}
+
+// TestMemoryAtomically_RollbackRevertsNestedMutation is the deep-copy guarantee:
+// an in-place mutation of NESTED slice/map/pointer state on a Get-returned entity
+// inside a transaction must be fully reverted on rollback. A shallow (one-level)
+// snapshot would leak the nested change because it shares the backing arrays/maps
+// and the inner pointer with the live entity.
+func TestMemoryAtomically_RollbackRevertsNestedMutation(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(e *nested) string { return e.ID })
+	tx := NewMemoryTxRunner(r)
+
+	if _, err := r.Create(ctx, &nested{
+		ID:   "e1",
+		Tags: []string{"a", "b"},
+		Meta: map[string]string{"k": "v"},
+		Sub:  &nestedSub{Note: "orig", Codes: []int{1, 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("rollback")
+	_ = tx.Atomically(ctx, func(txCtx context.Context) error {
+		e, err := r.Get(txCtx, "e1") // live pointer into the map
+		if err != nil {
+			return err
+		}
+		// Mutate every level of nesting IN PLACE (not via a replacing Update).
+		e.Tags[0] = "MUTATED"
+		e.Meta["k"] = "MUTATED"
+		e.Sub.Note = "MUTATED"
+		e.Sub.Codes[0] = 99
+		return boom // discard the work
+	})
+
+	got, err := r.Get(ctx, "e1")
+	if err != nil {
+		t.Fatalf("entity must survive rollback: %v", err)
+	}
+	if got.Tags[0] != "a" {
+		t.Errorf("nested slice mutation leaked across rollback: Tags[0]=%q want %q", got.Tags[0], "a")
+	}
+	if got.Meta["k"] != "v" {
+		t.Errorf("nested map mutation leaked across rollback: Meta[k]=%q want %q", got.Meta["k"], "v")
+	}
+	if got.Sub.Note != "orig" {
+		t.Errorf("nested pointer mutation leaked across rollback: Sub.Note=%q want %q", got.Sub.Note, "orig")
+	}
+	if got.Sub.Codes[0] != 1 {
+		t.Errorf("deeply nested slice mutation leaked across rollback: Sub.Codes[0]=%d want 1", got.Sub.Codes[0])
+	}
+}
+
+// cyclic is a self-referential entity: a deep copy that did not track visited
+// pointers would recurse forever on the Self back-edge.
+type cyclic struct {
+	ID   string
+	Tag  string
+	Self *cyclic
+}
+
+// TestMemoryAtomically_DeepCopyHandlesCycle guards the deep-copy against an
+// infinite recursion (and preserves the back-edge structure) when an entity's
+// pointer graph contains a cycle. The transaction simply must complete, and the
+// rollback must still revert the mutation.
+func TestMemoryAtomically_DeepCopyHandlesCycle(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(e *cyclic) string { return e.ID })
+	tx := NewMemoryTxRunner(r)
+
+	e := &cyclic{ID: "c1", Tag: "orig"}
+	e.Self = e // cycle
+	if _, err := r.Create(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		boom := errors.New("rollback")
+		_ = tx.Atomically(ctx, func(txCtx context.Context) error {
+			got, gerr := r.Get(txCtx, "c1")
+			if gerr != nil {
+				return gerr
+			}
+			got.Tag = "MUTATED"
+			got.Self.Tag = "ALSO" // same object via the cycle
+			return boom
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deep copy of a cyclic entity did not terminate (infinite recursion)")
+	}
+
+	got, _ := r.Get(ctx, "c1")
+	if got.Tag != "orig" {
+		t.Errorf("cyclic entity mutation leaked across rollback: Tag=%q want orig", got.Tag)
+	}
+}
+
+// TestMemoryAtomically_CommitKeepsNestedMutation is the commit-side counterpart:
+// the deep copy must not break the normal path — an in-place nested mutation that
+// commits is still observed afterwards.
+func TestMemoryAtomically_CommitKeepsNestedMutation(t *testing.T) {
+	ctx := context.Background()
+	r := NewMemoryRepository(func(e *nested) string { return e.ID })
+	tx := NewMemoryTxRunner(r)
+
+	if _, err := r.Create(ctx, &nested{ID: "e1", Tags: []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Atomically(ctx, func(txCtx context.Context) error {
+		e, err := r.Get(txCtx, "e1")
+		if err != nil {
+			return err
+		}
+		e.Tags[0] = "kept"
+		return nil // commit
+	}); err != nil {
+		t.Fatalf("Atomically: %v", err)
+	}
+	got, _ := r.Get(ctx, "e1")
+	if got.Tags[0] != "kept" {
+		t.Errorf("committed nested mutation lost: Tags[0]=%q want %q", got.Tags[0], "kept")
+	}
+}
+
 // TestMemoryAtomically_DiscardedOnRollbackVisibleNothing is the rollback half of
 // AC-2: after a rolled-back transaction, a reader sees nothing of the write.
 func TestMemoryAtomically_DiscardedOnRollbackVisibleNothing(t *testing.T) {
