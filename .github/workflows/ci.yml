@@ -21,6 +21,7 @@ jobs:
             testdata/toy/go.sum
             testdata/apikey/go.sum
             testdata/fleet/go.sum
+            testdata/iam/go.sum
 
       - name: Build
         run: make build
@@ -37,8 +38,36 @@ jobs:
       - name: Integration tests (apikey fixture)
         run: cd testdata/apikey && go test ./...
 
-      - name: Integration tests (fleet fixture — ent has_many/belongs_to edge)
-        run: cd testdata/fleet && go test ./...
+      # The fleet + iam fixtures carry the Phase-2 PostgreSQL validation tests
+      # (TestPG_*). They start a postgres:16 container via testcontainers and SKIP
+      # cleanly if Docker is unavailable — but ubuntu-latest ships a working Docker
+      # daemon, so the PG tests RUN here (proving the aggregate / CAS / cascade /
+      # outbox machinery on the real production engine), under -race.
+      - name: Integration tests (fleet fixture — ent/gorm aggregate, CAS, cascade on Postgres)
+        run: cd testdata/fleet && go test -race ./...
+
+      - name: Integration tests (iam fixture — outbox/events exactly-once on Postgres)
+        run: cd testdata/iam && go test -race ./...
+
+      # Guard against the PG tests silently SKIPPING in CI (e.g. if Docker stopped
+      # being available on the runner). They must RUN, not skip — that is the whole
+      # point of Phase 2. Fail the job if any TestPG_ test reports SKIP.
+      - name: Assert Postgres tests actually ran (not skipped)
+        run: |
+          set -euo pipefail
+          for mod in fleet iam; do
+            echo "== ${mod}: TestPG_ must run, not skip =="
+            out="$(cd "testdata/${mod}" && go test -run '^TestPG_' -v ./... 2>&1)"
+            echo "$out"
+            if echo "$out" | grep -q -- '--- SKIP: TestPG_'; then
+              echo "::error::Postgres validation tests SKIPPED in ${mod} — Docker/testcontainers unavailable on the runner. Phase-2 PG validation did not run."
+              exit 1
+            fi
+            if ! echo "$out" | grep -q -- '--- PASS: TestPG_'; then
+              echo "::error::No TestPG_ test PASSED in ${mod} — expected the Postgres validation suite to run."
+              exit 1
+            fi
+          done
 
   security-check:
     name: Security Check
