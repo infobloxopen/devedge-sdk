@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -83,11 +84,17 @@ type Config struct {
 type Server struct {
 	cfg        Config
 	grpcSrv    *grpc.Server
-	healthSrv  *health.Server // gRPC health service; always registered
+	healthSrv  *health.Server    // gRPC health service; always registered
 	gwMux      *runtime.ServeMux // nil when HTTPAddr == ""
 	gatewayFns []func(context.Context, *runtime.ServeMux, *grpc.ClientConn) error
-	grpcLis    net.Listener // set by Serve
-	httpLis    net.Listener // set by Serve when HTTPAddr != ""
+
+	// lisMu guards grpcLis/httpLis: Serve writes them from its own goroutine while
+	// the GRPCAddr()/HTTPAddr() accessors (documented for use "once Serve has
+	// started", e.g. to read a kernel-assigned ":0" port) read them concurrently
+	// from another goroutine. Without the mutex that is a data race.
+	lisMu   sync.Mutex
+	grpcLis net.Listener // set by Serve
+	httpLis net.Listener // set by Serve when HTTPAddr != ""
 
 	// rules is the accumulated authz rule set: Config.Rules seeds it and each
 	// AddRules call (from a generated Register<Svc>) appends to it. The authz and
@@ -220,6 +227,7 @@ func (s *Server) verbMap() map[string]string {
 //     (consumed by grpcauthz.DevPrincipalFunc), e.g. `-H 'account-id: t1'`;
 //   - if-match / if-none-match (AIP-154 conditional requests) so etag.PreconditionUnary
 //     can enforce the 412 precondition over the gateway, not just over direct gRPC.
+//
 // All other headers keep grpc-gateway's default behavior, including the standard
 // `Grpc-Metadata-` prefix passthrough.
 func incomingHeaderMatcher(key string) (string, bool) {
@@ -285,11 +293,20 @@ func (s *Server) Serve(ctx context.Context) error {
 		return err
 	}
 
+	// Derive a cancellable context so Serve OWNS the lifecycle of every background
+	// goroutine it starts (the readiness loop): it stops when ctx is cancelled OR
+	// when Serve returns for any reason — including the error path below, where the
+	// caller's ctx may never be cancelled. Without this the readiness loop would
+	// outlive a Serve that returned early, leaking a goroutine + ticker that keeps
+	// driving the (already-stopped) gRPC health server.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	lis, err := net.Listen("tcp", s.cfg.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("server: listen %q: %w", s.cfg.GRPCAddr, err)
 	}
-	s.grpcLis = lis
+	s.setGRPCLis(lis)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -324,7 +341,7 @@ func (s *Server) Serve(ctx context.Context) error {
 			s.grpcSrv.Stop()
 			return fmt.Errorf("server: listen http %q: %w", s.cfg.HTTPAddr, err)
 		}
-		s.httpLis = httpLis
+		s.setHTTPLis(httpLis)
 
 		// Compose an outer ServeMux so that /healthz and /readyz are registered
 		// BEFORE the gateway mux and are NOT subject to the authz interceptor
@@ -347,9 +364,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 
 	// Start the readiness-check background loop that keeps the gRPC health status
-	// in sync with the aggregated readiness result (AC-3). It checks on each
-	// liveness tick but uses a short 5-second poll. This runs regardless of whether
-	// the HTTP gateway is enabled (the gRPC health service is always registered).
+	// in sync with the aggregated readiness result (AC-3) on a 5-second poll. It
+	// runs regardless of whether the HTTP gateway is enabled (the gRPC health
+	// service is always registered). It stops when the derived ctx is cancelled —
+	// which the deferred cancel above guarantees on EVERY Serve return path, so the
+	// loop never outlives the server.
 	go s.runReadinessLoop(ctx)
 
 	select {
@@ -498,11 +517,26 @@ func (s *Server) RegisterGateway(fn func(context.Context, *runtime.ServeMux, *gr
 	s.gatewayFns = append(s.gatewayFns, fn)
 }
 
+func (s *Server) setGRPCLis(lis net.Listener) {
+	s.lisMu.Lock()
+	s.grpcLis = lis
+	s.lisMu.Unlock()
+}
+
+func (s *Server) setHTTPLis(lis net.Listener) {
+	s.lisMu.Lock()
+	s.httpLis = lis
+	s.lisMu.Unlock()
+}
+
 // GRPCAddr returns the actual bound gRPC address once Serve has started (useful
 // when GRPCAddr was ":0"); before that it returns the configured address.
 func (s *Server) GRPCAddr() string {
-	if s.grpcLis != nil {
-		return s.grpcLis.Addr().String()
+	s.lisMu.Lock()
+	lis := s.grpcLis
+	s.lisMu.Unlock()
+	if lis != nil {
+		return lis.Addr().String()
 	}
 	return s.cfg.GRPCAddr
 }
@@ -511,8 +545,11 @@ func (s *Server) GRPCAddr() string {
 // (useful when HTTPAddr was ":0"); before that it returns the configured address.
 // Returns "" when no HTTP gateway is configured.
 func (s *Server) HTTPAddr() string {
-	if s.httpLis != nil {
-		return s.httpLis.Addr().String()
+	s.lisMu.Lock()
+	lis := s.httpLis
+	s.lisMu.Unlock()
+	if lis != nil {
+		return lis.Addr().String()
 	}
 	return s.cfg.HTTPAddr
 }
