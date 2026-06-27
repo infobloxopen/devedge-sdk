@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,12 +45,12 @@ func TestLoad_Default(t *testing.T) {
 // TestLoad_TypedParsing verifies each supported typed field kind.
 func TestLoad_TypedParsing(t *testing.T) {
 	type opts struct {
-		S string        `config:"S" default:"hello"`
-		I int           `config:"I" default:"42"`
-		I64 int64       `config:"I64" default:"9876543210"`
-		B bool          `config:"B" default:"true"`
-		F float64       `config:"F" default:"3.14"`
-		D time.Duration `config:"D" default:"5s"`
+		S   string        `config:"S" default:"hello"`
+		I   int           `config:"I" default:"42"`
+		I64 int64         `config:"I64" default:"9876543210"`
+		B   bool          `config:"B" default:"true"`
+		F   float64       `config:"F" default:"3.14"`
+		D   time.Duration `config:"D" default:"5s"`
 	}
 	var o opts
 	if err := config.Load(&o); err != nil {
@@ -219,6 +220,87 @@ func TestDotEnvSource_MissingFile(t *testing.T) {
 	}
 	if o.Addr != "default-addr" {
 		t.Errorf("expected default-addr, got %q", o.Addr)
+	}
+}
+
+// TestDotEnvSource_OverlongLineDoesNotTruncate verifies that a line exceeding
+// bufio.Scanner's 64KB token limit does not silently truncate the rest of the
+// file: rather than returning a partial subset (which would masquerade as a
+// complete read), the source discards the partial map so defaults still apply.
+func TestDotEnvSource_OverlongLineDoesNotTruncate(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+	// First a valid key, then a line far longer than the 64KB scanner token
+	// limit, then a key that would be dropped on a truncated scan.
+	huge := strings.Repeat("x", 70*1024)
+	content := "GRPC_ADDR=:5555\nBIG=" + huge + "\nHTTP_ADDR=:6666\n"
+	if err := os.WriteFile(envFile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	type opts struct {
+		GRPCAddr string `config:"GRPC_ADDR" default:":9090"`
+		HTTPAddr string `config:"HTTP_ADDR" default:":8080"`
+	}
+	var o opts
+	if err := config.Load(&o, config.DotEnv(envFile)); err != nil {
+		t.Fatal(err)
+	}
+	// The overlong line trips sc.Err(); the source must NOT return a truncated
+	// subset (e.g. only GRPC_ADDR). It discards everything, so both fields fall
+	// back to their defaults — a safe, non-misleading outcome.
+	if o.GRPCAddr != ":9090" {
+		t.Errorf("GRPCAddr: expected default :9090 after scan error, got %q (silent truncation?)", o.GRPCAddr)
+	}
+	if o.HTTPAddr != ":8080" {
+		t.Errorf("HTTPAddr: expected default :8080 after scan error, got %q", o.HTTPAddr)
+	}
+}
+
+// TestDotEnvSource_SetEmptyOverridesDefault verifies the empty-vs-unset
+// distinction: a key present with an empty value wins (ok=true) over a later
+// source / the default tag, while an absent key falls through.
+func TestDotEnvSource_SetEmptyOverridesDefault(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envFile, []byte("DSN=\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	type opts struct {
+		DSN   string `config:"DSN" default:"fallback-dsn"`
+		Other string `config:"OTHER" default:"other-default"`
+	}
+	var o opts
+	if err := config.Load(&o, config.DotEnv(envFile)); err != nil {
+		t.Fatal(err)
+	}
+	// DSN is present-but-empty → the empty value wins over the default.
+	if o.DSN != "" {
+		t.Errorf("DSN: expected empty (present-empty wins), got %q", o.DSN)
+	}
+	// OTHER is absent → falls through to the default.
+	if o.Other != "other-default" {
+		t.Errorf("Other: expected default (absent key), got %q", o.Other)
+	}
+}
+
+// TestEnvSource_UnsetVsSetEmpty verifies Env uses os.LookupEnv semantics: a set
+// but empty env var wins over the default; an unset one falls through.
+func TestEnvSource_UnsetVsSetEmpty(t *testing.T) {
+	t.Setenv("DEVEDGE_TEST_EMPTY_DSN", "") // set to empty
+	type opts struct {
+		DSN  string `config:"DSN" default:"fallback"`
+		Addr string `config:"ADDR" default:":9090"` // ADDR is never set
+	}
+	var o opts
+	if err := config.Load(&o, config.Env("DEVEDGE_TEST_EMPTY_")); err != nil {
+		t.Fatal(err)
+	}
+	if o.DSN != "" {
+		t.Errorf("DSN: set-empty env must win over default, got %q", o.DSN)
+	}
+	if o.Addr != ":9090" {
+		t.Errorf("Addr: unset env must fall through to default, got %q", o.Addr)
 	}
 }
 

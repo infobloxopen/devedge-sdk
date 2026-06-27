@@ -80,6 +80,17 @@ func (s *DotEnvSource) load() {
 		}
 		s.m[k] = v
 	}
+	// A scan error (read failure, or a line longer than bufio.Scanner's 64KB
+	// token limit) otherwise silently truncates config — every key past the
+	// failing line is dropped with no signal, so a partially-read file would
+	// masquerade as a complete one. Discard the partial map: the source then
+	// reports every key as absent (ok=false), so defaults / later sources apply
+	// uniformly rather than a silent subset of the file winning. (The Source
+	// interface has no error channel; a truncated read is treated like a missing
+	// file — best-effort, never a misleading partial.)
+	if sc.Err() != nil {
+		s.m = make(map[string]string)
+	}
 }
 
 func (s *DotEnvSource) Get(key string) (string, bool) {
