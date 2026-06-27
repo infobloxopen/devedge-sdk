@@ -119,7 +119,23 @@ func (r *GenericAggregateRepository[Root, ID]) Save(ctx context.Context, root Ro
 		// the touch, so a pure read-modify-nothing Save does not churn the etag,
 		// and a direct root field change (a real Update) is not double-bumped here.
 		if changed {
-			updated, uerr := r.spec.RootRepo.Update(ctx, r.spec.KeyOf(root), root)
+			// Make the root-etag bump the AUTHORITATIVE atomic compare-and-set: stamp
+			// the loaded root etag as the Update's If-Match precondition. Every backend's
+			// Update now enforces If-Match as a true CAS (memory checks its etag map; the
+			// generated ent/GORM Update adds a `WHERE etag=<if-match>` predicate), so a
+			// concurrent writer that bumped the root version between our Load and this
+			// commit makes the CAS match no row → ErrPreconditionFailed. This holds under
+			// REAL concurrency (a row-level conflict at the engine), not merely the
+			// in-memory runner's serialized lock; checkPrecondition above stays as a cheap
+			// fast-fail read but is no longer the sole guarantee. Skipped when EtagOf is
+			// nil (no aggregate-version configured) — then there is nothing to condition on.
+			bumpCtx := ctx
+			if r.spec.EtagOf != nil {
+				if want := r.spec.EtagOf(root); want != "" {
+					bumpCtx = SetIfMatchExpectation(ctx, want)
+				}
+			}
+			updated, uerr := r.spec.RootRepo.Update(bumpCtx, r.spec.KeyOf(root), root)
 			if uerr != nil {
 				return uerr
 			}

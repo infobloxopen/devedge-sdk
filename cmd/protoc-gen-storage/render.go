@@ -89,6 +89,36 @@ func hasETagMsg(messages []messageInfo) bool {
 	return false
 }
 
+// emitGormCASCheck emits the AIP-154 compare-and-set fallout for an etag-bearing
+// resource: it runs immediately after a CAS Update and only matters when an
+// If-Match precondition was supplied (ifMatch != "") AND the conditioned UPDATE
+// touched no rows (res.RowsAffected == 0). In that case it re-reads the row by id
+// (+ tenant) to disambiguate: the row still exists but with a different etag →
+// [persistence.ErrPreconditionFailed] (stale If-Match); the row is gone →
+// [persistence.ErrNotFound]. When If-Match is empty the block is inert, so
+// behaviour is identical to the pre-CAS generator. The caller guards this with
+// owner.HasETag, so the helper assumes an etag column exists. It is emitted inside
+// an update branch (the fieldMask / full / struct arm), hence the "\t\t" indent.
+func emitGormCASCheck(b *strings.Builder, model string, hasTenant bool) {
+	b.WriteString("\t\tif ifMatch != \"\" && res.RowsAffected == 0 {\n")
+	if hasTenant {
+		fmt.Fprintf(b, "\t\t\tcheck := r.conn(ctx).Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
+		b.WriteString("\t\t\tif tenantID != \"\" {\n\t\t\t\tcheck = check.Where(\"account_id = ?\", tenantID)\n\t\t\t}\n")
+	} else {
+		fmt.Fprintf(b, "\t\t\tcheck := r.conn(ctx).Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
+	}
+	b.WriteString("\t\t\tvar n int64\n")
+	fmt.Fprintf(b, "\t\t\tif err := check.Count(&n).Error; err != nil {\n")
+	fmt.Fprintf(b, "\t\t\t\treturn nil, fmt.Errorf(\"update %s precondition: %%w\", err)\n", model)
+	b.WriteString("\t\t\t}\n")
+	b.WriteString("\t\t\tif n > 0 {\n")
+	b.WriteString("\t\t\t\t// Row exists but its stored etag no longer matches If-Match → stale precondition.\n")
+	b.WriteString("\t\t\t\treturn nil, persistence.ErrPreconditionFailed\n")
+	b.WriteString("\t\t\t}\n")
+	b.WriteString("\t\t\treturn nil, persistence.ErrNotFound\n")
+	b.WriteString("\t\t}\n")
+}
+
 // hasTagsFields reports whether any field across all messages is a tags
 // (map<string,string>) field, which makes the generated file import types.
 func hasTagsFields(messages []messageInfo) bool {
@@ -1057,6 +1087,15 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	} else {
 		b.WriteString("\tq := r.conn(ctx).Model(m).Where(\"id = ?\", key)\n")
 	}
+	if owner.HasETag {
+		// AIP-154 optimistic concurrency: when the caller supplies an If-Match
+		// precondition, narrow the UPDATE to rows whose stored etag still matches.
+		// This makes the write a true compare-and-set — a stale If-Match affects 0
+		// rows (RowsAffected==0) and is resolved to PreconditionFailed/NotFound
+		// below, instead of silently stamping a fresh etag over a changed row.
+		b.WriteString("\tifMatch := etag.IfMatchFromContext(ctx)\n")
+		b.WriteString("\tif ifMatch != \"\" {\n\t\tq = q.Where(\"etag = ?\", ifMatch)\n\t}\n")
+	}
 	// Collect the regular (scalar, persisted) columns that a full update writes.
 	// The tenant scoping key (account_id) is deliberately excluded: it is assigned at
 	// create and is only ever a WHERE predicate, never a writable column.
@@ -1091,10 +1130,14 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	}
 	fmt.Fprintf(b, "\t\t// Select makes GORM write the named columns even when their value is\n")
 	fmt.Fprintf(b, "\t\t// the zero value (false, 0, \"\"); a bare struct Updates would skip them.\n")
-	fmt.Fprintf(b, "\t\tif err := q.Select(dbCols).Updates(m).Error; err != nil {\n")
+	fmt.Fprintf(b, "\t\tres := q.Select(dbCols).Updates(m)\n")
+	fmt.Fprintf(b, "\t\tif err := res.Error; err != nil {\n")
 	b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
 	fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\t}\n")
+	if owner.HasETag {
+		emitGormCASCheck(b, model, hasTenant)
+	}
 	if len(regularFields) > 0 {
 		fmt.Fprintf(b, "\t} else {\n")
 		fmt.Fprintf(b, "\t\t// No field mask: full update of every writable column via a map, so\n")
@@ -1126,19 +1169,27 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		if owner.HasETag {
 			b.WriteString("\t\tupdates[\"etag\"] = m.ETag\n")
 		}
-		fmt.Fprintf(b, "\t\tif err := q.Updates(updates).Error; err != nil {\n")
+		fmt.Fprintf(b, "\t\tres := q.Updates(updates)\n")
+		fmt.Fprintf(b, "\t\tif err := res.Error; err != nil {\n")
 		b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
 		fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
 		fmt.Fprintf(b, "\t\t}\n")
+		if owner.HasETag {
+			emitGormCASCheck(b, model, hasTenant)
+		}
 		fmt.Fprintf(b, "\t}\n")
 	} else {
 		// No writable scalar columns (id + secrets only): a struct update is
 		// sufficient — there are no zero-valued scalar columns to lose.
 		fmt.Fprintf(b, "\t} else {\n")
-		fmt.Fprintf(b, "\t\tif err := q.Updates(m).Error; err != nil {\n")
+		fmt.Fprintf(b, "\t\tres := q.Updates(m)\n")
+		fmt.Fprintf(b, "\t\tif err := res.Error; err != nil {\n")
 		b.WriteString("\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\treturn nil, ce\n\t\t\t}\n")
 		fmt.Fprintf(b, "\t\t\treturn nil, fmt.Errorf(\"update %s: %%w\", err)\n", msg.MessageName)
 		fmt.Fprintf(b, "\t\t}\n")
+		if owner.HasETag {
+			emitGormCASCheck(b, model, hasTenant)
+		}
 		fmt.Fprintf(b, "\t}\n")
 	}
 	fmt.Fprintf(b, "\treturn r.Get(ctx, key)\n}\n\n")

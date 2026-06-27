@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
@@ -96,11 +97,30 @@ func NewGroupEntRepository(client *ent.Client) persistence.Repository[*Group, st
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entgroup.AccountID(tenantID))
 			}
+			ifMatch := etag.IfMatchFromContext(ctx)
+			if ifMatch != "" {
+				u = u.Where(entgroup.Etag(ifMatch))
+			}
 			if ToEntGroupOnUpdate != nil {
 				ToEntGroupOnUpdate(entity, u)
 			}
 			updated, err := u.Save(ctx)
 			if err != nil {
+				if ent.IsNotFound(err) && ifMatch != "" {
+					check := groupClient(ctx).Query().Where(entgroup.ID(key))
+					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+						check = check.Where(entgroup.AccountID(tenantID))
+					}
+					exists, cerr := check.Exist(ctx)
+					if cerr != nil {
+						return nil, cerr
+					}
+					if exists {
+						// Row present but its stored etag no longer matches If-Match → stale precondition.
+						return nil, persistence.ErrPreconditionFailed
+					}
+					return nil, persistence.ErrNotFound
+				}
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
 				}

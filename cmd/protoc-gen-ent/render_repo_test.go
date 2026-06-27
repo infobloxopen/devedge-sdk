@@ -222,6 +222,86 @@ func TestRenderEntRepoAdapter_updateHonorsFieldMask(t *testing.T) {
 	}
 }
 
+// AIP-154 optimistic concurrency on ent: an etag-bearing resource's Update_ must
+// become a compare-and-set when an If-Match precondition is present — the
+// UpdateOneID is narrowed by an `Etag(ifMatch)` predicate, and a 0-row match
+// (ent.IsNotFound with a non-empty If-Match) is disambiguated via an existence
+// re-check into ErrPreconditionFailed (row present) or ErrNotFound (row gone).
+// Mirrors the GORM CAS emission so a stale If-Match no longer silently succeeds.
+func TestRenderEntRepoAdapter_etagCompareAndSet(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Doc",
+		HasETag:     true,
+		SoftDelete:  true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "title", SnakeName: "title", EntType: "String"},
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "docv1", "github.com/example/docd/docv1")
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+
+	// Isolate the Update_ closure so we do not match Create_/batch sets.
+	start := strings.Index(out, "Update_: func(ctx context.Context, key string, entity *Doc")
+	if start < 0 {
+		t.Fatal("Update_ closure not found")
+	}
+	end := strings.Index(out[start:], "Delete_: func(")
+	if end < 0 {
+		t.Fatal("could not bound the Update_ closure (Delete_ not found)")
+	}
+	upd := out[start : start+end]
+
+	wants := []string{
+		"ifMatch := etag.IfMatchFromContext(ctx)",
+		"u = u.Where(entdoc.Etag(ifMatch))",
+		`if ent.IsNotFound(err) && ifMatch != "" {`,
+		"check := docClient(ctx).Query().Where(entdoc.ID(key))",
+		// per-tenant + soft-delete narrowing on the existence re-check
+		"check = check.Where(entdoc.AccountID(tenantID))",
+		"check = check.Where(entdoc.DeleteTimeIsNil())",
+		"return nil, persistence.ErrPreconditionFailed",
+		"return nil, persistence.ErrNotFound",
+	}
+	for _, w := range wants {
+		if !strings.Contains(upd, w) {
+			t.Errorf("CAS Update_ missing %q\n--- Update_ ---\n%s", w, upd)
+		}
+	}
+	// The etag package is imported for the precondition lookup.
+	if !strings.Contains(out, `"github.com/infobloxopen/devedge-sdk/middleware/etag"`) {
+		t.Error("etag-bearing adapter must import middleware/etag for IfMatchFromContext")
+	}
+}
+
+// A message WITHOUT an etag field must not emit any CAS machinery in Update_ (no
+// behavior change for non-etag resources).
+func TestRenderEntRepoAdapter_noETagNoCAS(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Note",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "body", SnakeName: "body", EntType: "String"},
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "notev1", "github.com/example/noted/notev1")
+	if strings.Contains(out, "IfMatchFromContext") {
+		t.Error("non-etag resource must not read If-Match in Update_")
+	}
+	if strings.Contains(out, "ErrPreconditionFailed") {
+		t.Error("non-etag resource must not emit a precondition path")
+	}
+	if strings.Contains(out, "middleware/etag") {
+		t.Error("non-etag resource must not import middleware/etag")
+	}
+}
+
 // TestRenderEntRepository_emitsInMaskHelper proves the sibling batch wrapper (always
 // generated alongside the adapter for the same message) defines the couponInMask
 // helper the masked Update_ relies on, with an empty-mask-returns-true contract.

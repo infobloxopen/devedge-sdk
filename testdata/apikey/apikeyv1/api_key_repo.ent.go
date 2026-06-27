@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 	"github.com/infobloxopen/devedge-sdk/secret"
@@ -136,11 +137,31 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 				}
 				u = u.SetKeyValueHash(h).SetKeyValueCipher(c)
 			}
+			ifMatch := etag.IfMatchFromContext(ctx)
+			if ifMatch != "" {
+				u = u.Where(entapikey.Etag(ifMatch))
+			}
 			if ToEntAPIKeyOnUpdate != nil {
 				ToEntAPIKeyOnUpdate(entity, u)
 			}
 			updated, err := u.Save(ctx)
 			if err != nil {
+				if ent.IsNotFound(err) && ifMatch != "" {
+					check := apikeyClient(ctx).Query().Where(entapikey.ID(key))
+					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+						check = check.Where(entapikey.AccountID(tenantID))
+					}
+					check = check.Where(entapikey.DeleteTimeIsNil())
+					exists, cerr := check.Exist(ctx)
+					if cerr != nil {
+						return nil, cerr
+					}
+					if exists {
+						// Row present but its stored etag no longer matches If-Match → stale precondition.
+						return nil, persistence.ErrPreconditionFailed
+					}
+					return nil, persistence.ErrNotFound
+				}
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
 				}

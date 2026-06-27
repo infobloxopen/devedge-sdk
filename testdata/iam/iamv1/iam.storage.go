@@ -176,6 +176,10 @@ func (r *AccountRepository) Update(ctx context.Context, key string, entity *Acco
 		ToModelAccountOnUpdate(entity, m)
 	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
+	ifMatch := etag.IfMatchFromContext(ctx)
+	if ifMatch != "" {
+		q = q.Where("etag = ?", ifMatch)
+	}
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -188,11 +192,24 @@ func (r *AccountRepository) Update(ctx context.Context, key string, entity *Acco
 		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
-		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update Account: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&AccountModel{}).Where("id = ?", key)
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update Account precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	} else {
 		// No field mask: full update of every writable column via a map, so
@@ -202,11 +219,24 @@ func (r *AccountRepository) Update(ctx context.Context, key string, entity *Acco
 			"display_name": m.DisplayName,
 		}
 		updates["etag"] = m.ETag
-		if err := q.Updates(updates).Error; err != nil {
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update Account: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&AccountModel{}).Where("id = ?", key)
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update Account precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	}
 	return r.Get(ctx, key)
@@ -492,6 +522,10 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
+	ifMatch := etag.IfMatchFromContext(ctx)
+	if ifMatch != "" {
+		q = q.Where("etag = ?", ifMatch)
+	}
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -507,11 +541,27 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
-		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update User: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&UserModel{}).Where("id = ?", key)
+			if tenantID != "" {
+				check = check.Where("account_id = ?", tenantID)
+			}
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update User precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	} else {
 		// No field mask: full update of every writable column via a map, so
@@ -522,11 +572,27 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 			"display_name": m.DisplayName,
 		}
 		updates["etag"] = m.ETag
-		if err := q.Updates(updates).Error; err != nil {
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update User: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&UserModel{}).Where("id = ?", key)
+			if tenantID != "" {
+				check = check.Where("account_id = ?", tenantID)
+			}
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update User precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	}
 	return r.Get(ctx, key)
@@ -822,6 +888,10 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
+	ifMatch := etag.IfMatchFromContext(ctx)
+	if ifMatch != "" {
+		q = q.Where("etag = ?", ifMatch)
+	}
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -837,11 +907,27 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
-		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update Group: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&GroupModel{}).Where("id = ?", key)
+			if tenantID != "" {
+				check = check.Where("account_id = ?", tenantID)
+			}
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update Group precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	} else {
 		// No field mask: full update of every writable column via a map, so
@@ -851,11 +937,27 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 			"display_name": m.DisplayName,
 		}
 		updates["etag"] = m.ETag
-		if err := q.Updates(updates).Error; err != nil {
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update Group: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&GroupModel{}).Where("id = ?", key)
+			if tenantID != "" {
+				check = check.Where("account_id = ?", tenantID)
+			}
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update Group precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	}
 	return r.Get(ctx, key)
@@ -1200,7 +1302,8 @@ func (r *MembershipRepository) Update(ctx context.Context, key string, entity *M
 		}
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
-		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
@@ -1215,7 +1318,8 @@ func (r *MembershipRepository) Update(ctx context.Context, key string, entity *M
 			"user_id":  m.UserId,
 			"role":     m.Role,
 		}
-		if err := q.Updates(updates).Error; err != nil {
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
@@ -1548,6 +1652,10 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
+	ifMatch := etag.IfMatchFromContext(ctx)
+	if ifMatch != "" {
+		q = q.Where("etag = ?", ifMatch)
+	}
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -1563,11 +1671,27 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
-		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update ApiKey: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&ApiKeyModel{}).Where("id = ?", key)
+			if tenantID != "" {
+				check = check.Where("account_id = ?", tenantID)
+			}
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update ApiKey precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	} else {
 		// No field mask: full update of every writable column via a map, so
@@ -1582,11 +1706,27 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 			updates["key_value_cipher"] = m.KeyValueCipher
 		}
 		updates["etag"] = m.ETag
-		if err := q.Updates(updates).Error; err != nil {
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update ApiKey: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&ApiKeyModel{}).Where("id = ?", key)
+			if tenantID != "" {
+				check = check.Where("account_id = ?", tenantID)
+			}
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update ApiKey precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	}
 	return r.Get(ctx, key)

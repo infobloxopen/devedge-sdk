@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent"
@@ -104,11 +105,31 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entapikey.AccountID(tenantID))
 			}
+			ifMatch := etag.IfMatchFromContext(ctx)
+			if ifMatch != "" {
+				u = u.Where(entapikey.Etag(ifMatch))
+			}
 			if ToEntAPIKeySummaryOnUpdate != nil {
 				ToEntAPIKeySummaryOnUpdate(entity, u)
 			}
 			updated, err := u.Save(ctx)
 			if err != nil {
+				if ent.IsNotFound(err) && ifMatch != "" {
+					check := apikeyClient(ctx).Query().Where(entapikey.ID(key))
+					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+						check = check.Where(entapikey.AccountID(tenantID))
+					}
+					check = check.Where(entapikey.DeleteTimeIsNil())
+					exists, cerr := check.Exist(ctx)
+					if cerr != nil {
+						return nil, cerr
+					}
+					if exists {
+						// Row present but its stored etag no longer matches If-Match → stale precondition.
+						return nil, persistence.ErrPreconditionFailed
+					}
+					return nil, persistence.ErrNotFound
+				}
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
 				}
