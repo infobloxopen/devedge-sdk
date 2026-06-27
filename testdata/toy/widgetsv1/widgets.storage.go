@@ -117,9 +117,18 @@ func NewWidgetRepository(db *gorm.DB) *WidgetRepository {
 	return &WidgetRepository{db: db}
 }
 
+func (r *WidgetRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *WidgetRepository) Get(ctx context.Context, key string) (*Widget, error) {
 	var m WidgetModel
-	if err := r.db.WithContext(ctx).Where("id = ?", key).First(&m).Error; err != nil {
+	if err := r.conn(ctx).Where("id = ?", key).First(&m).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, persistence.ErrNotFound
 		}
@@ -130,7 +139,7 @@ func (r *WidgetRepository) Get(ctx context.Context, key string) (*Widget, error)
 
 func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Widget, string, error) {
 	var models []WidgetModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	if opts.ShowDeleted {
 		q = q.Unscoped()
 	}
@@ -181,7 +190,7 @@ func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget,
 	if ToModelWidgetOnCreate != nil {
 		ToModelWidgetOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -199,7 +208,7 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 	if ToModelWidgetOnUpdate != nil {
 		ToModelWidgetOnUpdate(entity, m)
 	}
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -239,7 +248,7 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 }
 
 func (r *WidgetRepository) Delete(ctx context.Context, key string) error {
-	res := r.db.WithContext(ctx).Where("id = ?", key).Delete(&WidgetModel{})
+	res := r.conn(ctx).Where("id = ?", key).Delete(&WidgetModel{})
 	if res.Error != nil {
 		return fmt.Errorf("delete Widget: %w", res.Error)
 	}
@@ -250,7 +259,7 @@ func (r *WidgetRepository) Delete(ctx context.Context, key string) error {
 }
 
 func (r *WidgetRepository) Undelete(ctx context.Context, key string) (*Widget, error) {
-	q := r.db.WithContext(ctx).Unscoped().Model(&WidgetModel{}).
+	q := r.conn(ctx).Unscoped().Model(&WidgetModel{}).
 		Where("id = ?", key).Where("deleted_at IS NOT NULL")
 	res := q.Update("deleted_at", nil)
 	if res.Error != nil {
@@ -267,7 +276,7 @@ func (r *WidgetRepository) BatchGet(ctx context.Context, keys []string) ([]*Widg
 		return []*Widget{}, nil
 	}
 	var models []WidgetModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	if err := q.Find(&models).Error; err != nil {
 		return nil, fmt.Errorf("batch get Widget: %w", err)
 	}
@@ -291,8 +300,7 @@ func (r *WidgetRepository) BatchUpdate(ctx context.Context, items []persistence.
 		return []*Widget{}, nil
 	}
 	out := make([]*Widget, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &WidgetRepository{db: tx}
+	run := func(txRepo *WidgetRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -301,6 +309,17 @@ func (r *WidgetRepository) BatchUpdate(ctx context.Context, items []persistence.
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&WidgetRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&WidgetRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -321,8 +340,8 @@ func (r *WidgetRepository) BatchDelete(ctx context.Context, keys []string) error
 		seen[k] = struct{}{}
 		uniq = append(uniq, k)
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		res := q.Delete(&WidgetModel{})
 		if res.Error != nil {
 			return fmt.Errorf("batch delete Widget: %w", res.Error)
@@ -331,6 +350,14 @@ func (r *WidgetRepository) BatchDelete(ctx context.Context, keys []string) error
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 

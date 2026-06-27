@@ -233,15 +233,86 @@ func TestScaffold_Boundary(t *testing.T) {
 		t.Errorf("consumer go.mod missing gorm.io/gorm:\n%s", consumerGoMod)
 	}
 
-	sdkGoMod := readFile(t, filepath.Join(sdkDir, "go.mod"))
-	if strings.Contains(sdkGoMod, "gorm.io/") {
-		t.Errorf("SDK go.mod must stay engine-free but references gorm:\n%s", sdkGoMod)
-	}
+	// Clean-core guarantee: gorm is confined to the persistence/gormtx adapter
+	// package (the GORM analogue of persistence/entrepo for ent). The core trees
+	// (persistence, authz, grpcauthz) must never import it. We assert this at the
+	// import level rather than on the SDK go.mod, because the go.mod legitimately
+	// carries both adapter engines (entgo.io/ent and gorm.io/gorm) as deps of the
+	// sibling adapter packages — exactly as it already does for ent.
+	assertCoreImportFree(t, sdkDir, "gorm.io/")
 
 	// The public proto must contain no engine options (AC-004 / apx policy guardrail).
 	proto := readFile(t, filepath.Join(target, "proto/orders/v1/orders.proto"))
 	if strings.Contains(proto, "gorm.") {
 		t.Errorf("public proto must not contain engine options (gorm.*):\n%s", proto)
+	}
+}
+
+// assertCoreImportFree fails if the engine identified by importPrefix (e.g.
+// "gorm.io/") is reachable from the clean core — the top-level persistence tree
+// plus the whole authz tree (which includes authz/grpcauthz). The engine
+// adapters live in persistence/{entrepo,gormtx}; the policy/persistence core must
+// never reach an ORM, directly OR transitively through one of those adapters.
+//
+// The check is deliberately over the FULL transitive dependency closure of the
+// core roots (`go list -deps`), not over each core package's direct imports.
+// That distinction has teeth: a core package that imports the gormtx/entrepo
+// adapter would NOT name "gorm.io/" in its own import list (it names
+// ".../persistence/gormtx"), so a direct-import-only check would miss it and the
+// adapter would launder the ORM into the core. Because the adapter packages are
+// never in the core's closure in a clean tree, any appearance of importPrefix in
+// the closure is an unambiguous leak — whether direct or via an adapter.
+func assertCoreImportFree(t *testing.T, sdkDir, importPrefix string) {
+	t.Helper()
+	// 1) Hard gate: importPrefix must not appear anywhere in the core's
+	//    transitive dependency closure.
+	cmd := exec.Command("go", "list", "-deps", "./persistence", "./authz/...")
+	cmd.Dir = sdkDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list core deps: %v\n%s", err, out)
+	}
+	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		dep = strings.TrimSpace(dep)
+		if strings.Contains(dep, importPrefix) {
+			t.Errorf("clean core (persistence + authz/...) must not depend on %q (engine leak): %q is in the transitive dependency closure", importPrefix, dep)
+		}
+	}
+
+	// 2) Best-effort breadcrumb: name the first-party core package that pulls in
+	//    the engine — directly, or via the sanctioned adapter subpackages. This
+	//    only produces a diagnostic; the gate above is the authority.
+	cmd = exec.Command("go", "list", "-deps", "-f",
+		"{{.ImportPath}} {{join .Imports \" \"}}",
+		"./persistence", "./authz/...")
+	cmd.Dir = sdkDir
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		return // gate above already ran; the detail listing is optional.
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		pkg := fields[0]
+		if !strings.HasPrefix(pkg, "github.com/infobloxopen/devedge-sdk/") {
+			continue // only police first-party core packages
+		}
+		// The adapter packages legitimately import the engine; flag them only
+		// when they appear AS A DEPENDENCY of a core root (i.e. some core
+		// package reached them), which the gate above has already failed on.
+		if strings.Contains(pkg, "/persistence/entrepo") || strings.Contains(pkg, "/persistence/gormtx") {
+			t.Errorf("clean core reached engine adapter %s (it should never be in the core's dependency closure)", pkg)
+			continue
+		}
+		for _, imp := range fields[1:] {
+			if strings.Contains(imp, importPrefix) ||
+				strings.Contains(imp, "/persistence/entrepo") ||
+				strings.Contains(imp, "/persistence/gormtx") {
+				t.Errorf("clean-core package %s must not import %q (engine leak)", pkg, imp)
+			}
+		}
 	}
 }
 
@@ -287,10 +358,10 @@ func TestScaffold_ENT_Boundary(t *testing.T) {
 		t.Errorf("public proto must not contain engine options:\n%s", proto)
 	}
 
-	sdkGoMod := readFile(t, filepath.Join(sdkDir, "go.mod"))
-	if strings.Contains(sdkGoMod, "gorm.io/") {
-		t.Errorf("SDK go.mod must stay engine-free but references gorm:\n%s", sdkGoMod)
-	}
+	// Clean-core guarantee (import level): the core trees never import gorm; the
+	// engine adapters live in persistence/{entrepo,gormtx}. See the note on
+	// assertCoreImportFree in TestScaffold_Boundary.
+	assertCoreImportFree(t, sdkDir, "gorm.io/")
 }
 
 // TestScaffold_APXGovernance is F028 Phase 5 (T-501/T-502; AC-003, AC-004 at the

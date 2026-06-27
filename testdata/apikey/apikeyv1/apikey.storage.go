@@ -143,10 +143,19 @@ func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor) *APIKeyRepository {
 	return &APIKeyRepository{db: db, enc: enc}
 }
 
+func (r *APIKeyRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error) {
 	var m APIKeyModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -161,7 +170,7 @@ func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error)
 
 func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*APIKey, string, error) {
 	var models []APIKeyModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	if opts.ShowDeleted {
 		q = q.Unscoped()
 	}
@@ -233,7 +242,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 	if ToModelAPIKeyOnCreate != nil {
 		ToModelAPIKeyOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -264,7 +273,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 		ToModelAPIKeyOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -315,7 +324,7 @@ func (r *APIKeyRepository) Update(ctx context.Context, key string, entity *APIKe
 
 func (r *APIKeyRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -331,7 +340,7 @@ func (r *APIKeyRepository) Delete(ctx context.Context, key string) error {
 
 func (r *APIKeyRepository) Undelete(ctx context.Context, key string) (*APIKey, error) {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Unscoped().Model(&APIKeyModel{}).Where("id = ?", key)
+	q := r.conn(ctx).Unscoped().Model(&APIKeyModel{}).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -348,7 +357,7 @@ func (r *APIKeyRepository) Undelete(ctx context.Context, key string) (*APIKey, e
 
 func (r *APIKeyRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before.UTC())
+	q := r.conn(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before.UTC())
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -366,7 +375,7 @@ func (r *APIKeyRepository) LookupByKeyValueHash(ctx context.Context, hash string
 		return nil, persistence.ErrNotFound
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("key_value_hash = ?", hash)
+	q := r.conn(ctx).Where("key_value_hash = ?", hash)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -385,7 +394,7 @@ func (r *APIKeyRepository) BatchGet(ctx context.Context, keys []string) ([]*APIK
 		return []*APIKey{}, nil
 	}
 	var models []APIKeyModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -413,8 +422,7 @@ func (r *APIKeyRepository) BatchUpdate(ctx context.Context, items []persistence.
 		return []*APIKey{}, nil
 	}
 	out := make([]*APIKey, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &APIKeyRepository{db: tx, enc: r.enc}
+	run := func(txRepo *APIKeyRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -423,6 +431,17 @@ func (r *APIKeyRepository) BatchUpdate(ctx context.Context, items []persistence.
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&APIKeyRepository{db: tx, enc: r.enc}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&APIKeyRepository{db: tx, enc: r.enc})
 	})
 	if err != nil {
 		return nil, err
@@ -444,8 +463,8 @@ func (r *APIKeyRepository) BatchDelete(ctx context.Context, keys []string) error
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -457,6 +476,14 @@ func (r *APIKeyRepository) BatchDelete(ctx context.Context, keys []string) error
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
@@ -518,10 +545,19 @@ func NewAPIKeySummaryRepository(db *gorm.DB) *APIKeySummaryRepository {
 	return &APIKeySummaryRepository{db: db}
 }
 
+func (r *APIKeySummaryRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *APIKeySummaryRepository) Get(ctx context.Context, key string) (*APIKeySummary, error) {
 	var m APIKeyModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -536,7 +572,7 @@ func (r *APIKeySummaryRepository) Get(ctx context.Context, key string) (*APIKeyS
 
 func (r *APIKeySummaryRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*APIKeySummary, string, error) {
 	var models []APIKeyModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	if opts.ShowDeleted {
 		q = q.Unscoped()
 	}
@@ -596,7 +632,7 @@ func (r *APIKeySummaryRepository) Create(ctx context.Context, entity *APIKeySumm
 	if ToModelAPIKeySummaryOnCreate != nil {
 		ToModelAPIKeySummaryOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -615,7 +651,7 @@ func (r *APIKeySummaryRepository) Update(ctx context.Context, key string, entity
 		ToModelAPIKeySummaryOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -661,7 +697,7 @@ func (r *APIKeySummaryRepository) Update(ctx context.Context, key string, entity
 
 func (r *APIKeySummaryRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -677,7 +713,7 @@ func (r *APIKeySummaryRepository) Delete(ctx context.Context, key string) error 
 
 func (r *APIKeySummaryRepository) Undelete(ctx context.Context, key string) (*APIKeySummary, error) {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Unscoped().Model(&APIKeyModel{}).Where("id = ?", key)
+	q := r.conn(ctx).Unscoped().Model(&APIKeyModel{}).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -694,7 +730,7 @@ func (r *APIKeySummaryRepository) Undelete(ctx context.Context, key string) (*AP
 
 func (r *APIKeySummaryRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before.UTC())
+	q := r.conn(ctx).Unscoped().Where("expire_time IS NOT NULL AND expire_time <= ?", before.UTC())
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -710,7 +746,7 @@ func (r *APIKeySummaryRepository) BatchGet(ctx context.Context, keys []string) (
 		return []*APIKeySummary{}, nil
 	}
 	var models []APIKeyModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -738,8 +774,7 @@ func (r *APIKeySummaryRepository) BatchUpdate(ctx context.Context, items []persi
 		return []*APIKeySummary{}, nil
 	}
 	out := make([]*APIKeySummary, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &APIKeySummaryRepository{db: tx}
+	run := func(txRepo *APIKeySummaryRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -748,6 +783,17 @@ func (r *APIKeySummaryRepository) BatchUpdate(ctx context.Context, items []persi
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&APIKeySummaryRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&APIKeySummaryRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -769,8 +815,8 @@ func (r *APIKeySummaryRepository) BatchDelete(ctx context.Context, keys []string
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -782,6 +828,14 @@ func (r *APIKeySummaryRepository) BatchDelete(ctx context.Context, keys []string
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
