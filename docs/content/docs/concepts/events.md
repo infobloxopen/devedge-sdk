@@ -17,10 +17,13 @@ that updates the other aggregate in *its own* transaction. The two changes are c
 
 > **Status.** Ships today on top of the [transaction seam](../transactions/) and the
 > [aggregate machinery](../aggregates/): an `events.Publisher` that enlists in the current
-> `Atomically`, a pluggable `persistence.OutboxStore` (in-memory dev default + an ent/SQL
-> store), and an in-process `events.Dispatcher` with handler registration and idempotency.
-> Backends: ent and in-memory. The seam is broker-neutral — no Kafka/NATS dependency in the
-> core; a broker adapter would implement the same `OutboxStore`/`Dispatcher` seam outside it.
+> `Atomically`, a pluggable `persistence.OutboxStore` (in-memory dev default plus an ent/SQL
+> store and a reusable `gormtx.GormOutboxStore`), and an in-process `events.Dispatcher` with
+> handler registration and idempotency. Backends: ent, GORM, and in-memory — `gormtx` also
+> ships a `GormIdempotencyStore`, the SQL-backed exactly-once marker that records inside the
+> handler's own transaction. The IAM fixture runs the worked example on GORM as well as ent.
+> The seam is broker-neutral — no Kafka/NATS dependency in the core; a broker adapter would
+> implement the same `OutboxStore`/`Dispatcher` seam outside it.
 
 ## The dual-write problem
 
@@ -138,6 +141,14 @@ The `OutboxStore` is modelled as an ent `outbox` table (account-scoped, with the
 `id, account_id, aggregate_type, aggregate_id, event_type, payload, created_time,
 delivered_time, attempts`) so `Publish` writes it through the same `*ent.Tx` as the aggregate
 change.
+
+The same worked example runs on **GORM** (`events_gorm_test.go`), wired with the reusable
+`gormtx.GormOutboxStore` and `gormtx.GormIdempotencyStore`. The GORM idempotency store is the
+SQL-backed exactly-once marker: `Record` inserts a primary-key row **inside the handler's own
+GORM transaction**, so the marker commits atomically with the reaction and a concurrent (or
+lapsed-lease) double-delivery loses the primary-key race and rolls its duplicate effect back.
+The GORM fixture exercises exactly-once under both a sequential re-claim and a genuine
+two-dispatcher concurrent race.
 
 ## Failure modes
 

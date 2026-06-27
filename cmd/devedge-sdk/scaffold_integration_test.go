@@ -238,8 +238,10 @@ func TestScaffold_Boundary(t *testing.T) {
 	// (persistence, authz, grpcauthz) must never import it. We assert this at the
 	// import level rather than on the SDK go.mod, because the go.mod legitimately
 	// carries both adapter engines (entgo.io/ent and gorm.io/gorm) as deps of the
-	// sibling adapter packages — exactly as it already does for ent.
+	// sibling adapter packages — exactly as it already does for ent. Both engines
+	// are policed symmetrically: a leak of EITHER ORM into the core is a defect.
 	assertCoreImportFree(t, sdkDir, "gorm.io/")
+	assertCoreImportFree(t, sdkDir, "entgo.io/")
 
 	// The public proto must contain no engine options (AC-004 / apx policy guardrail).
 	proto := readFile(t, filepath.Join(target, "proto/orders/v1/orders.proto"))
@@ -358,10 +360,12 @@ func TestScaffold_ENT_Boundary(t *testing.T) {
 		t.Errorf("public proto must not contain engine options:\n%s", proto)
 	}
 
-	// Clean-core guarantee (import level): the core trees never import gorm; the
+	// Clean-core guarantee (import level): the core trees never import an ORM; the
 	// engine adapters live in persistence/{entrepo,gormtx}. See the note on
-	// assertCoreImportFree in TestScaffold_Boundary.
+	// assertCoreImportFree in TestScaffold_Boundary. Police both engines so the ent
+	// boundary test also guards against an ent leak into the core.
 	assertCoreImportFree(t, sdkDir, "gorm.io/")
+	assertCoreImportFree(t, sdkDir, "entgo.io/")
 }
 
 // TestScaffold_APXGovernance is F028 Phase 5 (T-501/T-502; AC-003, AC-004 at the

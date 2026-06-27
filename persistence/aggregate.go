@@ -14,9 +14,10 @@ import "context"
 //     exactly once on any member change (etag-as-aggregate-version). A stale root
 //     etag (If-Match mismatch) fails with [ErrPreconditionFailed].
 //
-// The seam stays clean-core: package persistence imports no ORM/driver. The
-// ent-shape implementation (a generated graph-load primitive + a per-root saver)
-// and the in-memory implementation ([MemoryAggregateRepository]) live behind it.
+// The seam stays clean-core: package persistence imports no ORM/driver. One
+// backend-neutral implementation ([GenericAggregateRepository]) serves the ent,
+// GORM, and in-memory backends — each supplies its own graph-load + per-root saver
+// closures and [TxRunner] through an [AggregateSpec].
 type AggregateRepository[Root any, ID comparable] interface {
 	// Load returns the aggregate root identified by id with its owned members
 	// populated. Returns [ErrNotFound] when no root has that id.

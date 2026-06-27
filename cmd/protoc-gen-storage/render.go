@@ -184,10 +184,11 @@ type fieldInfo struct {
 	HasMany    *fieldv1.HasMany
 	BelongsTo  *fieldv1.BelongsTo
 	ManyToMany *fieldv1.ManyToMany
-	// F031 DDD: cross-aggregate link (infoblox.ddd.v1.references). GORM aggregate
-	// support is a non-goal — the field is dropped from the model (only the sibling
-	// scalar FK persists); this is captured solely so the field is treated as
-	// relationship-mapped by the fail-closed coverage check (GORM keeps building).
+	// F031 DDD: cross-aggregate link (infoblox.ddd.v1.references) — a link to ANOTHER
+	// aggregate, distinct from the within-aggregate containment edges that cascade.
+	// Like ent, the field is dropped from the model (only the sibling scalar FK
+	// persists); this is captured so the field is treated as relationship-mapped by
+	// the fail-closed coverage check.
 	References *dddv1.References
 }
 
@@ -346,7 +347,7 @@ func toStorageFields(msg messageInfo) []storagegen.Field {
 			// A references field (cross-aggregate link) is treated as relationship-
 			// mapped: the message field is dropped from the GORM model (only its
 			// sibling scalar FK persists), so without this it would be flagged an
-			// unmapped nested message and break the GORM fixture build (non-goal).
+			// unmapped nested message and break the GORM fixture build.
 			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil || f.References != nil,
 			IsScalarFK:     fks[f.SnakeName] || fks[f.Name],
 			HasColumnType:  f.GoType != "" && f.GoType != "interface{}",
@@ -611,9 +612,10 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 					continue
 				}
 				if f.References != nil {
-					// F031: cross-aggregate link (ddd.v1.references). GORM aggregate
-					// support is a non-goal: emit NO association — the sibling scalar FK
-					// column declared by the proto author carries the link.
+					// F031: cross-aggregate link (ddd.v1.references). A reference to ANOTHER
+					// aggregate is never a GORM association (unlike a within-aggregate
+					// containment edge): emit NO association — the sibling scalar FK column
+					// declared by the proto author carries the link.
 					fmt.Fprintf(b, "\t// %s is a cross-aggregate reference (ddd.v1.references), not a GORM association; the scalar %s column carries the link\n", f.Name, f.References.GetForeignKey())
 					continue
 				}

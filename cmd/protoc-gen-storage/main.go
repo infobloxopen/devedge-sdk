@@ -7,8 +7,10 @@
 //   - New<Message>Repository(*gorm.DB) constructor
 //   - Compile-time persistence.Repository satisfaction check
 //
-// Generated code imports gorm.io/gorm; the consumer's go.mod provides GORM.
-// devedge-sdk's go.mod gains no ORM dependency.
+// Generated code imports gorm.io/gorm; the consumer's go.mod provides GORM. The
+// SDK's own clean core (top-level persistence, authz, grpcauthz) stays ORM-free —
+// gorm.io/gorm is a dependency only of the sibling adapter persistence/gormtx,
+// exactly as entgo.io/ent is confined to persistence/entrepo.
 package main
 
 import (
@@ -141,12 +143,12 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						manyToMany = fopts.GetManyToMany()
 					}
 				}
-				// F031 DDD: GORM aggregate support is a NON-GOAL, but protoc-gen-storage
-				// must not BREAK on (infoblox.ddd.v1.references). It is a cross-aggregate
-				// link (scalar FK + ID, no association): the message-kind field is
-				// dropped from the model — only the sibling scalar FK column persists —
-				// so the GORM fixtures keep building. Reading it here marks the field as
-				// relationship-mapped for the fail-closed coverage check.
+				// F031 DDD: (infoblox.ddd.v1.references) is a CROSS-aggregate link (scalar
+				// FK + ID, no association) — distinct from the WITHIN-aggregate containment
+				// edges that drive cascade/graph-load. Like ent, the references field is
+				// dropped from the model (only the sibling scalar FK column persists), so
+				// events reference the other aggregate by id only. Reading it here marks
+				// the field as relationship-mapped for the fail-closed coverage check.
 				if proto.HasExtension(opts, dddv1.E_References) {
 					if rf, ok := proto.GetExtension(opts, dddv1.E_References).(*dddv1.References); ok && rf != nil {
 						references = rf
