@@ -61,6 +61,8 @@ func TestMain(m *testing.M) {
 	// F033 P2: also reap the shared MySQL container (mysqltest_test.go) for the same
 	// Ryuk-off-local-workflow reason.
 	terminateMySQL()
+	// Event-bus Phase 2: reap the shared Redpanda broker (redpandatest_test.go) too.
+	terminateRedpanda()
 	os.Exit(code)
 }
 

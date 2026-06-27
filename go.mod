@@ -14,6 +14,7 @@ require (
 require (
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
 	github.com/spf13/cobra v1.10.2
+	github.com/twmb/franz-go v1.21.4
 	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171
 	gorm.io/gorm v1.31.1
 	modernc.org/sqlite v1.52.0
@@ -24,10 +25,13 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
