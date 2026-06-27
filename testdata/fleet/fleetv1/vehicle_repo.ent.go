@@ -16,13 +16,21 @@ import (
 // NewVehicleEntRepository wires the generated ent client into a
 // persistence.Repository[*Vehicle, string].
 func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle, string] {
+	vehicleClient := func(ctx context.Context) *ent.VehicleClient {
+		if h, ok := persistence.TxFromContext(ctx); ok {
+			if tx, ok := h.(*ent.Tx); ok {
+				return tx.Vehicle
+			}
+		}
+		return client.Vehicle
+	}
 	return &entrepo.EntRepository[*Vehicle, string]{
 		Create_: func(ctx context.Context, entity *Vehicle) (*Vehicle, error) {
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID
 			}
-			b := client.Vehicle.Create().
+			b := vehicleClient(ctx).Create().
 				SetID(entity.GetId()).
 				SetAccountID(entity.GetAccountId()).
 				SetVin(entity.GetVin())
@@ -42,7 +50,7 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			return fromEntVehicle(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*Vehicle, error) {
-			e, err := client.Vehicle.Get(ctx, key)
+			e, err := vehicleClient(ctx).Get(ctx, key)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -52,7 +60,7 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			return fromEntVehicle(e), nil
 		},
 		List_: func(ctx context.Context, opts persistence.ListOptions) ([]*Vehicle, string, error) {
-			q := client.Vehicle.Query()
+			q := vehicleClient(ctx).Query()
 			if opts.Filter != "" {
 				pred, perr := entrepo.FilterPredicate(opts.Filter, VehicleEntColumns, nil)
 				if perr != nil {
@@ -84,7 +92,7 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			return out, nextToken, nil
 		},
 		Update_: func(ctx context.Context, key string, entity *Vehicle, fieldMask ...string) (*Vehicle, error) {
-			u := client.Vehicle.UpdateOneID(key)
+			u := vehicleClient(ctx).UpdateOneID(key)
 			if vehicleInMask(fieldMask, "vin") {
 				u = u.SetVin(entity.GetVin())
 			}
@@ -110,7 +118,7 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 			return fromEntVehicle(updated), nil
 		},
 		Delete_: func(ctx context.Context, key string) error {
-			del := client.Vehicle.Delete().Where(entvehicle.ID(key))
+			del := vehicleClient(ctx).Delete().Where(entvehicle.ID(key))
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				del = del.Where(entvehicle.AccountID(tenantID))
 			}

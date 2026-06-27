@@ -72,6 +72,15 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 
 	wants := []string{
 		"func NewCouponEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*Coupon, string]",
+		// F030 D-1(a): every op resolves tx-or-client from ctx via the per-resource
+		// resolver, so a write inside persistence.TxRunner.Atomically joins the tx.
+		"couponClient := func(ctx context.Context) *ent.CouponClient {",
+		"if h, ok := persistence.TxFromContext(ctx); ok {",
+		"if tx, ok := h.(*ent.Tx); ok {",
+		"return tx.Coupon",
+		"return client.Coupon",
+		"couponClient(ctx).Create()",
+		"couponClient(ctx).UpdateOneID(key)",
 		"Create_: func(ctx context.Context, entity *Coupon) (*Coupon, error)",
 		"Get_: func(ctx context.Context, key string) (*Coupon, error)",
 		"List_: func(ctx context.Context, opts persistence.ListOptions) ([]*Coupon, string, error)",
@@ -194,7 +203,7 @@ func TestRenderEntRepoAdapter_updateHonorsFieldMask(t *testing.T) {
 	// a top-level statement in the closure (one tab past the closure body). The fixed
 	// code only ever emits that statement inside an `if couponInMask(...) {` block, so
 	// the bare statement must not appear immediately after the UpdateOneID line.
-	if strings.Contains(upd, "u := client.Coupon.UpdateOneID(key)\n\t\t\tu = u.SetDiscountBps(entity.GetDiscountBps())") {
+	if strings.Contains(upd, "u := couponClient(ctx).UpdateOneID(key)\n\t\t\tu = u.SetDiscountBps(entity.GetDiscountBps())") {
 		t.Error("plain scalar set is ungated in Update_ — #60 regression")
 	}
 	// The tenant key is never a Set in Update_ (only the WHERE guard).
@@ -251,7 +260,7 @@ func TestRenderEntRepoAdapter_noTenantNoSecretHardDelete(t *testing.T) {
 	if !strings.Contains(out, "func NewNoteEntRepository(client *ent.Client) persistence.Repository[*Note, string]") {
 		t.Error("expected no-enc constructor for a message without secret fields")
 	}
-	if !strings.Contains(out, "client.Note.Delete().Where(entnote.ID(key))") {
+	if !strings.Contains(out, "noteClient(ctx).Delete().Where(entnote.ID(key))") {
 		t.Error("expected hard-delete path for a non-soft-delete message")
 	}
 	if strings.Contains(out, "Undelete_:") {
@@ -315,10 +324,15 @@ func TestRenderEntRepoAdapter_multiSurface(t *testing.T) {
 		// (the surface projects no secret field).
 		"func NewCouponSummaryEntRepository(client *ent.Client) persistence.Repository[*CouponSummary, string]",
 		"entrepo.EntRepository[*CouponSummary, string]",
-		// Operates over the OWNER's ent type / client / predicate package.
-		"client.Coupon.Create()",
-		"client.Coupon.Get(ctx, key)",
-		"client.Coupon.Query()",
+		// Operates over the OWNER's ent type / client / predicate package. F030: the
+		// adapter resolves the OWNER's <Model> client from ctx (tx-or-client) instead
+		// of capturing the bare client, so writes inside Atomically join the tx.
+		"couponClient := func(ctx context.Context) *ent.CouponClient {",
+		"return tx.Coupon",
+		"return client.Coupon",
+		"couponClient(ctx).Create()",
+		"couponClient(ctx).Get(ctx, key)",
+		"couponClient(ctx).Query()",
 		`entcoupon "github.com/example/coupond/ent/coupon"`,
 		// Projection input is the owner ent struct; output is the surface proto.
 		"func fromEntCouponSummary(e *ent.Coupon) *CouponSummary",
@@ -339,6 +353,46 @@ func TestRenderEntRepoAdapter_multiSurface(t *testing.T) {
 	for _, bad := range []string{"client.CouponSummary.", "secret.Encryptor", "ent.CouponSummary"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("surface adapter must not reference %q (it projects the owner's type)\n--- generated ---\n%s", bad, out)
+		}
+	}
+}
+
+// TestRenderEntTxRunner is the F030 T5 gate: the per-package ent TxRunner is valid,
+// gofmt-able Go that opens client.Tx(ctx), stashes the *ent.Tx on ctx via the
+// clean-core persistence helper, commits on nil / rolls back on error or panic, and
+// joins an ent transaction already on ctx (nested no-op begin).
+func TestRenderEntTxRunner(t *testing.T) {
+	out := renderEntTxRunner("couponv1", "github.com/example/coupond/ent")
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated TxRunner is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	wants := []string{
+		"package couponv1",
+		`ent "github.com/example/coupond/ent"`,
+		`"github.com/infobloxopen/devedge-sdk/persistence"`,
+		"type EntTxRunner struct {",
+		"func NewEntTxRunner(client *ent.Client) *EntTxRunner {",
+		"func (r *EntTxRunner) Atomically(ctx context.Context, fn func(ctx context.Context) error) (err error) {",
+		// Nested join: an ent tx already on ctx is reused.
+		"if h, ok := persistence.TxFromContext(ctx); ok {",
+		"if _, ok := h.(*ent.Tx); ok {",
+		"return fn(ctx)",
+		// Begin / enroll / commit / rollback.
+		"tx, err := r.client.Tx(ctx)",
+		"fn(persistence.WithTx(ctx, tx))",
+		"_ = tx.Rollback()",
+		"tx.Commit()",
+		// Panic safety.
+		"if p := recover(); p != nil {",
+		"panic(p)",
+		"var _ persistence.TxRunner = (*EntTxRunner)(nil)",
+	}
+	for _, w := range wants {
+		if !strings.Contains(out, w) {
+			t.Errorf("ent TxRunner missing %q\n--- generated ---\n%s", w, out)
 		}
 	}
 }

@@ -111,6 +111,35 @@ func TestRenderEntRepository_tagsInBatchUpdate(t *testing.T) {
 	mustContain(t, out, "u = u.SetTags(it.Entity.GetTags())")
 }
 
+// TestRenderEntRepository_batchParticipatesInTx guards the F030 worst failure mode
+// ("Tx not propagated — looks atomic, isn't"): the AIP-137 batch ops must resolve
+// the ent client/tx from ctx so a BatchUpdate/BatchDelete issued inside
+// persistence.TxRunner.Atomically joins the surrounding transaction instead of
+// opening — and committing — its own. A regression here is a silent partial write.
+func TestRenderEntRepository_batchParticipatesInTx(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Coupon",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "code", SnakeName: "code", EntType: "String"},
+		},
+	}
+	out := renderEntRepository(msg, msg, "couponv1", "github.com/example/coupond/couponv1")
+	// The batch ops resolve tx-or-client from ctx (join an outer Atomically).
+	mustContain(t, out, "func (r *CouponEntRepository) batchTx(ctx context.Context) (*ent.Tx, bool, error) {")
+	mustContain(t, out, "if tx, ok := h.(*ent.Tx); ok {\n\t\t\treturn tx, false, nil")
+	mustContain(t, out, "tx, ownTx, err := r.batchTx(ctx)")
+	// Only the owner commits — a joined batch must not commit/rollback the outer tx.
+	mustContain(t, out, "if ownTx {")
+	// BatchGet reads through the tx-bound client so it sees uncommitted writes.
+	mustContain(t, out, "r.batchModelClient(ctx).Query()")
+	// The fallback (no ctx tx) still opens a private tx — only inside batchTx.
+	mustContain(t, out, "tx, err := r.client.Tx(ctx)\n\treturn tx, true, err")
+	// The old, broken pattern (a batch op body unconditionally committing its own
+	// tx) must be gone: the only Commit is now guarded by ownTx.
+	mustNotContain(t, out, "\treturn tx.Commit()\n}")
+}
+
 func TestRenderEntSchema_accountIDAddsTenantMixin(t *testing.T) {
 	msg := entMessageInfo{
 		MessageName: "Record",

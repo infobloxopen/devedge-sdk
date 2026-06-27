@@ -37,11 +37,30 @@ func apikeysummaryInMask(mask []string, field string) bool {
 	return false
 }
 
+func (r *APIKeySummaryEntRepository) batchModelClient(ctx context.Context) *ent.APIKeyClient {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*ent.Tx); ok {
+			return tx.APIKey
+		}
+	}
+	return r.client.APIKey
+}
+
+func (r *APIKeySummaryEntRepository) batchTx(ctx context.Context) (*ent.Tx, bool, error) {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*ent.Tx); ok {
+			return tx, false, nil
+		}
+	}
+	tx, err := r.client.Tx(ctx)
+	return tx, true, err
+}
+
 func (r *APIKeySummaryEntRepository) BatchGet(ctx context.Context, keys []string) ([]*APIKeySummary, error) {
 	if len(keys) == 0 {
 		return []*APIKeySummary{}, nil
 	}
-	rows, err := r.client.APIKey.Query().Where(entapikey.IDIn(keys...)).All(ctx)
+	rows, err := r.batchModelClient(ctx).Query().Where(entapikey.IDIn(keys...)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("batch get apikey: %w", err)
 	}
@@ -65,9 +84,14 @@ func (r *APIKeySummaryEntRepository) BatchUpdate(ctx context.Context, items []pe
 		return []*APIKeySummary{}, nil
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	tx, err := r.client.Tx(ctx)
+	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	rollback := func() {
+		if ownTx {
+			_ = tx.Rollback()
+		}
 	}
 	out := make([]*APIKeySummary, 0, len(items))
 	for _, it := range items {
@@ -84,7 +108,7 @@ func (r *APIKeySummaryEntRepository) BatchUpdate(ctx context.Context, items []pe
 		}
 		saved, serr := u.Save(ctx)
 		if serr != nil {
-			_ = tx.Rollback()
+			rollback()
 			if ent.IsNotFound(serr) {
 				return nil, persistence.ErrNotFound
 			}
@@ -92,8 +116,10 @@ func (r *APIKeySummaryEntRepository) BatchUpdate(ctx context.Context, items []pe
 		}
 		out = append(out, fromEntAPIKeySummary(saved))
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit tx: %w", err)
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit tx: %w", err)
+		}
 	}
 	return out, nil
 }
@@ -112,9 +138,14 @@ func (r *APIKeySummaryEntRepository) BatchDelete(ctx context.Context, keys []str
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	tx, err := r.client.Tx(ctx)
+	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
+	}
+	rollback := func() {
+		if ownTx {
+			_ = tx.Rollback()
+		}
 	}
 	upd := tx.APIKey.Update().Where(entapikey.IDIn(uniq...))
 	if tenantID != "" {
@@ -123,14 +154,17 @@ func (r *APIKeySummaryEntRepository) BatchDelete(ctx context.Context, keys []str
 	upd = upd.Where(entapikey.DeleteTimeIsNil())
 	n, derr := upd.SetDeleteTime(time.Now()).Save(ctx)
 	if derr != nil {
-		_ = tx.Rollback()
+		rollback()
 		return fmt.Errorf("batch delete apikey: %w", derr)
 	}
 	if n != len(uniq) {
-		_ = tx.Rollback()
+		rollback()
 		return persistence.ErrNotFound
 	}
-	return tx.Commit()
+	if ownTx {
+		return tx.Commit()
+	}
+	return nil
 }
 
 // compile-time check.
