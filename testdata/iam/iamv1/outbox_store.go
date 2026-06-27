@@ -1,9 +1,18 @@
-// Hand-written (NOT protoc-gen-ent output): the F032 ent-backed OutboxStore for the
-// IAM fixture. It is the SQL-backend analogue of persistence.MemoryOutboxStore.
+// Hand-written (NOT protoc-gen-ent output): the F032/F033 ent-backed OutboxStore for
+// the IAM fixture. It is the SQL-backend analogue of persistence.MemoryOutboxStore.
+//
+// F033 (append-only + partitioned): the table is APPEND-ONLY — Append writes through
+// the ctx *ent.Tx, ClaimUndelivered filters on attempts (NOT delivered_time),
+// MarkDelivered is a no-op (delivery truth is the idempotency marker), and the store
+// never DELETEs a row on the dispatch path. Retention is whole-partition drops via
+// DropPartitionsBefore (persistence.OutboxRetention): on PostgreSQL it issues
+// partition DDL (DROP TABLE of an aged monthly partition, O(1)); on the sqlite dev
+// backend it degrades to a windowed delete of aged rows.
 package iamv1
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -12,31 +21,59 @@ import (
 	entoutbox "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 )
 
-// EntOutboxStore is the ent/SQL-backed persistence.OutboxStore for the IAM module.
+// EntOutboxStore is the ent/SQL-backed persistence.OutboxStore + OutboxRetention for
+// the IAM module.
 //
 // The critical method is Append: it resolves the *ent.Tx carried on ctx (via
 // persistence.TxFromContext, the F030 seam) and writes the outbox row THROUGH that
 // transaction, so the row commits in the SAME transaction as the aggregate change
-// that emitted it and is discarded on rollback (F032 AC-1, the transactional-outbox
-// guarantee). Claim/MarkDelivered/Release run on the base client because the
-// background dispatcher is not inside an aggregate transaction.
+// that emitted it and is discarded on rollback (F032 AC-1). Claim/Release run on the
+// base client because the background dispatcher is not inside an aggregate tx.
 //
 // Claiming uses a lease (leased_until) rather than SELECT ... FOR UPDATE SKIP LOCKED
-// (ent sql/lock is not enabled in this repo — F032 D-3): an undelivered row whose
-// lease has not lapsed is hidden from a competing claim.
+// (ent sql/lock is not enabled in this repo — F032 D-3): a row whose lease has not
+// lapsed is hidden from a competing claim.
 type EntOutboxStore struct {
 	client   *ent.Client
 	leaseTTL time.Duration
 	now      func() time.Time
+	// rawDB, when set, is the underlying *sql.DB used ONLY for partition-drop retention
+	// DDL on a partitioned SQL backend (ent does not expose declarative partitioning).
+	// It is never touched on the dispatch path. Inject it with WithEntOutboxRawDB.
+	rawDB *sql.DB
+	// mysql selects the MySQL partition-drop DDL (ALTER TABLE ... DROP PARTITION) over
+	// the default PostgreSQL DDL when rawDB is set. Set it with WithEntOutboxMySQL.
+	mysql bool
+}
+
+// EntOutboxOption configures an EntOutboxStore.
+type EntOutboxOption func(*EntOutboxStore)
+
+// WithEntOutboxRawDB injects the underlying *sql.DB used for PostgreSQL
+// partition-drop retention DDL (DropPartitionsBefore). It is only needed on a
+// partitioned PG deployment; the sqlite dev backend does not require it.
+func WithEntOutboxRawDB(db *sql.DB) EntOutboxOption {
+	return func(s *EntOutboxStore) { s.rawDB = db }
+}
+
+// WithEntOutboxMySQL selects the MySQL partition-drop DDL for DropPartitionsBefore
+// (ALTER TABLE ... DROP PARTITION) instead of the default PostgreSQL DDL. Combine it
+// with WithEntOutboxRawDB on a partitioned MySQL deployment.
+func WithEntOutboxMySQL() EntOutboxOption {
+	return func(s *EntOutboxStore) { s.mysql = true }
 }
 
 // NewEntOutboxStore returns an ent-backed OutboxStore over client. A non-positive
 // leaseTTL uses a sane default.
-func NewEntOutboxStore(client *ent.Client, leaseTTL time.Duration) *EntOutboxStore {
+func NewEntOutboxStore(client *ent.Client, leaseTTL time.Duration, opts ...EntOutboxOption) *EntOutboxStore {
 	if leaseTTL <= 0 {
 		leaseTTL = 30 * time.Second
 	}
-	return &EntOutboxStore{client: client, leaseTTL: leaseTTL, now: time.Now}
+	s := &EntOutboxStore{client: client, leaseTTL: leaseTTL, now: time.Now}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // outboxClient resolves the tx-bound Outbox client when ctx carries an *ent.Tx, so
@@ -79,17 +116,29 @@ func (s *EntOutboxStore) Append(ctx context.Context, rec *persistence.OutboxReco
 	return nil
 }
 
-// ClaimUndelivered implements persistence.OutboxStore: lease up to limit undelivered
-// rows whose lease has lapsed, bumping attempts and stamping a fresh lease, and
-// return them. Runs on the base client (the dispatcher is not in an aggregate tx).
-func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, limit int) ([]*persistence.OutboxRecord, error) {
+// ClaimUndelivered implements persistence.OutboxStore: lease up to limit rows still
+// eligible for dispatch (attempts < maxAttempts and lease lapsed), bumping attempts
+// and stamping a fresh lease, and return them. Runs on the base client (the
+// dispatcher is not in an aggregate tx).
+//
+// F033 churn-avoidance: a delivered row (delivered_time set) is EXCLUDED, so a
+// successfully delivered event is never re-leased or re-attempted — the happy path
+// issues zero per-poll UPDATEs and a delivered event never drifts into the poison
+// cutoff. A row past maxAttempts without ever delivering is poison and skipped (the
+// poison cutoff). The handler idempotency markers remain the exactly-once guard for a
+// rare in-flight double-claim; aged rows are removed by a partition drop.
+func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*persistence.OutboxRecord, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = persistence.DefaultMaxOutboxAttempts
 	}
 	now := s.now()
 	rows, err := s.client.Outbox.Query().
 		Where(
 			entoutbox.DeliveredTimeIsNil(),
+			entoutbox.AttemptsLT(maxAttempts),
 			entoutbox.Or(
 				entoutbox.LeasedUntilIsNil(),
 				entoutbox.LeasedUntilLT(now),
@@ -99,7 +148,7 @@ func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, limit int) ([]*pe
 		Limit(limit).
 		All(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("query undelivered: %w", err)
+		return nil, fmt.Errorf("query claimable: %w", err)
 	}
 	out := make([]*persistence.OutboxRecord, 0, len(rows))
 	lease := now.Add(s.leaseTTL)
@@ -115,16 +164,20 @@ func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, limit int) ([]*pe
 	return out, nil
 }
 
-// MarkDelivered implements persistence.OutboxStore: stamp delivered_time (terminal)
-// and clear the lease.
+// MarkDelivered implements persistence.OutboxStore: stamp delivered_time ONCE (and
+// clear the lease) so the row is excluded from every future ClaimUndelivered — the
+// single terminal mark that keeps the append-only outbox free of per-poll re-lease
+// churn (F033). It guards on delivered_time IS NULL so a re-mark is a no-op, never
+// DELETEs the row (retention is a partition drop), and treats an unknown id as a
+// no-op. It runs on the base client (the dispatcher is not in an aggregate tx).
 func (s *EntOutboxStore) MarkDelivered(ctx context.Context, id string) error {
-	_, err := s.client.Outbox.UpdateOneID(id).
+	if _, err := s.client.Outbox.Update().
+		Where(entoutbox.ID(id), entoutbox.DeliveredTimeIsNil()).
 		SetDeliveredTime(s.now()).
 		ClearLeasedUntil().
-		Save(ctx)
-	if err != nil {
+		Save(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return persistence.ErrNotFound
+			return nil
 		}
 		return fmt.Errorf("mark delivered %s: %w", id, err)
 	}
@@ -132,7 +185,8 @@ func (s *EntOutboxStore) MarkDelivered(ctx context.Context, id string) error {
 }
 
 // Release implements persistence.OutboxStore: drop the lease so a re-claim is
-// immediate (the prompt at-least-once retry path).
+// immediate (the prompt at-least-once retry path). It does NOT delete the row
+// (append-only).
 func (s *EntOutboxStore) Release(ctx context.Context, id string) error {
 	_, err := s.client.Outbox.UpdateOneID(id).
 		ClearLeasedUntil().
@@ -146,6 +200,31 @@ func (s *EntOutboxStore) Release(ctx context.Context, id string) error {
 	return nil
 }
 
+// DropPartitionsBefore implements persistence.OutboxRetention.
+//
+// On PostgreSQL (rawDB injected, see WithEntOutboxRawDB) it drops every monthly
+// partition of the outbox whose ENTIRE window is older than t — a whole-partition
+// DROP TABLE (O(1) DDL), never a per-row DELETE, so retention does not churn the heap
+// (F033 AC-2). Otherwise (the sqlite dev backend) it models the same contract via a
+// windowed delete of aged rows through the ent client — acceptable for dev/test only.
+func (s *EntOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Time) (int, error) {
+	if s.rawDB != nil {
+		if s.mysql {
+			return dropEntMySQLPartitionsBefore(ctx, s.rawDB, t)
+		}
+		return dropEntPGPartitionsBefore(ctx, s.rawDB, t)
+	}
+	// Dev/test backend: no partitions, so "drop a partition" degrades to forgetting
+	// rows older than t. This is NOT on the dispatch loop (retention task only).
+	n, err := s.client.Outbox.Delete().
+		Where(entoutbox.CreatedTimeLT(t)).
+		Exec(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("drop outbox rows before %s: %w", t.Format(time.RFC3339), err)
+	}
+	return n, nil
+}
+
 // fromEntOutbox maps a generated ent.Outbox to the neutral persistence.OutboxRecord.
 func fromEntOutbox(e *ent.Outbox, attempts int) *persistence.OutboxRecord {
 	return &persistence.OutboxRecord{
@@ -156,10 +235,12 @@ func fromEntOutbox(e *ent.Outbox, attempts int) *persistence.OutboxRecord {
 		EventType:     e.EventType,
 		Payload:       e.Payload,
 		CreatedTime:   e.CreatedTime,
-		DeliveredTime: e.DeliveredTime,
 		Attempts:      attempts,
 	}
 }
 
-// compile-time check.
-var _ persistence.OutboxStore = (*EntOutboxStore)(nil)
+// compile-time checks.
+var (
+	_ persistence.OutboxStore     = (*EntOutboxStore)(nil)
+	_ persistence.OutboxRetention = (*EntOutboxStore)(nil)
+)

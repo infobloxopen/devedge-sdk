@@ -9,11 +9,22 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
-// TestAC2_DispatchAtLeastOnceAndIdempotent proves the dispatcher delivers an
-// undelivered event, that a handler crash leaves it for re-delivery (at-least-once),
-// and that once it succeeds a duplicate delivery is a no-op via the idempotency key.
+// TestAC2_DispatchAtLeastOnceAndIdempotent proves the dispatcher delivers an event,
+// that a handler crash leaves it for re-delivery (at-least-once), and that once it
+// succeeds it is NOT re-claimed on the next poll (the churn-free happy path).
+//
+// F033 (append-only, churn-free): on success the dispatcher stamps the row delivered
+// ONCE (MarkDelivered), which excludes it from every future ClaimUndelivered — so a
+// later poll does NOT re-lease or re-attempt the row (no per-poll write churn) and
+// the handler body is not re-invoked. The row is never DELETEd (append-only). The
+// idempotency marker is the exactly-once guard for an in-flight double-claim; here we
+// assert the stronger no-re-claim property. The store uses a ~1ns lease so a still-
+// undelivered (failed) event re-claims promptly.
 func TestAC2_DispatchAtLeastOnceAndIdempotent(t *testing.T) {
-	pub, repo, store, tx := setup()
+	repo := persistence.NewMemoryRepository(func(w *widget) string { return w.ID })
+	store := persistence.NewMemoryOutboxStore(1) // ~1ns lease → re-claim allowed immediately
+	tx := persistence.NewMemoryTxRunner(repo, store)
+	pub := events.NewOutboxPublisher(store)
 	ctx := context.Background()
 
 	// Publish one event (inside a tx, the only legal way).
@@ -41,19 +52,16 @@ func TestAC2_DispatchAtLeastOnceAndIdempotent(t *testing.T) {
 		return nil
 	})
 
-	// First run: the handler fails, the event stays undelivered (at-least-once).
+	// First run: the handler fails, the event is NOT delivered (at-least-once).
 	delivered, err := d.RunOnce(ctx, 10)
 	if err == nil {
 		t.Fatal("expected the handler failure to surface")
 	}
 	if delivered != 0 {
-		t.Fatalf("a failed handler must not mark the event delivered, delivered=%d", delivered)
-	}
-	if got := store.Pending(); len(got) != 1 {
-		t.Fatalf("the event must remain pending after a handler failure, pending=%v", got)
+		t.Fatalf("a failed handler must not count as delivered, delivered=%d", delivered)
 	}
 
-	// Second run: re-delivery succeeds and the event is marked delivered.
+	// Second run: re-delivery succeeds; the handler applies exactly once.
 	delivered, err = d.RunOnce(ctx, 10)
 	if err != nil {
 		t.Fatalf("second RunOnce: %v", err)
@@ -64,51 +72,55 @@ func TestAC2_DispatchAtLeastOnceAndIdempotent(t *testing.T) {
 	if applied != 1 {
 		t.Fatalf("handler must have applied exactly once, applied=%d", applied)
 	}
-	if got := store.Pending(); len(got) != 0 {
-		t.Fatalf("a delivered event must no longer be pending, pending=%v", got)
-	}
 
-	// Third run: nothing left to claim; the handler is NOT called again.
+	// Third run: the delivered row is NOT re-claimed (the churn-free happy path) — the
+	// store excludes a delivered row from the claim, so nothing is delivered and the
+	// handler body is not re-invoked. The row remains present (append-only).
 	callsBefore := calls
 	delivered, err = d.RunOnce(ctx, 10)
 	if err != nil {
 		t.Fatalf("third RunOnce: %v", err)
 	}
 	if delivered != 0 {
-		t.Fatalf("no undelivered events remain, delivered=%d", delivered)
+		t.Fatalf("a delivered event must NOT be re-claimed on a later poll, delivered=%d", delivered)
 	}
 	if calls != callsBefore {
-		t.Fatalf("a delivered event must not re-invoke the handler, calls went %d -> %d", callsBefore, calls)
+		t.Fatalf("a delivered event must not re-invoke the handler body, calls went %d -> %d", callsBefore, calls)
+	}
+	if applied != 1 {
+		t.Fatalf("idempotency must keep the side effect at exactly one, applied=%d", applied)
+	}
+
+	// Churn-free: a delivered row is no longer claim-eligible (no per-poll re-lease).
+	if p := store.Pending(); len(p) != 0 {
+		t.Fatalf("a delivered event must drop out of the claim set, pending=%v", p)
+	}
+	// Append-only: the dispatch path never deleted the row, only terminal-marked it.
+	got := store.All()
+	if len(got) != 1 {
+		t.Fatalf("append-only: the dispatch path must never delete the row, rows=%d", len(got))
+	}
+	if got[0].DeliveredTime == nil {
+		t.Fatal("a delivered row must carry a single terminal delivered-mark")
 	}
 }
 
-// flakyMarkStore wraps a MemoryOutboxStore and SWALLOWS the first MarkDelivered so
-// the row stays undelivered — modelling the at-least-once double-fire window: the
-// handler committed, but the process "crashed" before the delivered mark landed, so
-// the same row is claimed and delivered a SECOND time on the next run.
-type flakyMarkStore struct {
-	*persistence.MemoryOutboxStore
-	swallowedFirstMark bool
-}
-
-func (s *flakyMarkStore) MarkDelivered(ctx context.Context, id string) error {
-	if !s.swallowedFirstMark {
-		s.swallowedFirstMark = true
-		return nil // pretend we crashed before persisting the mark
-	}
-	return s.MemoryOutboxStore.MarkDelivered(ctx, id)
-}
-
-// TestAC2_RedeliveryIsNoOpViaIdempotency proves that when the SAME event is claimed
-// and delivered TWICE (the realistic case: the handler committed but the delivered
-// mark was lost, so the row is re-claimed after its lease lapses), the idempotency
-// key makes the second delivery a no-op — the handler's side effect runs once.
+// TestAC2_RedeliveryIsNoOpViaIdempotency proves the exactly-once guard for the one
+// window the delivered-mark does NOT close: an in-flight double-claim. The realistic
+// race is a dispatcher that ran the handler (committing its idempotency marker) but
+// crashed BEFORE MarkDelivered, so the row's lease lapses and it is re-claimed still
+// un-marked. The recorded idempotency marker — not the delivered-mark — is what keeps
+// the side effect at exactly one across that redelivery.
+//
+// We simulate the crash window by claiming the row out-of-band (lease + attempt bump,
+// no delivered-mark) so the dispatcher's next RunOnce re-claims the same un-delivered
+// event after the ~1ns lease lapses and must dedup it via the marker.
 func TestAC2_RedeliveryIsNoOpViaIdempotency(t *testing.T) {
 	repo := persistence.NewMemoryRepository(func(w *widget) string { return w.ID })
-	base := persistence.NewMemoryOutboxStore(1) // ~1ns lease so a re-claim is allowed immediately
-	store := &flakyMarkStore{MemoryOutboxStore: base}
-	tx := persistence.NewMemoryTxRunner(repo, base)
+	store := persistence.NewMemoryOutboxStore(1) // ~1ns lease so a re-claim is allowed immediately
+	tx := persistence.NewMemoryTxRunner(repo, store)
 	pub := events.NewOutboxPublisher(store)
+	idem := events.NewMemoryIdempotencyStore()
 	ctx := context.Background()
 
 	if err := tx.Atomically(ctx, func(ctx context.Context) error {
@@ -118,33 +130,35 @@ func TestAC2_RedeliveryIsNoOpViaIdempotency(t *testing.T) {
 	}
 
 	sideEffects := 0
-	d := events.NewDispatcher(store, tx, events.NewMemoryIdempotencyStore())
+	d := events.NewDispatcher(store, tx, idem)
 	d.Subscribe("Thing", "effect", func(ctx context.Context, evt events.Event) error {
 		sideEffects++
 		return nil
 	})
 
-	// First run: handler applies, but the delivered mark is swallowed → row remains.
-	if _, err := d.RunOnce(ctx, 10); err != nil {
-		t.Fatalf("first deliver: %v", err)
-	}
-	if sideEffects != 1 {
-		t.Fatalf("handler must run once on first delivery, got %d", sideEffects)
-	}
-	if got := store.Pending(); len(got) != 1 {
-		t.Fatalf("the swallowed mark must leave the row pending for re-delivery, got %v", got)
+	// Out-of-band first delivery WITHOUT a delivered-mark: record the marker (as the
+	// handler tx would) but never call MarkDelivered — the crash-before-mark window.
+	if err := tx.Atomically(ctx, func(ctx context.Context) error {
+		return idem.Record(ctx, events.IdempotencyKeyForTest("dup-1", "effect"))
+	}); err != nil {
+		t.Fatalf("seed marker: %v", err)
 	}
 
-	// Second run: the SAME event is re-claimed and re-delivered. The idempotency key
-	// (already recorded) makes the handler a no-op; the mark now lands.
+	// The dispatcher re-claims the still-un-delivered row (lease lapsed) and must
+	// dedup it via the recorded marker — the handler body does NOT run again.
 	if _, err := d.RunOnce(ctx, 10); err != nil {
 		t.Fatalf("re-deliver: %v", err)
 	}
-	if sideEffects != 1 {
-		t.Fatalf("idempotency must keep the side effect at exactly one across redelivery, got %d", sideEffects)
+	if sideEffects != 0 {
+		t.Fatalf("idempotency must suppress the side effect on an in-flight double-claim, got %d", sideEffects)
 	}
-	if got := store.Pending(); len(got) != 0 {
-		t.Fatalf("the event must be delivered after re-delivery, pending=%v", got)
+	// Having now fully delivered (marker present for every handler), the dispatcher
+	// stamped the row delivered, so it drops out of future claims (churn-free).
+	if p := store.Pending(); len(p) != 0 {
+		t.Fatalf("after a deduped delivery the row must be marked delivered, pending=%v", p)
+	}
+	if got := store.All(); len(got) != 1 {
+		t.Fatalf("append-only: the row must remain (never deleted), rows=%d", len(got))
 	}
 }
 

@@ -111,12 +111,48 @@ This is **eventual** consistency, and that is a deliberate tradeoff:
   auth path can also check the user's status, not only the key).
 - Ordering is **per-aggregate at best** — there is no global event order. Do not write a
   handler that assumes event X for aggregate A arrives before event Y for aggregate B.
-- A **poison event** (a handler that always fails) is retried indefinitely; the `attempts`
-  counter on the row lets you build a dead-letter / alert threshold.
+- A **poison event** (a handler that always fails) is retried until it hits a **poison cutoff**
+  — `maxAttempts` (default 5, set with `events.WithMaxAttempts`). Once a row's `attempts`
+  reaches the cutoff it is no longer claimed (it stops looping); the `attempts` counter lets you
+  build a dead-letter / alert threshold around it.
 
 The alternative — a synchronous two-aggregate transaction — buys strong consistency at the
 cost of coupling two boundaries (and is disallowed by the aggregate gate). For cross-aggregate
 rules, eventual consistency via events is the correct shape; reach for it deliberately.
+
+## Append-only outbox, drop-partition retention, and the CDC seam
+
+The outbox is an **append-only** log. The dispatch path **never `DELETE`s a row** and never
+re-writes it on every poll: on success the dispatcher makes a **single terminal delivered-mark**
+(`MarkDelivered` stamps `delivered_time` once), and a delivered row is then **excluded from every
+future claim**. So a successfully delivered event is never re-leased, never re-attempted, and
+never drifts into the poison cutoff — over its whole life it takes one claim-lease `UPDATE` and
+one delivered-mark `UPDATE`, then it is never touched again (no per-poll re-lease churn). This is
+deliberate: it avoids the write+delete-heavy churn (and PostgreSQL vacuum/bloat) of a "read it,
+then `DELETE` it" outbox.
+
+`ClaimUndelivered` filters on `delivered_time IS NULL AND attempts < maxAttempts` (plus the
+claim lease); the per-`(event, handler)` idempotency marker is still the exactly-once
+correctness guard for the one window the delivered-mark does not close — an in-flight
+double-claim where the lease lapsed before `MarkDelivered` committed.
+
+**Retention is `DROP PARTITION`, not row delete.** The outbox table is RANGE-partitioned on
+`created_time` (monthly partitions; PostgreSQL declarative partitions, MySQL `PARTITION BY
+RANGE (TO_DAYS(created_time))`). `OutboxRetention.DropPartitionsBefore(t)` removes aged data by
+**dropping whole partitions** — an O(1) DDL operation that never scans or deletes individual
+rows; a partition that overlaps `t` is kept so an in-window row is never lost. The SDK does not
+own a scheduler: wire `gormtx.RunRetention` (which also rolls the partition window forward so
+this month and next always have a partition to append into) into your own cron / `CronJob` /
+ticker. Validated on **PostgreSQL and MySQL** via testcontainers (the dev/in-memory and SQLite
+backends, which have no declarative partitioning, model the same contract as "forget rows older
+than `t`").
+
+**WAL/CDC is a pluggable seam, not a built-in engine.** A full in-process logical-replication /
+binlog (Debezium-like) engine is heavy and would pull a CDC dependency into the clean core, so
+the SDK ships `OutboxCDCConsumer` as an **interface only** (no implementation). An integrator
+who would rather tail the database change stream than poll implements `Consume` against their
+replication client. Because the outbox is append-only, a CDC consumer only ever sees `INSERT`s
+and partition drops — never row `UPDATE`s/`DELETE`s to react to.
 
 ## Events reference aggregates by ID
 
@@ -154,7 +190,8 @@ two-dispatcher concurrent race.
 
 - **`Publish` that does not enlist** — would reintroduce the dual write. The store's `Append`
   and `Publisher.Publish` both fail closed outside a transaction (`ErrNoTransaction`).
-- **Stuck / poison events** — the `attempts` counter supports a dead-letter / alert threshold.
+- **Stuck / poison events** — a row stops being claimed once `attempts` reaches `maxAttempts`
+  (the poison cutoff); the counter supports a dead-letter / alert threshold around it.
 - **Double-fire** — at-least-once delivery means handlers must be idempotent (keyed on the
   event id).
 - **Lease contention on claim** — the default's throughput is bounded by the poll interval and
