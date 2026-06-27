@@ -91,7 +91,10 @@ build: | gen
 test: | gen
 	go test ./...
 
-# Run the service locally.
+# Run the service locally. Observability is on by default behind the OTel seam:
+# export the standard OTEL_* env to ship traces + RED metrics to a collector (no
+# code change), e.g. `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 make run`.
+# With no endpoint set the exporter no-ops, so this runs with zero overhead.
 run: | gen
 	go run ./server
 

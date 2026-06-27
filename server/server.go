@@ -8,12 +8,15 @@ package server
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -59,6 +62,10 @@ type Config struct {
 	// LROStore is the operation store for long-running operations (AIP-151).
 	// Defaults to lro.NewMemoryStore(1h) when nil.
 	LROStore lro.Store
+	// Logger is the structured logger the default chain's middleware.LoggingUnary
+	// writes one record per RPC to (trace-correlated, secret-redacted payloads at
+	// Debug). Defaults to slog.Default() when nil.
+	Logger *slog.Logger
 }
 
 // Server is the assembled gRPC server (plus optional HTTP gateway).
@@ -103,6 +110,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.LROStore == nil {
 		cfg.LROStore = lro.NewMemoryStore(time.Hour)
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 
 	// Seed the accumulated rule set from Config.Rules (now an optional additive
 	// override; the generated Register<Svc> contributes the rest via AddRules).
@@ -124,6 +134,10 @@ func New(cfg Config) (*Server, error) {
 		middleware.RequestIDUnary(),
 		middleware.ErrorMapperUnary(),
 		middleware.TenantIDUnary(),
+		// LoggingUnary sits after request-ID/tenant (so the record carries both)
+		// and before authz (so it captures the final code, e.g. PermissionDenied).
+		// It is trace-correlated and redacts secret-annotated payload fields.
+		middleware.LoggingUnary(cfg.Logger),
 		grpcauthz.UnaryServerInterceptor("sdk", authzOpts...),
 		middleware.FieldMaskUnarySource(func() map[string]string { return s.verbMap() }),
 		etag.PreconditionUnary(),
@@ -133,7 +147,17 @@ func New(cfg Config) (*Server, error) {
 	}
 	chain = append(chain, cfg.Interceptors...)
 
-	s.grpcSrv = grpc.NewServer(grpc.ChainUnaryInterceptor(chain...))
+	// StatsHandler installs the OTel gRPC server instrumentation: per-RPC server
+	// spans + RED metrics (rpc.server.duration, request/response sizes) emitted to
+	// the GLOBAL TracerProvider/MeterProvider. Those globals are a no-op until an
+	// adapter (observability/otel) installs an SDK — so this is free and
+	// side-effect-free by default. otelgrpc depends on the OTel API only, never the
+	// SDK; spans/metrics come from the stats handler and logging from the chain, so
+	// they never double-instrument.
+	s.grpcSrv = grpc.NewServer(
+		grpc.ChainUnaryInterceptor(chain...),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 
 	if cfg.HTTPAddr != "" {
 		s.gwMux = runtime.NewServeMux(
@@ -242,9 +266,14 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	var httpSrv *http.Server
 	if s.gwMux != nil {
+		// The in-process gateway->gRPC dial carries the OTel gRPC client stats
+		// handler so the gateway's HTTP server span continues into a gRPC client
+		// span and W3C trace context is injected into the gRPC metadata — yielding
+		// ONE trace across the REST hop. No-op until an adapter installs an SDK.
 		conn, err := grpc.NewClient(
 			lis.Addr().String(),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		)
 		if err != nil {
 			s.grpcSrv.Stop()
@@ -262,7 +291,11 @@ func (s *Server) Serve(ctx context.Context) error {
 			return fmt.Errorf("server: listen http %q: %w", s.cfg.HTTPAddr, err)
 		}
 		s.httpLis = httpLis
-		httpSrv = &http.Server{Handler: s.gwMux}
+		// otelhttp wraps the gateway mux so an incoming HTTP request starts a
+		// server span; the client stats handler on the in-process dial then
+		// propagates W3C context into gRPC, linking the whole trace. No-op until an
+		// adapter installs an SDK + propagator.
+		httpSrv = &http.Server{Handler: otelhttp.NewHandler(s.gwMux, "gateway")}
 		go func() {
 			if err := httpSrv.Serve(httpLis); err != nil && err != http.ErrServerClosed {
 				errCh <- fmt.Errorf("server: http serve: %w", err)

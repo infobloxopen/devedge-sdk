@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	entgo.io/ent v0.14.6
 	github.com/go-sql-driver/mysql v1.10.0
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
 	github.com/infobloxopen/devedge-sdk v0.0.0
@@ -17,7 +17,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/redpanda v0.43.0
 	github.com/twmb/franz-go v1.21.4
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
-	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171
+	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	gorm.io/driver/mysql v1.6.0
@@ -92,17 +92,18 @@ require (
 	github.com/zclconf/go-cty v1.14.4 // indirect
 	github.com/zclconf/go-cty-yaml v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.60.0 // indirect
-	go.opentelemetry.io/otel v1.43.0 // indirect
-	go.opentelemetry.io/otel/metric v1.43.0 // indirect
-	go.opentelemetry.io/otel/trace v1.43.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

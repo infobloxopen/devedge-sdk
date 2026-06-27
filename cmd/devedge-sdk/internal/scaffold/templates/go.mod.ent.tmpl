@@ -17,3 +17,10 @@ require (
 	google.golang.org/protobuf {{.ProtobufVersion}}
 	modernc.org/sqlite {{.ModerncSQLiteVersion}}
 )
+
+// Observability (F034): the OTel SDK + exporters are pulled in only through the
+// SDK's observability/otel adapter that the generated main wires; `go mod tidy`
+// records them as indirect requires here. Pinning the OTel API keeps that
+// reconciliation deterministic; configure the exporter at runtime via the
+// standard OTEL_* env (see README).
+require go.opentelemetry.io/otel {{.OTelAPIVersion}} // indirect

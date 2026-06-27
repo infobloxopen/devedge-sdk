@@ -49,6 +49,25 @@ grpcurl -plaintext -H 'account-id: t1' -H 'groups: admin' \
 Swap the dev authorizer and `PrincipalFunc` in `server/main.go` for a real policy + verified-token
 function in production — nothing else changes.
 
+## Observability (OpenTelemetry)
+
+Tracing, RED metrics, and trace-correlated structured logging are **on by default** — `main.go`
+calls `otel.Setup(...)` and the SDK server emits per-RPC spans + metrics and one end-to-end trace
+across the REST→gRPC hop, with no per-handler code. It is **free until configured**: with no
+collector endpoint the exporter no-ops, so the service runs unchanged with zero overhead.
+
+Point it at a collector with the standard `OTEL_*` env — no code change:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME={{.BinName}} \
+make run
+```
+
+For console traces in local dev, set `Exporter: "stdout"` in the `otel.Config` in `server/main.go`;
+set `"none"` to disable. Request logs are structured (slog) and carry `trace_id`/`span_id`;
+secret-annotated fields are redacted before they reach any log sink (payloads only log at Debug).
+
 ## Layout
 
 ```
