@@ -196,8 +196,15 @@ func (d *Dispatcher) handlersFor(eventType string) []registeredHandler {
 // idempotencyKey is the per-(event, handler) dedup key. Keying on the event id
 // (D-4) plus the handler name lets a multi-handler event redeliver only the
 // handlers that have not yet committed.
+//
+// The separator is U+001F (ASCII Unit Separator), NOT a NUL byte: PostgreSQL
+// rejects a NUL inside a text/varchar value ("invalid byte sequence for encoding
+// UTF8: 0x00", SQLSTATE 22021), so a NUL-delimited key cannot be stored in the
+// idempotency marker table on the production engine — even though SQLite tolerates
+// it. U+001F is a non-printing control char that storage engines store as ordinary
+// text and that does not appear in event ids (UUIDs) or handler names.
 func idempotencyKey(eventID, handlerName string) string {
-	return eventID + "\x00" + handlerName
+	return eventID + "\x1f" + handlerName
 }
 
 // deliver runs every handler subscribed to evt.Type. For each handler it runs the

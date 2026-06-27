@@ -187,3 +187,30 @@ func TestSubscribeNilHandlerPanicsAtRegistration(t *testing.T) {
 	}()
 	d.Subscribe("Thing", "nil-handler", nil)
 }
+
+// TestIdempotencyKeyHasNoNULByte is the regression guard for a Postgres-fatal bug
+// the Phase-2 PG validation surfaced: the (event, handler) idempotency key was
+// joined with a NUL byte ("\x00"), which SQLite tolerates in a TEXT column but
+// PostgreSQL rejects ("invalid byte sequence for encoding UTF8: 0x00", SQLSTATE
+// 22021). On PG that made every Seen/Record query fail, so the exactly-once marker
+// could never be stored and concurrent dispatch never converged. The key must
+// therefore never contain a NUL byte — it has to round-trip through a Postgres
+// text/varchar column.
+func TestIdempotencyKeyHasNoNULByte(t *testing.T) {
+	for _, tc := range []struct{ eventID, handler string }{
+		{"550e8400-e29b-41d4-a716-446655440000", "revoke-api-keys"},
+		{"evt-1", "h"},
+		{"", ""},
+	} {
+		key := events.IdempotencyKeyForTest(tc.eventID, tc.handler)
+		for i := 0; i < len(key); i++ {
+			if key[i] == 0x00 {
+				t.Fatalf("idempotency key for (%q,%q) contains a NUL byte at %d — unstorable on PostgreSQL (SQLSTATE 22021)", tc.eventID, tc.handler, i)
+			}
+		}
+		// The key must still distinguish the two components (the separator is present).
+		if tc.eventID != "" && tc.handler != "" && len(key) <= len(tc.eventID)+len(tc.handler) {
+			t.Fatalf("idempotency key %q must include a separator between event id and handler", key)
+		}
+	}
+}
