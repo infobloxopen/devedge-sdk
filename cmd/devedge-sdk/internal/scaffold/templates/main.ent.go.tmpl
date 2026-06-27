@@ -47,6 +47,7 @@ import (
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/events"
 {{- end}}
+	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
 	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
@@ -194,20 +195,31 @@ func newOutbox() (events.Publisher, *events.Dispatcher) {
 }
 {{- else}}
 
-// newRepository opens the ent client, runs the schema migration, and returns the
-// GENERATED ent repository adapter (no hand-written wiring).
-func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], error) {
+// newRepository opens the ent client, runs the schema migration, and returns
+// both the GENERATED ent repository adapter and the underlying *sql.DB (used
+// to register a DB-ping readiness check — no ORM enters core). SQLite (no CGo)
+// keeps the scaffold runnable out of the box; point ent.Open at postgres/mysql
+// in production.
+func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], *sql.DB, error) {
+	const dsn = "file::memory:?cache=shared&_pragma=foreign_keys(1)"
 	if err := registerSQLite3(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	client, err := entclient.Open("sqlite3", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	client, err := entclient.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := client.Schema.Create(context.Background()); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return {{.GoPkg}}.New{{.Resource}}EntRepository(client), nil
+	// Open a stdlib *sql.DB on the same DSN for the health check. This avoids
+	// pulling ORM types into server.Config (AC-5) and matches the production
+	// pattern: supply the same DSN (or a dedicated health connection).
+	sqlDB, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	return {{.GoPkg}}.New{{.Resource}}EntRepository(client), sqlDB, nil
 }
 {{- end}}
 
@@ -215,21 +227,6 @@ func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string],
 // addresses. Returns an error (rather than panicking) so tests can assert the
 // fail-closed authz gate. The smoke test passes ":0" for kernel-assigned ports.
 func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.Server, error) {
-	s, err := server.New(server.Config{
-		GRPCAddr:   grpcAddr,
-		HTTPAddr:   httpAddr,
-		Authorizer: authorizer,
-		// Derive the caller's authz.Principal from request metadata (account-id ->
-		// tenant, groups -> group:<name>). Without it the principal is empty and
-		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
-		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
-		// Structured request logging is on by default (one trace-correlated slog
-		// record per RPC; secret-annotated payload fields redacted at Debug).
-		Logger: slog.Default(),
-	})
-	if err != nil {
-		return nil, err
-	}
 {{- if .Aggregate}}
 	client, err := newClient()
 	if err != nil {
@@ -244,12 +241,37 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 	pub, d := newOutbox()
 	_, _, _ = agg, pub, d
 	repo := {{.GoPkg}}.New{{.Resource}}EntRepository(client)
+	// For the DB-ping readiness check, open a stdlib *sql.DB on the same DSN.
+	// This keeps ORM types out of server.Config (AC-5).
+	sqlDB, err := sql.Open("sqlite3", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, err
+	}
 {{- else}}
-	repo, err := newRepository()
+	repo, sqlDB, err := newRepository()
 	if err != nil {
 		return nil, err
 	}
 {{- end}}
+	s, err := server.New(server.Config{
+		GRPCAddr:   grpcAddr,
+		HTTPAddr:   httpAddr,
+		Authorizer: authorizer,
+		// Derive the caller's authz.Principal from request metadata (account-id ->
+		// tenant, groups -> group:<name>). Without it the principal is empty and
+		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
+		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+		// Structured request logging is on by default (one trace-correlated slog
+		// record per RPC; secret-annotated payload fields redacted at Debug).
+		Logger: slog.Default(),
+		// DB-ping readiness check: the server's /readyz and gRPC health status
+		// flip to unready when the database is unreachable. The check uses the
+		// stdlib PingContext interface — no ORM import enters core.
+		ReadinessChecks: []sdkhealth.Check{sdkhealth.NewDBCheck("db", sqlDB)},
+	})
+	if err != nil {
+		return nil, err
+	}
 	// One call: construct the generated default CRUD handler over repo, register it
 	// (gRPC + REST gateway), and contribute the service's authz rules.
 	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {

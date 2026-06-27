@@ -49,6 +49,21 @@ grpcurl -plaintext -H 'account-id: t1' -H 'groups: admin' \
 Swap the dev authorizer and `PrincipalFunc` in `server/main.go` for a real policy + verified-token
 function in production — nothing else changes.
 
+## Health & readiness probes
+
+The server exposes probe endpoints on the HTTP gateway (`:{{.HTTPPort}}`):
+
+| Endpoint | Use | Behaviour |
+|----------|-----|-----------|
+| `GET /healthz` | Liveness | Returns `200` as long as the process is up. Point k8s `livenessProbe` here. |
+| `GET /readyz`  | Readiness | Returns `200` when all readiness checks pass; `503 + JSON` listing failures otherwise. Point k8s `readinessProbe` here. |
+
+Both endpoints are **unauthenticated** (reachable by the kubelet without credentials). The DB-ping check is registered by default: `/readyz` returns `503` if the database is unreachable.
+
+A gRPC-native probe is also available (`grpc.health.v1.Health/Check`); it reflects the same readiness state.
+
+To add a custom readiness check, implement `health.Check` and append it to `server.Config.ReadinessChecks` in `newServer`.
+
 ## Observability (OpenTelemetry)
 
 Tracing, RED metrics, and trace-correlated structured logging are **on by default** — `main.go`
