@@ -1492,10 +1492,14 @@ func containmentMembers(msg entMessageInfo, _ entMessageInfo) []aggregateMember 
 			continue
 		}
 		target := edgeTargetType(f)
-		pascal := strings.Title(edgeName(f.Name)) // ent capitalizes the edge name
+		// The ent edge accessor (With<Edge>/e.Edges.<Edge>) and the proto repeated
+		// field Go name use DIFFERENT snake->Camel rules: ent applies its initialism
+		// table (entSetterGoName, e.g. "dns_records" -> "DNSRecords"), protoc-gen-go
+		// does not (entGoName, e.g. "DnsRecords"). For single-word names both agree
+		// (e.g. "items" -> "Items"); they diverge for multi-word/initialism names.
 		out = append(out, aggregateMember{
-			EdgePascal:   pascal,
-			ProtoGoField: pascal, // proto repeated field Go name == capitalized field name
+			EdgePascal:   entSetterGoName(f.SnakeName), // ent edge accessor (initialism-aware)
+			ProtoGoField: entGoName(f.SnakeName),       // protoc-gen-go field (no initialisms)
 			MemberType:   target,
 		})
 	}

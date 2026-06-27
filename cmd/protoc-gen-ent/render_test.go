@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 
@@ -580,6 +581,52 @@ func TestRenderEntSchema_containmentEdgeCascades(t *testing.T) {
 	mustContain(t, memberOut, `edge.From("order", Order.Type).Ref("items").Unique().Field("order_id")`)
 	mustNotContain(t, memberOut, "OnDelete")
 	mustNotContain(t, memberOut, `"entgo.io/ent/dialect/entsql"`)
+}
+
+// Issue #88: Load<Root>Aggregate must derive its ent edge accessors with the same
+// snake->Pascal rule entc uses (split on "_", capitalize each segment, apply the
+// initialism table), NOT strings.Title — which leaves underscores in place and so
+// emits q.WithOrder_items()/e.Edges.Order_items for a multi-word containment field,
+// names entc never generates → uncompilable code. The ent edge accessor and the
+// proto repeated field Go name use DIFFERENT casing rules and diverge on
+// initialisms: entc upper-cases "dns" → DNS (WithDNSRecords/Edges.DNSRecords) while
+// protoc-gen-go does not (root.DnsRecords). Lock both.
+func TestRenderEntRepoAdapter_loadAggregateEdgeCasing(t *testing.T) {
+	root := entMessageInfo{
+		MessageName:   "Order",
+		AggregateRoot: true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			// Multi-word containment edge: the bug's repro.
+			{Name: "order_items", SnakeName: "order_items", IsRepeated: true, IsMessage: true,
+				RelatedType: "OrderItem", HasMany: &fieldv1.HasMany{ForeignKey: "order_id"}},
+			// Initialism containment edge: ent and proto casing legitimately diverge.
+			{Name: "dns_records", SnakeName: "dns_records", IsRepeated: true, IsMessage: true,
+				RelatedType: "DNSRecord", HasMany: &fieldv1.HasMany{ForeignKey: "order_id"}},
+		},
+	}
+	out := renderEntRepoAdapter(root, root, "orderv1", "github.com/example/orderd/orderv1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	// ent edge accessors: initialism-aware PascalCase (matches entc's With<Edge> /
+	// Edges.<Edge>), underscores stripped.
+	for _, w := range []string{
+		"q = q.WithOrderItems()",
+		"for _, m := range e.Edges.OrderItems {",
+		"q = q.WithDNSRecords()",
+		"for _, m := range e.Edges.DNSRecords {",
+		// proto repeated field assignment: protoc-gen-go casing (no initialisms) on the
+		// left, the member's fromEnt projector on the right.
+		"root.OrderItems = append(root.OrderItems, fromEntOrderItem(m))",
+		"root.DnsRecords = append(root.DnsRecords, fromEntDNSRecord(m))",
+	} {
+		mustContain(t, out, w)
+	}
+	// The strings.Title bug spelled the underscore through verbatim.
+	for _, bad := range []string{"Order_items", "Dns_records", "WithDnsRecords", "Edges.DnsRecords"} {
+		mustNotContain(t, out, bad)
+	}
 }
 
 // A plain (non-DDD) has_many/belongs_to pair must NOT acquire OnDelete: Cascade —
