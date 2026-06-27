@@ -1135,6 +1135,10 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if ownerTenant {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
 	}
+	if owner.HasETag {
+		// AIP-154 If-Match precondition lookup for the CAS Update_ below.
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware/etag\"\n")
+	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/entrepo\"\n")
 	// resourcename backs the AIP-122 Format<R>Name helper this plugin emits — but
@@ -1291,9 +1295,39 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		fmt.Fprintf(&b, "\t\t\t\tu = u.Set%sHash(h).Set%sCipher(c)\n", setName, setName)
 		b.WriteString("\t\t\t}\n")
 	}
+	if owner.HasETag {
+		// AIP-154 optimistic concurrency: when the caller supplies an If-Match
+		// precondition, narrow the UPDATE to the row whose stored etag still matches.
+		// This makes the write a true compare-and-set — a stale If-Match matches no
+		// row, so ent returns NotFound (disambiguated below) instead of silently
+		// re-stamping a fresh etag over a row that changed under us. The EtagMixin
+		// hook still stamps the fresh token in the SET clause; this predicate filters
+		// on the CURRENT (pre-update) etag value, so the behaviour with an empty
+		// If-Match is identical to before.
+		b.WriteString("\t\t\tifMatch := etag.IfMatchFromContext(ctx)\n")
+		fmt.Fprintf(&b, "\t\t\tif ifMatch != \"\" {\n\t\t\t\tu = u.Where(ent%s.Etag(ifMatch))\n\t\t\t}\n", lower)
+	}
 	fmt.Fprintf(&b, "\t\t\tif ToEnt%sOnUpdate != nil {\n\t\t\t\tToEnt%sOnUpdate(entity, u)\n\t\t\t}\n", res, res)
 	b.WriteString("\t\t\tupdated, err := u.Save(ctx)\n")
 	b.WriteString("\t\t\tif err != nil {\n")
+	if owner.HasETag {
+		// A CAS Update that matched no row surfaces as NotFound. Disambiguate: if the
+		// row still exists (by id [+ tenant][+ live]) the etag must have moved → the
+		// If-Match was stale → PreconditionFailed; otherwise it is a genuine NotFound.
+		b.WriteString("\t\t\t\tif ent.IsNotFound(err) && ifMatch != \"\" {\n")
+		fmt.Fprintf(&b, "\t\t\t\t\tcheck := %s(ctx).Query().Where(ent%s.ID(key))\n", txClientVar, lower)
+		if ownerTenant {
+			fmt.Fprintf(&b, "\t\t\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\t\t\tcheck = check.Where(ent%s.AccountID(tenantID))\n\t\t\t\t\t}\n", lower)
+		}
+		if soft {
+			fmt.Fprintf(&b, "\t\t\t\t\tcheck = check.Where(ent%s.DeleteTimeIsNil())\n", lower)
+		}
+		b.WriteString("\t\t\t\t\texists, cerr := check.Exist(ctx)\n")
+		b.WriteString("\t\t\t\t\tif cerr != nil {\n\t\t\t\t\t\treturn nil, cerr\n\t\t\t\t\t}\n")
+		b.WriteString("\t\t\t\t\tif exists {\n\t\t\t\t\t\t// Row present but its stored etag no longer matches If-Match → stale precondition.\n\t\t\t\t\t\treturn nil, persistence.ErrPreconditionFailed\n\t\t\t\t\t}\n")
+		b.WriteString("\t\t\t\t\treturn nil, persistence.ErrNotFound\n")
+		b.WriteString("\t\t\t\t}\n")
+	}
 	b.WriteString("\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n")
 	b.WriteString("\t\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\t\treturn nil, ce\n\t\t\t\t}\n")
 	b.WriteString("\t\t\t\treturn nil, err\n\t\t\t}\n")

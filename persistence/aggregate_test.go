@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
@@ -165,7 +166,7 @@ func TestMemoryAggregate_ConcurrentSaveLostUpdate(t *testing.T) {
 	wg.Add(racers)
 	results := make([]error, racers)
 	start := make(chan struct{})
-	for i := 0; i < racers; i++ {
+	for i := range racers {
 		go func(i int) {
 			defer wg.Done()
 			// Each racer holds the same loaded version and tries to add its own member.
@@ -218,6 +219,101 @@ func TestMemoryAggregate_ValidateRejectsSave(t *testing.T) {
 	// Invariant rejected pre-persist: no member was written.
 	if all, _, _ := items.List(ctx, persistence.ListOptions{}); len(all) != 0 {
 		t.Fatalf("a rejected Save must not persist members, got %d", len(all))
+	}
+}
+
+// ifMatchSpyRepo wraps a root Repository and records the If-Match precondition
+// present on the ctx of every Update call, so a test can prove the aggregate's
+// root-etag bump is issued as a true compare-and-set (If-Match = the loaded root
+// etag) rather than relying solely on the pre-bump read in checkPrecondition.
+type ifMatchSpyRepo struct {
+	persistence.Repository[*order, string]
+	lastUpdateIfMatch string
+	updateCalls       int
+}
+
+func (r *ifMatchSpyRepo) Update(ctx context.Context, key string, e *order, mask ...string) (*order, error) {
+	r.updateCalls++
+	r.lastUpdateIfMatch = etag.IfMatchFromContext(ctx)
+	return r.Repository.Update(ctx, key, e, mask...)
+}
+
+// TestAggregate_RootBumpIsCompareAndSet proves the F031/AIP-154 hardening: when a
+// member change triggers the single root-etag bump, Save stamps the LOADED root
+// etag as the Update's If-Match precondition, so the bump itself is the
+// authoritative atomic compare-and-set across all three backends (not just the
+// in-memory runner's serialized lock). We spy on the root repo's Update to capture
+// the If-Match it received.
+func TestAggregate_RootBumpIsCompareAndSet(t *testing.T) {
+	ctx := context.Background()
+	roots := persistence.NewMemoryRepository(func(o *order) string { return o.ID })
+	items := persistence.NewMemoryRepository(func(i *item) string { return i.ID })
+	spy := &ifMatchSpyRepo{Repository: roots}
+	tx := persistence.NewMemoryTxRunner(roots, items)
+
+	loadMembers := func(ctx context.Context, root *order) (*order, error) {
+		all, _, err := items.List(ctx, persistence.ListOptions{PageSize: 1000})
+		if err != nil {
+			return nil, err
+		}
+		root.Items = nil
+		for _, it := range all {
+			if it.OrderID == root.ID {
+				root.Items = append(root.Items, it)
+			}
+		}
+		return root, nil
+	}
+
+	agg := persistence.NewGenericAggregateRepository(persistence.AggregateSpec[*order, string]{
+		Tx:          tx,
+		RootRepo:    spy,
+		KeyOf:       func(o *order) string { return o.ID },
+		EtagOf:      func(o *order) string { return o.Etag },
+		LoadEtag:    func(ctx context.Context, id string) (string, error) { return roots.GetETagForKeyTx(ctx, id), nil },
+		LoadMembers: loadMembers,
+		SaveMembers: func(ctx context.Context, root *order) (bool, error) {
+			// Adding the (single) incoming member if not already stored.
+			stored := &order{ID: root.ID}
+			if _, err := loadMembers(ctx, stored); err != nil {
+				return false, err
+			}
+			have := map[string]struct{}{}
+			for _, it := range stored.Items {
+				have[it.ID] = struct{}{}
+			}
+			changed := false
+			for _, it := range root.Items {
+				if _, ok := have[it.ID]; !ok {
+					it.OrderID = root.ID
+					if _, err := items.Create(ctx, it); err != nil {
+						return false, err
+					}
+					changed = true
+				}
+			}
+			return changed, nil
+		},
+	})
+
+	if _, err := roots.Create(ctx, &order{ID: "o1", Status: "OPEN"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	root, _ := agg.Load(ctx, "o1")
+	loadedEtag := roots.GetETagForKey("o1")
+	root.Etag = loadedEtag
+	root.Items = append(root.Items, &item{ID: "i1", SKU: "ABC"})
+
+	if _, err := agg.Save(ctx, root); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if spy.updateCalls != 1 {
+		t.Fatalf("expected exactly one root bump Update, got %d", spy.updateCalls)
+	}
+	// The bump must have carried the loaded root etag as its If-Match — i.e. the
+	// Update is a true CAS against the version the caller loaded.
+	if spy.lastUpdateIfMatch != loadedEtag {
+		t.Fatalf("root bump Update must set If-Match = loaded root etag (%q), got %q", loadedEtag, spy.lastUpdateIfMatch)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent"
@@ -102,11 +103,31 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
 				u = u.Where(entfleet.AccountID(tenantID))
 			}
+			ifMatch := etag.IfMatchFromContext(ctx)
+			if ifMatch != "" {
+				u = u.Where(entfleet.Etag(ifMatch))
+			}
 			if ToEntFleetOnUpdate != nil {
 				ToEntFleetOnUpdate(entity, u)
 			}
 			updated, err := u.Save(ctx)
 			if err != nil {
+				if ent.IsNotFound(err) && ifMatch != "" {
+					check := fleetClient(ctx).Query().Where(entfleet.ID(key))
+					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+						check = check.Where(entfleet.AccountID(tenantID))
+					}
+					check = check.Where(entfleet.DeleteTimeIsNil())
+					exists, cerr := check.Exist(ctx)
+					if cerr != nil {
+						return nil, cerr
+					}
+					if exists {
+						// Row present but its stored etag no longer matches If-Match → stale precondition.
+						return nil, persistence.ErrPreconditionFailed
+					}
+					return nil, persistence.ErrNotFound
+				}
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
 				}

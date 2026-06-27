@@ -209,6 +209,10 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 		ToModelWidgetOnUpdate(entity, m)
 	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
+	ifMatch := etag.IfMatchFromContext(ctx)
+	if ifMatch != "" {
+		q = q.Where("etag = ?", ifMatch)
+	}
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -221,11 +225,24 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
-		if err := q.Select(dbCols).Updates(m).Error; err != nil {
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update Widget: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&WidgetModel{}).Where("id = ?", key)
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update Widget precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	} else {
 		// No field mask: full update of every writable column via a map, so
@@ -237,11 +254,24 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 			"weight":       m.Weight,
 		}
 		updates["etag"] = m.ETag
-		if err := q.Updates(updates).Error; err != nil {
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce
 			}
 			return nil, fmt.Errorf("update Widget: %w", err)
+		}
+		if ifMatch != "" && res.RowsAffected == 0 {
+			check := r.conn(ctx).Model(&WidgetModel{}).Where("id = ?", key)
+			var n int64
+			if err := check.Count(&n).Error; err != nil {
+				return nil, fmt.Errorf("update Widget precondition: %w", err)
+			}
+			if n > 0 {
+				// Row exists but its stored etag no longer matches If-Match → stale precondition.
+				return nil, persistence.ErrPreconditionFailed
+			}
+			return nil, persistence.ErrNotFound
 		}
 	}
 	return r.Get(ctx, key)

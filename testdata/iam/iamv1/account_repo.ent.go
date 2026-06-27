@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
@@ -87,11 +88,27 @@ func NewAccountEntRepository(client *ent.Client) persistence.Repository[*Account
 			if accountInMask(fieldMask, "display_name") {
 				u = u.SetDisplayName(entity.GetDisplayName())
 			}
+			ifMatch := etag.IfMatchFromContext(ctx)
+			if ifMatch != "" {
+				u = u.Where(entaccount.Etag(ifMatch))
+			}
 			if ToEntAccountOnUpdate != nil {
 				ToEntAccountOnUpdate(entity, u)
 			}
 			updated, err := u.Save(ctx)
 			if err != nil {
+				if ent.IsNotFound(err) && ifMatch != "" {
+					check := accountClient(ctx).Query().Where(entaccount.ID(key))
+					exists, cerr := check.Exist(ctx)
+					if cerr != nil {
+						return nil, cerr
+					}
+					if exists {
+						// Row present but its stored etag no longer matches If-Match → stale precondition.
+						return nil, persistence.ErrPreconditionFailed
+					}
+					return nil, persistence.ErrNotFound
+				}
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
 				}

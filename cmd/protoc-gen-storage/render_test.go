@@ -603,6 +603,53 @@ func TestRenderStorageFile_noETagNoStamp(t *testing.T) {
 	mustNotContain(t, out, "etag.New()")
 	mustNotContain(t, out, "p.Etag = m.ETag")
 	mustNotContain(t, out, "middleware/etag")
+	// And no AIP-154 compare-and-set machinery on a non-etag resource.
+	mustNotContain(t, out, "IfMatchFromContext")
+	mustNotContain(t, out, "ErrPreconditionFailed")
+}
+
+// AIP-154 optimistic concurrency: an etag-bearing resource's Update must become a
+// compare-and-set when an If-Match precondition is present — the UPDATE is narrowed
+// by `etag = <if-match>` and a 0-affected result is resolved to
+// ErrPreconditionFailed (row still present) or ErrNotFound (row gone). A stale
+// If-Match on a SQL backend used to silently succeed; this test pins the emission.
+func TestRenderStorageFile_etagCompareAndSet(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Doc",
+		HasETag:     true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "title", GoType: "string", SnakeName: "title"},
+		},
+	}
+	out := renderStorageFile("docv1storage", []messageInfo{msg}, nil)
+
+	// The If-Match precondition is read and, when present, narrows the UPDATE.
+	mustContain(t, out, "ifMatch := etag.IfMatchFromContext(ctx)")
+	mustContain(t, out, `q = q.Where("etag = ?", ifMatch)`)
+	// A conditioned UPDATE that touched no rows is disambiguated.
+	mustContain(t, out, "ifMatch != \"\" && res.RowsAffected == 0")
+	mustContain(t, out, "persistence.ErrPreconditionFailed")
+	mustContain(t, out, "persistence.ErrNotFound")
+}
+
+// The CAS WHERE must be tenant-scoped on a per-tenant etag resource: the existence
+// re-check after a 0-affected update narrows by account_id too, so it cannot leak a
+// PreconditionFailed/NotFound signal across tenants.
+func TestRenderStorageFile_etagCompareAndSetTenantScoped(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Doc",
+		HasETag:     true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "title", GoType: "string", SnakeName: "title"},
+		},
+	}
+	out := renderStorageFile("docv1storage", []messageInfo{msg}, nil)
+	mustContain(t, out, `q = q.Where("etag = ?", ifMatch)`)
+	// The precondition existence re-check carries the tenant predicate.
+	mustContain(t, out, `check = check.Where("account_id = ?", tenantID)`)
 }
 
 func TestRenderStorageFile_softDeleteWithTenant(t *testing.T) {
