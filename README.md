@@ -6,15 +6,17 @@
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-A clean, pluggable Go framework for building Infoblox services. **Declare authorization
-and secrets once in your proto** — the framework enforces them everywhere, refuses to boot
-if any served method is undeclared, and never lets a secret field leak.
+**A complete, secure-by-default Infoblox microservice from a single proto.** Define a resource and its
+methods in proto; devedge-sdk gives you a running gRPC + REST service with Google-AIP semantics,
+fail-closed authorization, multi-tenant isolation, and a persistence/eventing layer wired in — every
+backend a swappable seam, every security invariant provable in CI.
 
-It is the runtime companion to [devedge](https://github.com/infobloxopen/devedge): devedge is
-the **dev- and deploy-time** edge; `devedge-sdk` is the **runtime library** that production
-services import.
+It is the runtime companion to [devedge](https://github.com/infobloxopen/devedge): devedge is the
+**dev- and deploy-time** edge; `devedge-sdk` is the **runtime library** that production services import.
 
 > **Status: early.** APIs will change. Pin a version and read the [changelog/releases](https://github.com/infobloxopen/devedge-sdk/releases) before upgrading.
+> The operational baseline is still filling in — built-in **observability** and **health/readiness
+> probes** are tracked on the [foundation roadmap (#97)](https://github.com/infobloxopen/devedge-sdk/issues/97).
 
 ## 📚 Documentation
 
@@ -23,30 +25,33 @@ Start here:
 
 | Section | What's there |
 |---|---|
-| 🚀 [Getting Started](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/) | [Install](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/installation/) the SDK and stand up a service in five minutes ([Quickstart](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/quickstart/)). |
-| 💡 [Concepts](https://infobloxopen.github.io/devedge-sdk/docs/concepts/) | The [architecture](https://infobloxopen.github.io/devedge-sdk/docs/concepts/architecture/), the [annotation contract](https://infobloxopen.github.io/devedge-sdk/docs/concepts/annotations/), and the [tenant-isolation model](https://infobloxopen.github.io/devedge-sdk/docs/concepts/tenant-isolation/). |
-| 📖 [Guides](https://infobloxopen.github.io/devedge-sdk/docs/guides/) | Task how-tos: [define a service](https://infobloxopen.github.io/devedge-sdk/docs/guides/define-a-service/), [model a resource](https://infobloxopen.github.io/devedge-sdk/docs/guides/model-a-resource/), [pick a storage shape](https://infobloxopen.github.io/devedge-sdk/docs/guides/storage-shapes/), [handle secrets](https://infobloxopen.github.io/devedge-sdk/docs/guides/model-a-resource/#secret-fields), [run seccheck](https://infobloxopen.github.io/devedge-sdk/docs/guides/security-check/), [set up Vault](https://infobloxopen.github.io/devedge-sdk/docs/guides/vault-transit/). |
+| 🚀 [Getting Started](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/) | [Install](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/installation/) the SDK and stand up a running, fail-closed service in five minutes ([Quickstart](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/quickstart/)). |
+| 💡 [Concepts](https://infobloxopen.github.io/devedge-sdk/docs/concepts/) | The [architecture](https://infobloxopen.github.io/devedge-sdk/docs/concepts/architecture/) and seam model, the [annotation contract](https://infobloxopen.github.io/devedge-sdk/docs/concepts/annotations/), [tenant isolation](https://infobloxopen.github.io/devedge-sdk/docs/concepts/tenant-isolation/), [aggregates](https://infobloxopen.github.io/devedge-sdk/docs/concepts/aggregates/), and [events](https://infobloxopen.github.io/devedge-sdk/docs/concepts/events/). |
+| 📖 [Guides](https://infobloxopen.github.io/devedge-sdk/docs/guides/) | Task how-tos: [define a service](https://infobloxopen.github.io/devedge-sdk/docs/guides/define-a-service/), [model a resource](https://infobloxopen.github.io/devedge-sdk/docs/guides/model-a-resource/), [pick a storage shape](https://infobloxopen.github.io/devedge-sdk/docs/guides/storage-shapes/), [run seccheck](https://infobloxopen.github.io/devedge-sdk/docs/guides/security-check/). |
 | 📑 [Reference](https://infobloxopen.github.io/devedge-sdk/docs/reference/) | Per-package API reference and codegen-plugin docs. |
 | 🎓 [Tutorial](https://infobloxopen.github.io/devedge-sdk/docs/tutorial/api-key-manager/) | Build the **API Key Manager** service end to end. |
 
 ## Why devedge-sdk
 
-- **Declare authz once, enforced everywhere.** Annotate an RPC with `(infoblox.authz.v1.rule)`.
-  The framework builds the per-method rule table, enforces it **fail-closed**, and refuses to
-  boot if any served method is undeclared.
-- **Secret fields encrypted at rest.** Mark a field `secret` in proto; generated code hashes it
-  for lookup and encrypts the ciphertext — AES-256-GCM in dev, HashiCorp Vault Transit in prod.
-  Plaintext is never persisted and never returned.
-- **Cross-account tenant isolation.** Every query is scoped by `account-id` at the storage layer
-  (GORM *and* ent). One principal can never see another's resources — and `seccheck` proves it in CI.
-- **Batteries-included gRPC server.** `server.New` assembles the interceptor chain — request-ID,
-  error mapping, tenant-ID, fail-closed authz, field-mask validation, ETag/412 preconditions —
-  plus an optional HTTP/JSON gateway.
-- **Codegen from your proto.** `protoc-gen-svc` scaffolds the service, `protoc-gen-storage` emits a
-  GORM repository, `protoc-gen-ent` emits an ent schema. The proto is the single source of truth.
-- **Pluggable, dependency-light core.** Core packages depend only on the standard library — no ORM,
-  no policy-engine dependency. Every seam ships a dev default and swaps for a production backend
-  **without touching service code**.
+- **From one proto to a running, AIP-correct service.** Scaffold a service, declare your resource and
+  methods, and `server.New` stands up gRPC **plus** an optional HTTP/JSON gateway with the standard
+  methods and Google-AIP semantics already wired: field-mask `PATCH` (AIP-134), ETag/`If-Match`→412
+  optimistic concurrency (AIP-154), pagination, filtering (AIP-160), soft-delete + undelete
+  (AIP-148/149), batch methods (AIP-137), request de-duplication (AIP-155), and long-running operations
+  (AIP-151/152). Correct API semantics, for free.
+- **Secure by default — and provable.** Authorization is **fail-closed**: annotate each RPC with
+  `(infoblox.authz.v1.rule)` and the service *refuses to boot* if any served method is undeclared.
+  Every query is scoped by `account-id` at the storage layer (GORM **and** ent), so one principal can
+  never see another's resources; secret-annotated fields are encrypted at rest and never returned; and
+  errors never leak SQL or stack traces. The `seccheck` package proves all of it in CI.
+- **Pluggable seams, dev defaults, zero service-code change.** Persistence (in-memory → GORM/ent),
+  transactions, **domain events** (in-memory → Kafka, via a transactional outbox), the authz decision
+  point, and the secret encryptor each ship a dev-suitable default and swap for a production backend
+  **without touching service code**. DDD **aggregates** and multi-surface projections are first-class.
+- **Codegen from your proto; dependency-light core.** `protoc-gen-svc` scaffolds the service,
+  `protoc-gen-storage` emits a GORM repository, `protoc-gen-ent` emits an ent schema, and
+  `protoc-gen-devedge-authz` emits the authz-rules table — the proto is the single source of truth.
+  Core packages depend only on the standard library: **no ORM, no policy-engine dependency**.
 
 ## Install
 
@@ -68,6 +73,8 @@ production storage and secret backends — the in-memory store and dev encryptor
 prerequisites: [Installation](https://infobloxopen.github.io/devedge-sdk/docs/getting-started/installation/).
 
 ## Quickstart
+
+In about five minutes you go from a `.proto` to a running, fail-closed gRPC + REST service.
 
 **1. Declare each RPC's authz requirement in proto** — verb + resource is all a method needs:
 
@@ -112,7 +119,8 @@ widgetv1.RegisterWidgetServiceServer(srv.GRPCServer(), &widgetServer{})
 log.Fatal(srv.Serve(ctx)) // blocks until ctx is cancelled
 ```
 
-The chain `server.New` builds, outermost first:
+You now have a running, fail-closed service speaking gRPC and REST. The chain `server.New` builds,
+outermost first:
 
 ```
 RequestID → ErrorMapper → TenantID → grpcauthz (fail-closed) → FieldMask → ETag/412 → ReadMask → ValidateOnly → Deduplicate
@@ -124,14 +132,15 @@ RequestID → ErrorMapper → TenantID → grpcauthz (fail-closed) → FieldMask
 
 | Package | What it provides |
 |---|---|
+| [`server`](./server) | `Server` lifecycle: gRPC + optional HTTP/JSON gateway, the interceptor chain auto-wired, graceful shutdown. |
+| [`middleware`](./middleware) | The interceptors: `RequestID`, `TenantID`, `FieldMask`, `ErrorMapper`, `ValidateOnly`, `Dedup`, and [`etag`](./middleware/etag). |
 | [`authz`](./authz) | Engine-neutral model: `Principal`, `Resource`, `Verb`, `AccessRequest`, `Decision`, the pluggable `Authorizer`, and `DevAuthorizer` (in-process, default-deny). |
 | [`authz/grpcauthz`](./authz/grpcauthz) | Fail-closed gRPC interceptor + boot gate. Rough-compatible with `atlas-authz-middleware/grpc_opa` ([COMPAT.md](./COMPAT.md)). |
 | [`authz/catalog`](./authz/catalog) | Builds the **permission catalog** (per resource: verbs, endpoints, `View`/`Manage` groups) from declared rules. |
 | [`authz/authzpb`](./authz/authzpb) | Reflection-based rule extractor — reads `(infoblox.authz.v1.rule)` off linked descriptors, no generated file. |
-| [`server`](./server) | `Server` lifecycle: gRPC + optional HTTP/JSON gateway, interceptor chain auto-wired. |
-| [`middleware`](./middleware) | The interceptors: `RequestID`, `TenantID`, `FieldMask`, `ErrorMapper`, `ValidateOnly`, `Dedup`, and [`etag`](./middleware/etag). |
+| [`persistence`](./persistence) | ORM-free `Repository[T,K]` seam, in-memory dev store, transactions, batch, DSN hotload, filtering, and **aggregate** roots. Storage *shape* is per-service ([SHAPES.md](./persistence/SHAPES.md)). |
+| [`events`](./events) | Domain events via a **transactional outbox** — `Publisher`/`Bus`/idempotency, an in-memory bus, and a [Kafka](./events/kafkabus) bus, for safe cross-aggregate reactions. |
 | [`secret`](./secret) | Secret-at-rest `Encryptor`: AES-256-GCM + HMAC for dev, HashiCorp Vault Transit for prod. |
-| [`persistence`](./persistence) | ORM-free `Repository[T,K]` seam, in-memory dev store, DSN hotload, filtering. Storage *shape* is per-service ([SHAPES.md](./persistence/SHAPES.md)). |
 | [`lro`](./lro) | AIP-151/152 long-running operations: `Store`, `Manager`, `Operation`, cancellation. |
 | [`seccheck`](./seccheck) | Static + dynamic security assertions you run in CI (see [Security model](#security-model)). |
 
@@ -150,6 +159,9 @@ The proto is the single source of truth; `make generate` (or `buf generate`) dri
 
 ## Security model
 
+Security is a **foundation property here, not a bolt-on**: it is enforced by construction and verified
+in CI, so a correctly-built service is secure by default.
+
 Authorization is **fail-closed**: an undeclared or ungranted method is denied with no code required.
 The `seccheck` package turns the model's invariants into assertions you run in CI (`make security-check`):
 
@@ -162,6 +174,11 @@ The `seccheck` package turns the model's invariants into assertions you run in C
 | Errors never leak SQL, stack traces, or hostnames | `AssertErrorMessagesClean` |
 
 → [Security Check guide](https://infobloxopen.github.io/devedge-sdk/docs/guides/security-check/).
+
+**Secret fields.** Mark a field `secret` in proto; generated code hashes it for lookup and encrypts the
+ciphertext — AES-256-GCM in dev, HashiCorp Vault Transit in production — so plaintext is never persisted
+and never returned. See [model a resource → secret fields](https://infobloxopen.github.io/devedge-sdk/docs/guides/model-a-resource/#secret-fields)
+and the [Vault Transit guide](https://infobloxopen.github.io/devedge-sdk/docs/guides/vault-transit/).
 
 ### Swapping the decision point
 

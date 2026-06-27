@@ -13,29 +13,33 @@ deployment substrate): devedge is **dev- and deploy-time** tooling; devedge-sdk 
 
 ## What it gives you
 
-- A **proto annotation contract** — `(infoblox.authz.v1.rule)` declares a method's authz
-  requirement; `(infoblox.field.v1.opts).secret` marks a field as sensitive.
-- **Codegen plugins** — `protoc-gen-devedge-authz` (the authz-rules table), `protoc-gen-svc`,
-  `protoc-gen-storage`, and `protoc-gen-ent` (plus the third-party `protoc-gen-grpc-gateway`) turn
-  the proto into the authz rules, a service scaffold, a GORM repository, an ent schema, and an
-  HTTP/JSON gateway.
-- A **batteries-included server** — `server.New` assembles the framework interceptor chain
-  (request-ID → error mapper → tenant-ID → fail-closed authz → field-mask → ETag/412) and an
-  optional HTTP/JSON gateway.
-- **Secret-at-rest** — the `secret` package encrypts and hashes secret fields; AES-256-GCM
-  for dev, Vault Transit for production.
-- **Pluggable persistence** — a neutral `Repository[T,K]` seam, an in-memory dev store, and
-  two generated shapes (GORM, ent) with tenant isolation built in.
-- **Security checks** — the `seccheck` package proves, in CI, that authz is complete, unknown
-  principals are denied, cross-account isolation holds, error messages are clean, and no
-  secret field ever leaks in a response.
+- **A running, AIP-correct service from one proto.** `server.New` assembles a gRPC server plus an
+  optional HTTP/JSON gateway with the framework interceptor chain wired (request-ID → error mapper →
+  tenant-ID → fail-closed authz → field-mask → ETag/412 → read-mask → validate-only → dedup) and the
+  Google-AIP semantics that go with it: field-mask `PATCH`, ETag/412 concurrency, pagination,
+  filtering, soft-delete, batch, request de-duplication, and long-running operations.
+- **Secure by default, provable in CI.** Authorization is fail-closed — `(infoblox.authz.v1.rule)`
+  declares each method's requirement and the service refuses to boot if any served method is
+  undeclared; every query is tenant-scoped by `account-id`; secret-annotated fields
+  (`(infoblox.field.v1.opts).secret`) are encrypted at rest and never returned. The `seccheck`
+  package proves authz completeness, unknown-principal denial, cross-account isolation, clean error
+  messages, and no-secret-leak — all in CI.
+- **Pluggable seams with dev defaults.** Persistence (a neutral `Repository[T,K]` seam: in-memory dev
+  store → generated GORM/ent shapes), transactions and DDD **aggregates**, domain **events** (a
+  transactional outbox with an in-memory bus → Kafka), the authz decision point, and the secret
+  encryptor each ship a dev-suitable default and swap for a production backend **without changing
+  service code**.
+- **Codegen from your proto.** `protoc-gen-devedge-authz` (the authz-rules table), `protoc-gen-svc`
+  (service scaffold), `protoc-gen-storage` (GORM repository), and `protoc-gen-ent` (ent schema) — plus
+  the third-party `protoc-gen-grpc-gateway` — turn the proto into a complete service. The proto is the
+  single source of truth; core packages depend only on the standard library (no ORM, no policy engine).
 
 ## Sections
 
 {{< cards >}}
-  {{< card link="getting-started/" title="Getting Started" icon="play" subtitle="Install the SDK and stand up a service in five minutes." >}}
-  {{< card link="concepts/" title="Concepts" icon="light-bulb" subtitle="Architecture, the annotation contract, and the tenant-isolation model." >}}
-  {{< card link="guides/" title="Guides" icon="book-open" subtitle="Task-focused how-tos: define a service, pick a storage shape, handle secrets, run seccheck, set up Vault." >}}
+  {{< card link="getting-started/" title="Getting Started" icon="play" subtitle="Install the SDK and stand up a running, fail-closed service in five minutes." >}}
+  {{< card link="concepts/" title="Concepts" icon="light-bulb" subtitle="Architecture and the seam model, the annotation contract, tenant isolation, aggregates, and events." >}}
+  {{< card link="guides/" title="Guides" icon="book-open" subtitle="Task-focused how-tos: define a service, model a resource, pick a storage shape, run seccheck." >}}
   {{< card link="reference/" title="Reference" icon="document-text" subtitle="API reference for each package and codegen plugin." >}}
   {{< card link="tutorial/" title="Tutorial" icon="academic-cap" subtitle="Build the API Key Manager service end to end." >}}
 {{< /cards >}}
