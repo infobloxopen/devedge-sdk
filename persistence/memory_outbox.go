@@ -2,7 +2,7 @@ package persistence
 
 import (
 	"context"
-	"maps"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,40 +19,28 @@ const memOutboxOrderBase = 1 << 32
 // MemoryOutboxStore is the in-memory [OutboxStore] dev default. It is also a
 // [MemoryRepositoryFor] participant, so passing it to [NewMemoryTxRunner] alongside
 // the aggregate's repositories makes Append enlist in the SAME transaction as the
-// aggregate change: the runner holds the store's lock and snapshots its rows for
-// the duration of fn, so a committed Publish keeps its row and a rolled-back one
-// discards it (F032 AC-1) — exactly as the ent store's Append-through-*ent.Tx does
-// for the SQL backend.
+// aggregate change: the runner holds the store's lock and snapshots its rows for the
+// duration of fn, so a committed Publish keeps its row and a rolled-back one discards
+// it (F032 AC-1) — exactly as the ent store's Append-through-*ent.Tx does for the SQL
+// backend.
 //
-// F033: the store is APPEND-ONLY — rows are never deleted on the dispatch path. The
-// only mutation the dispatch path makes is a single terminal delivered-mark
-// ([MemoryOutboxStore.MarkDelivered] sets the row's DeliveredTime once every handler
-// applied); a delivered row is then excluded from claims, so it is never re-leased or
-// re-attempted (no per-poll churn) and never drifts into the poison cutoff. A row
-// drops out of claims once its Attempts reaches maxAttempts (the poison cutoff) even
-// if never delivered. The only path that removes data is
-// [MemoryOutboxStore.DropPartitionsBefore] (the dev-backend model of partition-drop
-// retention: forget rows older than t).
+// F033 WRITE-ONLY: the store is write-only. The ONLY writes are Append (the
+// producer's transactional insert) and [MemoryOutboxStore.DropPartitionsBefore] (the
+// dev-backend model of partition-drop retention: forget rows older than t). There is
+// no claim, lease, delivered-mark, or per-row delete — the in-process dispatcher reads
+// the rows forward via [MemoryOutboxStore.ReadAfter] and keeps its position in a
+// separate [MemoryOutboxCursorStore]; an outbox row is never mutated after it is
+// appended.
 type MemoryOutboxStore struct {
-	mu       sync.Mutex
-	rows     []*OutboxRecord      // append order; the dispatcher claims from the head
-	leased   map[string]time.Time // id -> lease expiry; a leased row is hidden from claims
-	leaseTTL time.Duration
-	order    uint64
+	mu    sync.Mutex
+	rows  []*OutboxRecord // append order; ReadAfter scans this in (created_time, id) order
+	order uint64
 }
 
-// NewMemoryOutboxStore returns an in-memory OutboxStore. leaseTTL is how long a
-// claimed row stays hidden from a competing claim before it may be re-leased (the
-// claimed-flag/lease strategy of F032 D-3); a non-positive value uses a sane
-// default.
-func NewMemoryOutboxStore(leaseTTL time.Duration) *MemoryOutboxStore {
-	if leaseTTL <= 0 {
-		leaseTTL = 30 * time.Second
-	}
+// NewMemoryOutboxStore returns an in-memory write-only OutboxStore.
+func NewMemoryOutboxStore() *MemoryOutboxStore {
 	return &MemoryOutboxStore{
-		leased:   make(map[string]time.Time),
-		leaseTTL: leaseTTL,
-		order:    memOutboxOrderBase + memOutboxOrderSeq.Add(1),
+		order: memOutboxOrderBase + memOutboxOrderSeq.Add(1),
 	}
 }
 
@@ -68,25 +56,16 @@ func (s *MemoryOutboxStore) snapshotForTx() any {
 		cp := *r
 		rows[i] = &cp
 	}
-	leased := make(map[string]time.Time, len(s.leased))
-	maps.Copy(leased, s.leased)
-	return memOutboxSnapshot{rows: rows, leased: leased}
+	return rows
 }
 
 func (s *MemoryOutboxStore) restoreForTx(snap any) {
-	ss := snap.(memOutboxSnapshot)
-	s.rows = ss.rows
-	s.leased = ss.leased
-}
-
-type memOutboxSnapshot struct {
-	rows   []*OutboxRecord
-	leased map[string]time.Time
+	s.rows = snap.([]*OutboxRecord)
 }
 
 // inThisTx reports whether ctx carries a MemoryTxRunner transaction this store is
-// enrolled in. When true the runner already holds s.mu for the whole transaction,
-// so Append must NOT re-lock (s.mu is not reentrant) — mirroring MemoryRepository.
+// enrolled in. When true the runner already holds s.mu for the whole transaction, so
+// Append must NOT re-lock (s.mu is not reentrant) — mirroring MemoryRepository.
 func (s *MemoryOutboxStore) inThisTx(ctx context.Context) bool {
 	if set, ok := memTxSetFromContext(ctx); ok {
 		return set.has(s)
@@ -98,8 +77,8 @@ func (s *MemoryOutboxStore) inThisTx(ctx context.Context) bool {
 // carries a MemoryTxRunner transaction this store is enrolled in, the row is added
 // under the runner-held lock so it is kept on commit and dropped on rollback (the
 // snapshot above is restored). Append outside any transaction is rejected — the
-// dual-write guard (F032 D-1); package events.Publish enforces the same via
-// RequireTx, this is the store-level backstop.
+// dual-write guard (F032 D-1); package events.Publish enforces the same via RequireTx,
+// this is the store-level backstop. This is the ONLY write the producer makes.
 func (s *MemoryOutboxStore) Append(ctx context.Context, rec *OutboxRecord) error {
 	if rec.CreatedTime.IsZero() {
 		rec.CreatedTime = time.Now()
@@ -120,81 +99,62 @@ func (s *MemoryOutboxStore) Append(ctx context.Context, rec *OutboxRecord) error
 	return ErrNoTransaction
 }
 
-// ClaimUndelivered implements [OutboxStore]: lease up to limit rows still eligible
-// for dispatch — Attempts < maxAttempts and lease lapsed — to the caller, stamping a
-// fresh lease and bumping Attempts. A claim is its own short critical section (not
-// part of an aggregate tx), so it locks directly.
-//
-// F033: a delivered row (DeliveredTime set) is EXCLUDED — a successfully delivered
-// event is never re-claimed or re-attempted, so the happy path does zero per-poll
-// writes and a delivered event never drifts into the poison cutoff. A row attempted
-// maxAttempts times without ever delivering is poison and is no longer returned (the
-// poison cutoff). Both are eventually aged out by DropPartitionsBefore.
-func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*OutboxRecord, error) {
+// ReadAfter implements [OutboxStore]: return up to limit rows strictly after cursor in
+// (created_time, id) order, WITHOUT mutating any row. It is the non-destructive
+// forward scan the in-process dispatcher consumes; the dispatcher advances its own
+// cursor in a sidecar and never writes back here. A read is its own short critical
+// section (not part of an aggregate tx), so it locks directly.
+func (s *MemoryOutboxStore) ReadAfter(ctx context.Context, cursor OutboxCursor, limit int) ([]*OutboxRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	if maxAttempts <= 0 {
-		maxAttempts = DefaultMaxOutboxAttempts
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
+	// Sort a copy by (created_time, id) so the scan is total and deterministic even if
+	// rows were appended out of created_time order (e.g. a backdated CreatedTime).
+	sorted := make([]*OutboxRecord, len(s.rows))
+	copy(sorted, s.rows)
+	sort.Slice(sorted, func(i, j int) bool { return outboxLess(sorted[i], sorted[j]) })
+
 	out := make([]*OutboxRecord, 0, limit)
-	for _, r := range s.rows {
+	for _, r := range sorted {
 		if len(out) >= limit {
 			break
 		}
-		if r.DeliveredTime != nil {
-			continue // already delivered: never re-claimed (no churn)
+		if !cursorBefore(cursor, r) {
+			continue // at or before the cursor: already consumed
 		}
-		if r.Attempts >= maxAttempts {
-			continue // poison: past the cutoff, no longer claimed
-		}
-		if exp, leased := s.leased[r.ID]; leased && now.Before(exp) {
-			continue // still leased to another claim
-		}
-		s.leased[r.ID] = now.Add(s.leaseTTL)
-		r.Attempts++
 		cp := *r
 		out = append(out, &cp)
 	}
 	return out, nil
 }
 
-// MarkDelivered implements [OutboxStore]: stamp the row's DeliveredTime ONCE so it is
-// excluded from every future claim (F033 churn-avoidance — no per-poll re-lease of a
-// delivered event). It never deletes the row; a second mark of an already-delivered
-// row is a no-op, and an unknown id is ignored.
-func (s *MemoryOutboxStore) MarkDelivered(ctx context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range s.rows {
-		if r.ID == id {
-			if r.DeliveredTime == nil {
-				t := time.Now()
-				r.DeliveredTime = &t
-			}
-			delete(s.leased, id) // delivered rows need no lease
-			return nil
-		}
+// outboxLess orders two records by (created_time, id) — the forward-cursor order.
+func outboxLess(a, b *OutboxRecord) bool {
+	if a.CreatedTime.Equal(b.CreatedTime) {
+		return a.ID < b.ID
 	}
-	return nil
+	return a.CreatedTime.Before(b.CreatedTime)
 }
 
-// Release implements [OutboxStore]: drop the lease on id so a re-claim is immediate.
-// A no-op for an unknown id. It does NOT delete the row (append-only).
-func (s *MemoryOutboxStore) Release(ctx context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.leased, id)
-	return nil
+// cursorBefore reports whether the cursor strictly precedes record r — i.e. r is
+// "after the cursor" and so should be returned by ReadAfter. A zero cursor precedes
+// every row (read from the beginning).
+func cursorBefore(c OutboxCursor, r *OutboxRecord) bool {
+	if c.IsZero() {
+		return true
+	}
+	if c.CreatedTime.Equal(r.CreatedTime) {
+		return c.ID < r.ID
+	}
+	return c.CreatedTime.Before(r.CreatedTime)
 }
 
 // DropPartitionsBefore implements [OutboxRetention] for the dev backend: it forgets
-// every row whose CreatedTime is strictly older than t (the in-memory model of an
-// SQL partition drop) and returns how many rows it removed. This is the ONLY path
-// that removes data from the append-only store; the dispatch loop never deletes.
+// every row whose CreatedTime is strictly older than t (the in-memory model of an SQL
+// partition drop) and returns how many rows it removed. This is the ONLY path that
+// removes data from the write-only store; nothing else ever deletes.
 func (s *MemoryOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,7 +162,6 @@ func (s *MemoryOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Tim
 	dropped := 0
 	for _, r := range s.rows {
 		if r.CreatedTime.Before(t) {
-			delete(s.leased, r.ID)
 			dropped++
 			continue
 		}
@@ -212,23 +171,26 @@ func (s *MemoryOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Tim
 	return dropped, nil
 }
 
-// Pending returns the ids of rows still eligible for claim (not yet delivered and
-// Attempts below the default cutoff), in append order. It is a test/introspection
-// helper that mirrors ClaimUndelivered's eligibility filter.
+// Pending returns the ids of every stored (not-yet-dropped) row in (created_time, id)
+// order. Under the write-only model there is no per-row "delivered" state — the
+// dispatcher tracks its position in a sidecar — so every appended row that has not been
+// dropped by retention is "pending" in the outbox. A test/introspection helper.
 func (s *MemoryOutboxStore) Pending() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.rows))
-	for _, r := range s.rows {
-		if r.DeliveredTime == nil && r.Attempts < DefaultMaxOutboxAttempts {
-			out = append(out, r.ID)
-		}
+	rows := make([]*OutboxRecord, len(s.rows))
+	copy(rows, s.rows)
+	sort.Slice(rows, func(i, j int) bool { return outboxLess(rows[i], rows[j]) })
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.ID)
 	}
 	return out
 }
 
-// All returns a copy of every stored row in append order, for tests/introspection.
-// Under the append-only model the row count only grows until a DropPartitionsBefore.
+// All returns a copy of every stored row in (created_time, id) order, for
+// tests/introspection. Under the write-only model the row count only grows until a
+// DropPartitionsBefore.
 func (s *MemoryOutboxStore) All() []*OutboxRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,6 +199,81 @@ func (s *MemoryOutboxStore) All() []*OutboxRecord {
 		cp := *r
 		out[i] = &cp
 	}
+	sort.Slice(out, func(i, j int) bool { return outboxLess(out[i], out[j]) })
+	return out
+}
+
+// MemoryOutboxCursorStore is the in-memory [OutboxCursorStore] sidecar for the
+// in-process dispatcher: it holds, per named cursor, the forward position, the
+// head-of-line failure count, and a dead-letter list. It is the dev-backend twin of a
+// SQL sidecar table. It is deliberately independent of the write-only
+// [MemoryOutboxStore] — the dispatcher records ALL its progress here, never in the
+// outbox.
+type MemoryOutboxCursorStore struct {
+	mu      sync.Mutex
+	cursors map[string]cursorState
+	dead    []DeadLetterRecord
+}
+
+type cursorState struct {
+	cursor       OutboxCursor
+	headFailures int
+}
+
+// DeadLetterRecord is one parked poison event in the in-memory sidecar (for
+// tests/introspection): the event that failed maxAttempts at the cursor head before
+// the dispatcher advanced past it.
+type DeadLetterRecord struct {
+	CursorName string
+	EventID    string
+	EventType  string
+	Reason     string
+	Position   OutboxCursor
+}
+
+// NewMemoryOutboxCursorStore returns an empty in-memory cursor sidecar.
+func NewMemoryOutboxCursorStore() *MemoryOutboxCursorStore {
+	return &MemoryOutboxCursorStore{cursors: make(map[string]cursorState)}
+}
+
+// LoadCursor implements [OutboxCursorStore]: return the saved position + head-failure
+// count for name (zero/0 if never saved).
+func (s *MemoryOutboxCursorStore) LoadCursor(ctx context.Context, name string) (OutboxCursor, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.cursors[name]
+	return st.cursor, st.headFailures, nil
+}
+
+// SaveCursor implements [OutboxCursorStore]: durably record the position + head-failure
+// count for name.
+func (s *MemoryOutboxCursorStore) SaveCursor(ctx context.Context, name string, cursor OutboxCursor, headFailures int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cursors[name] = cursorState{cursor: cursor, headFailures: headFailures}
+	return nil
+}
+
+// DeadLetter implements [OutboxCursorStore]: park a poison event in the sidecar.
+func (s *MemoryOutboxCursorStore) DeadLetter(ctx context.Context, name string, rec *OutboxRecord, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dead = append(s.dead, DeadLetterRecord{
+		CursorName: name,
+		EventID:    rec.ID,
+		EventType:  rec.EventType,
+		Reason:     reason,
+		Position:   OutboxCursor{CreatedTime: rec.CreatedTime, ID: rec.ID},
+	})
+	return nil
+}
+
+// DeadLettered returns a copy of the parked poison events, for tests/introspection.
+func (s *MemoryOutboxCursorStore) DeadLettered() []DeadLetterRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]DeadLetterRecord, len(s.dead))
+	copy(out, s.dead)
 	return out
 }
 
@@ -245,4 +282,5 @@ var (
 	_ OutboxStore         = (*MemoryOutboxStore)(nil)
 	_ OutboxRetention     = (*MemoryOutboxStore)(nil)
 	_ MemoryRepositoryFor = (*MemoryOutboxStore)(nil)
+	_ OutboxCursorStore   = (*MemoryOutboxCursorStore)(nil)
 )

@@ -23,9 +23,10 @@ import (
 // partitioned table rather than a separate one.
 const entOutboxTable = "outboxes"
 
-// outboxPGParentDDL is the PostgreSQL declarative-partitioned parent for the ent
-// outbox table. created_time is in the primary key because a PG partition key must
-// appear in every unique constraint. The column set matches the ent Outbox schema.
+// outboxPGParentDDL is the PostgreSQL declarative-partitioned parent for the
+// WRITE-ONLY ent outbox table. created_time is in the primary key because a PG
+// partition key must appear in every unique constraint. F033: the column set matches
+// the ent Outbox schema — the durable event only, no dispatcher-bookkeeping columns.
 const outboxPGParentDDL = `
 CREATE TABLE IF NOT EXISTS outboxes (
 	id             varchar NOT NULL,
@@ -35,9 +36,6 @@ CREATE TABLE IF NOT EXISTS outboxes (
 	event_type     varchar,
 	payload        bytea,
 	created_time   timestamptz NOT NULL,
-	delivered_time timestamptz,
-	attempts       bigint NOT NULL DEFAULT 0,
-	leased_until   timestamptz,
 	PRIMARY KEY (id, created_time)
 ) PARTITION BY RANGE (created_time)`
 

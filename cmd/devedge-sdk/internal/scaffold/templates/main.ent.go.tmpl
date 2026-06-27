@@ -157,24 +157,30 @@ func newAggregate(client *entclient.Client) *persistence.GenericAggregateReposit
 	})
 }
 
-// newOutbox wires the F032 transactional-outbox seam. A Publisher records a domain
-// event in the SAME transaction as the aggregate change that emitted it (call
-// pub.Publish inside the runner's Atomically), and a Dispatcher delivers committed
-// events at-least-once to the handlers you Subscribe — each running in its OWN
-// transaction (eventual consistency across aggregates). Wire your cross-aggregate
-// reactions with d.Subscribe(...) and run d.Poll(ctx, ...) from a background
-// goroutine.
+// newOutbox wires the F032/F033 transactional-outbox seam. A Publisher records a
+// domain event in the SAME transaction as the aggregate change that emitted it (call
+// pub.Publish inside the runner's Atomically). The outbox is WRITE-ONLY (the only
+// writes are the producer's INSERT and retention's partition drop). The Dispatcher
+// consumes it as a FORWARD CURSOR for same-DB cross-aggregate reactions: it reads
+// events in order, runs the handlers you Subscribe — each in its OWN transaction
+// (eventual consistency across aggregates) — and advances its position in a SIDECAR
+// cursor store, never touching the outbox rows. Run ONE dispatcher instance per
+// service; wire reactions with d.Subscribe(...) and run d.Poll(ctx, ...) from a
+// background goroutine. (Cross-server delivery to queues is out of scope — an external
+// project tails the outbox via persistence.OutboxCDCConsumer.)
 //
-// This uses the SDK's engine-free DEV stores so the scaffold runs out of the box:
-// an in-memory outbox, an in-memory TxRunner for the dispatch side, and the
-// auto-enrolled in-memory idempotency store. For durability, replace store + tx
-// with a SQL-backed ent OutboxStore (appending through the ctx *ent.Tx) and the
-// generated NewEntTxRunner — see testdata/iam in the SDK for the worked example.
+// This uses the SDK's engine-free DEV stores so the scaffold runs out of the box: an
+// in-memory write-only outbox, an in-memory cursor sidecar, an in-memory TxRunner for
+// the dispatch side, and the auto-enrolled in-memory idempotency store. For
+// durability, replace store + cursors + tx with the SQL-backed ent OutboxStore
+// (appending through the ctx *ent.Tx), the EntOutboxCursorStore, and the generated
+// NewEntTxRunner — see testdata/iam in the SDK for the worked example.
 func newOutbox() (events.Publisher, *events.Dispatcher) {
-	store := persistence.NewMemoryOutboxStore(0)
+	store := persistence.NewMemoryOutboxStore()
+	cursors := persistence.NewMemoryOutboxCursorStore()
 	tx := persistence.NewMemoryTxRunner()
 	pub := events.NewOutboxPublisher(store)
-	d := events.NewDispatcher(store, tx, nil) // nil => auto in-memory idempotency
+	d := events.NewDispatcher(store, cursors, tx, nil) // nil => auto in-memory idempotency
 	// Example: react to your aggregate's events here.
 	//   d.Subscribe("{{.ResourceSnake}}.changed", "my-reaction", func(ctx context.Context, evt events.Event) error { ... })
 	return pub, d

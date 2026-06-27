@@ -71,7 +71,9 @@ func newDB() (*gorm.DB, error) {
 	if err := db.AutoMigrate(
 		&{{.GoPkg}}.{{.Resource}}Model{},
 		&{{.GoPkg}}.{{.Member}}Model{},
-		&gormtx.OutboxRow{},
+		&gormtx.OutboxRow{},          // the WRITE-ONLY outbox table
+		&gormtx.OutboxCursorRow{},    // the dispatcher's forward-cursor sidecar
+		&gormtx.OutboxDeadLetterRow{}, // the dispatcher's poison dead-letter sidecar
 		&gormtx.IdemMarker{},
 	); err != nil {
 		return nil, err
@@ -145,19 +147,27 @@ func newAggregate(db *gorm.DB) *persistence.GenericAggregateRepository[*{{.GoPkg
 	})
 }
 
-// newOutbox wires the F032 transactional-outbox seam over the reusable SDK GORM
-// stores: a Publisher records a domain event in the SAME transaction as the
-// aggregate change that emitted it (call pub.Publish inside the GormTxRunner's
-// Atomically), and a Dispatcher delivers committed events at-least-once to the
-// handlers you Subscribe — each running in its OWN transaction (eventual
-// consistency across aggregates). The GormIdempotencyStore makes delivery
-// exactly-once. Wire your cross-aggregate reactions with d.Subscribe(...) and run
-// d.Poll(ctx, ...) (or d.RunOnce on a tick) from a background goroutine.
+// newOutbox wires the F032/F033 transactional-outbox seam over the reusable SDK GORM
+// stores: a Publisher records a domain event in the SAME transaction as the aggregate
+// change that emitted it (call pub.Publish inside the GormTxRunner's Atomically). The
+// outbox table is WRITE-ONLY — the producer's transactional INSERT and retention's
+// DROP PARTITION are the only writes. The Dispatcher consumes it as a FORWARD CURSOR
+// for same-DB cross-aggregate reactions: it reads events in order, runs the handlers
+// you Subscribe — each in its OWN transaction (eventual consistency across aggregates)
+// — and advances its position in a SIDECAR (GormOutboxCursorStore), never touching the
+// outbox rows. The GormIdempotencyStore makes delivery exactly-once. Run ONE dispatcher
+// instance per service; wire reactions with d.Subscribe(...) and run d.Poll(ctx, ...)
+// (or d.RunOnce on a tick) from a background goroutine.
+//
+// Cross-server delivery (publishing to message queues) is OUT OF SCOPE for the SDK: an
+// external project tails the write-only outbox via the persistence.OutboxCDCConsumer
+// seam (WAL/Debezium → queues). The in-process dispatcher here is for same-DB reactions.
 func newOutbox(db *gorm.DB) (events.Publisher, *events.Dispatcher) {
 	tx := gormtx.NewGormTxRunner(db)
 	store := gormtx.NewGormOutboxStore(db)
+	cursors := gormtx.NewGormOutboxCursorStore(db)
 	pub := events.NewOutboxPublisher(store)
-	d := events.NewDispatcher(store, tx, gormtx.NewGormIdempotencyStore(db))
+	d := events.NewDispatcher(store, cursors, tx, gormtx.NewGormIdempotencyStore(db))
 	// Example: react to your aggregate's events here.
 	//   d.Subscribe("{{.ResourceSnake}}.changed", "my-reaction", func(ctx context.Context, evt events.Event) error { ... })
 	return pub, d
@@ -166,7 +176,9 @@ func newOutbox(db *gorm.DB) (events.Publisher, *events.Dispatcher) {
 // runRetention drops aged outbox data WITHOUT per-row deletes (whole-partition
 // drops on a partitioned SQL backend; a windowed delete on the sqlite dev
 // backend). The SDK owns no cron loop: schedule this from your own scheduler.
-// retentionWindow is how long delivered events are kept before they age out.
+// retentionWindow is how long events are kept before they age out — keep it longer
+// than the dispatcher could ever fall behind, so a partition is dropped only once it
+// is both older than the window AND fully behind the dispatch cursor.
 func runRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRetention, retentionWindow time.Duration) (int, error) {
 	return gormtx.RunRetention(ctx, db, store, retentionWindow)
 }

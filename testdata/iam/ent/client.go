@@ -21,6 +21,8 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/idemmarker"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outboxcursor"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outboxdeadletter"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 )
 
@@ -41,6 +43,10 @@ type Client struct {
 	Membership *MembershipClient
 	// Outbox is the client for interacting with the Outbox builders.
 	Outbox *OutboxClient
+	// OutboxCursor is the client for interacting with the OutboxCursor builders.
+	OutboxCursor *OutboxCursorClient
+	// OutboxDeadLetter is the client for interacting with the OutboxDeadLetter builders.
+	OutboxDeadLetter *OutboxDeadLetterClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 }
@@ -60,6 +66,8 @@ func (c *Client) init() {
 	c.IdemMarker = NewIdemMarkerClient(c.config)
 	c.Membership = NewMembershipClient(c.config)
 	c.Outbox = NewOutboxClient(c.config)
+	c.OutboxCursor = NewOutboxCursorClient(c.config)
+	c.OutboxDeadLetter = NewOutboxDeadLetterClient(c.config)
 	c.User = NewUserClient(c.config)
 }
 
@@ -151,15 +159,17 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:        ctx,
-		config:     cfg,
-		Account:    NewAccountClient(cfg),
-		ApiKey:     NewApiKeyClient(cfg),
-		Group:      NewGroupClient(cfg),
-		IdemMarker: NewIdemMarkerClient(cfg),
-		Membership: NewMembershipClient(cfg),
-		Outbox:     NewOutboxClient(cfg),
-		User:       NewUserClient(cfg),
+		ctx:              ctx,
+		config:           cfg,
+		Account:          NewAccountClient(cfg),
+		ApiKey:           NewApiKeyClient(cfg),
+		Group:            NewGroupClient(cfg),
+		IdemMarker:       NewIdemMarkerClient(cfg),
+		Membership:       NewMembershipClient(cfg),
+		Outbox:           NewOutboxClient(cfg),
+		OutboxCursor:     NewOutboxCursorClient(cfg),
+		OutboxDeadLetter: NewOutboxDeadLetterClient(cfg),
+		User:             NewUserClient(cfg),
 	}, nil
 }
 
@@ -177,15 +187,17 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:        ctx,
-		config:     cfg,
-		Account:    NewAccountClient(cfg),
-		ApiKey:     NewApiKeyClient(cfg),
-		Group:      NewGroupClient(cfg),
-		IdemMarker: NewIdemMarkerClient(cfg),
-		Membership: NewMembershipClient(cfg),
-		Outbox:     NewOutboxClient(cfg),
-		User:       NewUserClient(cfg),
+		ctx:              ctx,
+		config:           cfg,
+		Account:          NewAccountClient(cfg),
+		ApiKey:           NewApiKeyClient(cfg),
+		Group:            NewGroupClient(cfg),
+		IdemMarker:       NewIdemMarkerClient(cfg),
+		Membership:       NewMembershipClient(cfg),
+		Outbox:           NewOutboxClient(cfg),
+		OutboxCursor:     NewOutboxCursorClient(cfg),
+		OutboxDeadLetter: NewOutboxDeadLetterClient(cfg),
+		User:             NewUserClient(cfg),
 	}, nil
 }
 
@@ -215,7 +227,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.Membership, c.Outbox, c.User,
+		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.Membership, c.Outbox,
+		c.OutboxCursor, c.OutboxDeadLetter, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -225,7 +238,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.Membership, c.Outbox, c.User,
+		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.Membership, c.Outbox,
+		c.OutboxCursor, c.OutboxDeadLetter, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -246,6 +260,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Membership.mutate(ctx, m)
 	case *OutboxMutation:
 		return c.Outbox.mutate(ctx, m)
+	case *OutboxCursorMutation:
+		return c.OutboxCursor.mutate(ctx, m)
+	case *OutboxDeadLetterMutation:
+		return c.OutboxDeadLetter.mutate(ctx, m)
 	case *UserMutation:
 		return c.User.mutate(ctx, m)
 	default:
@@ -1089,6 +1107,272 @@ func (c *OutboxClient) mutate(ctx context.Context, m *OutboxMutation) (Value, er
 	}
 }
 
+// OutboxCursorClient is a client for the OutboxCursor schema.
+type OutboxCursorClient struct {
+	config
+}
+
+// NewOutboxCursorClient returns a client for the OutboxCursor from the given config.
+func NewOutboxCursorClient(c config) *OutboxCursorClient {
+	return &OutboxCursorClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `outboxcursor.Hooks(f(g(h())))`.
+func (c *OutboxCursorClient) Use(hooks ...Hook) {
+	c.hooks.OutboxCursor = append(c.hooks.OutboxCursor, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `outboxcursor.Intercept(f(g(h())))`.
+func (c *OutboxCursorClient) Intercept(interceptors ...Interceptor) {
+	c.inters.OutboxCursor = append(c.inters.OutboxCursor, interceptors...)
+}
+
+// Create returns a builder for creating a OutboxCursor entity.
+func (c *OutboxCursorClient) Create() *OutboxCursorCreate {
+	mutation := newOutboxCursorMutation(c.config, OpCreate)
+	return &OutboxCursorCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of OutboxCursor entities.
+func (c *OutboxCursorClient) CreateBulk(builders ...*OutboxCursorCreate) *OutboxCursorCreateBulk {
+	return &OutboxCursorCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *OutboxCursorClient) MapCreateBulk(slice any, setFunc func(*OutboxCursorCreate, int)) *OutboxCursorCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &OutboxCursorCreateBulk{err: fmt.Errorf("calling to OutboxCursorClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*OutboxCursorCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &OutboxCursorCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for OutboxCursor.
+func (c *OutboxCursorClient) Update() *OutboxCursorUpdate {
+	mutation := newOutboxCursorMutation(c.config, OpUpdate)
+	return &OutboxCursorUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *OutboxCursorClient) UpdateOne(_m *OutboxCursor) *OutboxCursorUpdateOne {
+	mutation := newOutboxCursorMutation(c.config, OpUpdateOne, withOutboxCursor(_m))
+	return &OutboxCursorUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *OutboxCursorClient) UpdateOneID(id string) *OutboxCursorUpdateOne {
+	mutation := newOutboxCursorMutation(c.config, OpUpdateOne, withOutboxCursorID(id))
+	return &OutboxCursorUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for OutboxCursor.
+func (c *OutboxCursorClient) Delete() *OutboxCursorDelete {
+	mutation := newOutboxCursorMutation(c.config, OpDelete)
+	return &OutboxCursorDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *OutboxCursorClient) DeleteOne(_m *OutboxCursor) *OutboxCursorDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *OutboxCursorClient) DeleteOneID(id string) *OutboxCursorDeleteOne {
+	builder := c.Delete().Where(outboxcursor.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &OutboxCursorDeleteOne{builder}
+}
+
+// Query returns a query builder for OutboxCursor.
+func (c *OutboxCursorClient) Query() *OutboxCursorQuery {
+	return &OutboxCursorQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeOutboxCursor},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a OutboxCursor entity by its id.
+func (c *OutboxCursorClient) Get(ctx context.Context, id string) (*OutboxCursor, error) {
+	return c.Query().Where(outboxcursor.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *OutboxCursorClient) GetX(ctx context.Context, id string) *OutboxCursor {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *OutboxCursorClient) Hooks() []Hook {
+	return c.hooks.OutboxCursor
+}
+
+// Interceptors returns the client interceptors.
+func (c *OutboxCursorClient) Interceptors() []Interceptor {
+	return c.inters.OutboxCursor
+}
+
+func (c *OutboxCursorClient) mutate(ctx context.Context, m *OutboxCursorMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&OutboxCursorCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&OutboxCursorUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&OutboxCursorUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&OutboxCursorDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown OutboxCursor mutation op: %q", m.Op())
+	}
+}
+
+// OutboxDeadLetterClient is a client for the OutboxDeadLetter schema.
+type OutboxDeadLetterClient struct {
+	config
+}
+
+// NewOutboxDeadLetterClient returns a client for the OutboxDeadLetter from the given config.
+func NewOutboxDeadLetterClient(c config) *OutboxDeadLetterClient {
+	return &OutboxDeadLetterClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `outboxdeadletter.Hooks(f(g(h())))`.
+func (c *OutboxDeadLetterClient) Use(hooks ...Hook) {
+	c.hooks.OutboxDeadLetter = append(c.hooks.OutboxDeadLetter, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `outboxdeadletter.Intercept(f(g(h())))`.
+func (c *OutboxDeadLetterClient) Intercept(interceptors ...Interceptor) {
+	c.inters.OutboxDeadLetter = append(c.inters.OutboxDeadLetter, interceptors...)
+}
+
+// Create returns a builder for creating a OutboxDeadLetter entity.
+func (c *OutboxDeadLetterClient) Create() *OutboxDeadLetterCreate {
+	mutation := newOutboxDeadLetterMutation(c.config, OpCreate)
+	return &OutboxDeadLetterCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of OutboxDeadLetter entities.
+func (c *OutboxDeadLetterClient) CreateBulk(builders ...*OutboxDeadLetterCreate) *OutboxDeadLetterCreateBulk {
+	return &OutboxDeadLetterCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *OutboxDeadLetterClient) MapCreateBulk(slice any, setFunc func(*OutboxDeadLetterCreate, int)) *OutboxDeadLetterCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &OutboxDeadLetterCreateBulk{err: fmt.Errorf("calling to OutboxDeadLetterClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*OutboxDeadLetterCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &OutboxDeadLetterCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for OutboxDeadLetter.
+func (c *OutboxDeadLetterClient) Update() *OutboxDeadLetterUpdate {
+	mutation := newOutboxDeadLetterMutation(c.config, OpUpdate)
+	return &OutboxDeadLetterUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *OutboxDeadLetterClient) UpdateOne(_m *OutboxDeadLetter) *OutboxDeadLetterUpdateOne {
+	mutation := newOutboxDeadLetterMutation(c.config, OpUpdateOne, withOutboxDeadLetter(_m))
+	return &OutboxDeadLetterUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *OutboxDeadLetterClient) UpdateOneID(id int) *OutboxDeadLetterUpdateOne {
+	mutation := newOutboxDeadLetterMutation(c.config, OpUpdateOne, withOutboxDeadLetterID(id))
+	return &OutboxDeadLetterUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for OutboxDeadLetter.
+func (c *OutboxDeadLetterClient) Delete() *OutboxDeadLetterDelete {
+	mutation := newOutboxDeadLetterMutation(c.config, OpDelete)
+	return &OutboxDeadLetterDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *OutboxDeadLetterClient) DeleteOne(_m *OutboxDeadLetter) *OutboxDeadLetterDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *OutboxDeadLetterClient) DeleteOneID(id int) *OutboxDeadLetterDeleteOne {
+	builder := c.Delete().Where(outboxdeadletter.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &OutboxDeadLetterDeleteOne{builder}
+}
+
+// Query returns a query builder for OutboxDeadLetter.
+func (c *OutboxDeadLetterClient) Query() *OutboxDeadLetterQuery {
+	return &OutboxDeadLetterQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeOutboxDeadLetter},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a OutboxDeadLetter entity by its id.
+func (c *OutboxDeadLetterClient) Get(ctx context.Context, id int) (*OutboxDeadLetter, error) {
+	return c.Query().Where(outboxdeadletter.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *OutboxDeadLetterClient) GetX(ctx context.Context, id int) *OutboxDeadLetter {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *OutboxDeadLetterClient) Hooks() []Hook {
+	return c.hooks.OutboxDeadLetter
+}
+
+// Interceptors returns the client interceptors.
+func (c *OutboxDeadLetterClient) Interceptors() []Interceptor {
+	return c.inters.OutboxDeadLetter
+}
+
+func (c *OutboxDeadLetterClient) mutate(ctx context.Context, m *OutboxDeadLetterMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&OutboxDeadLetterCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&OutboxDeadLetterUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&OutboxDeadLetterUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&OutboxDeadLetterDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown OutboxDeadLetter mutation op: %q", m.Op())
+	}
+}
+
 // UserClient is a client for the User schema.
 type UserClient struct {
 	config
@@ -1227,9 +1511,11 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Account, ApiKey, Group, IdemMarker, Membership, Outbox, User []ent.Hook
+		Account, ApiKey, Group, IdemMarker, Membership, Outbox, OutboxCursor,
+		OutboxDeadLetter, User []ent.Hook
 	}
 	inters struct {
-		Account, ApiKey, Group, IdemMarker, Membership, Outbox, User []ent.Interceptor
+		Account, ApiKey, Group, IdemMarker, Membership, Outbox, OutboxCursor,
+		OutboxDeadLetter, User []ent.Interceptor
 	}
 )

@@ -202,6 +202,8 @@ func openIAMGormMySQL(t *testing.T) *gorm.DB {
 		&iamv1.UserModel{},
 		&iamv1.ApiKeyModel{},
 		&gormtx.OutboxRow{},
+		&gormtx.OutboxCursorRow{},
+		&gormtx.OutboxDeadLetterRow{},
 		&gormtx.IdemMarker{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)

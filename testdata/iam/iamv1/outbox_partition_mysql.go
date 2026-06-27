@@ -32,11 +32,7 @@ CREATE TABLE IF NOT EXISTS outboxes (
 	event_type     varchar(255),
 	payload        longblob,
 	created_time   datetime(6) NOT NULL,
-	delivered_time datetime(6),
-	attempts       bigint NOT NULL DEFAULT 0,
-	leased_until   datetime(6),
-	PRIMARY KEY (id, created_time),
-	KEY idx_outboxes_claim (attempts, leased_until)
+	PRIMARY KEY (id, created_time)
 ) PARTITION BY RANGE (TO_DAYS(created_time)) (
 %s
 )`

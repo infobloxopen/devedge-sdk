@@ -40,6 +40,8 @@ func openIAMGormDB(t *testing.T, dsn string) *gorm.DB {
 		&iamv1.UserModel{},
 		&iamv1.ApiKeyModel{},
 		&gormtx.OutboxRow{},
+		&gormtx.OutboxCursorRow{},
+		&gormtx.OutboxDeadLetterRow{},
 		&gormtx.IdemMarker{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
@@ -188,7 +190,7 @@ func TestGorm_AC3_UserSuspendedRevokesKeysEventually(t *testing.T) {
 	// Dispatch: the handler revokes the keys in its OWN aggregate tx. The
 	// idempotency store is the SQL-backed GormIdempotencyStore, so the marker
 	// commits with the handler's revoke in one GORM transaction.
-	d := events.NewDispatcher(store, tx, gormtx.NewGormIdempotencyStore(db))
+	d := events.NewDispatcher(store, gormtx.NewGormOutboxCursorStore(db), tx, gormtx.NewGormIdempotencyStore(db))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandlerGorm(apiKeys))
 	delivered, err := d.RunOnce(ctx, 10)
 	if err != nil {
@@ -243,7 +245,8 @@ func TestGorm_AC2_ExactlyOnceUnderDoubleClaim(t *testing.T) {
 	// once even across two deliveries.
 	revoke := revokeKeysHandlerGorm(apiKeys)
 	committedRuns := 0
-	d := events.NewDispatcher(store, tx, gormtx.NewGormIdempotencyStore(db))
+	cursors := gormtx.NewGormOutboxCursorStore(db)
+	d := events.NewDispatcher(store, cursors, tx, gormtx.NewGormIdempotencyStore(db))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
 		if err := revoke(hctx, evt); err != nil {
 			return err
@@ -257,13 +260,12 @@ func TestGorm_AC2_ExactlyOnceUnderDoubleClaim(t *testing.T) {
 		t.Fatalf("first dispatch: %v", err)
 	}
 
-	// Force a SECOND delivery of the same event: clear delivered_time + lease so
-	// the SAME row is claimed again (a lapsed-lease / re-claim, without changing the
-	// store API). The marker from the first delivery must make this a no-op.
-	if err := db.WithContext(ctx).Model(&gormtx.OutboxRow{}).
-		Where("id IS NOT NULL").
-		Updates(map[string]any{"delivered_time": nil, "leased_until": nil}).Error; err != nil {
-		t.Fatalf("force re-claim: %v", err)
+	// Force a SECOND delivery of the SAME event by REWINDING the sidecar cursor to the
+	// start (modelling a crash between deliver and cursor-advance). The outbox is
+	// write-only, so re-delivery is "re-read from before the event", not a re-claim. The
+	// idempotency marker from the first delivery must make this a no-op.
+	if err := cursors.SaveCursor(ctx, events.DefaultCursorName, persistence.OutboxCursor{}, 0); err != nil {
+		t.Fatalf("rewind cursor: %v", err)
 	}
 	if _, err := d.RunOnce(ctx, 10); err != nil {
 		t.Fatalf("second dispatch: %v", err)
@@ -347,7 +349,7 @@ func TestGorm_TenantIsolation_DispatchScopesHandlerToEventTenant(t *testing.T) {
 	// If the dispatcher did not re-scope the handler to the event's tenant, the
 	// revoke would run unscoped and delete BOTH tenants' keys.
 	bg := context.Background()
-	d := events.NewDispatcher(store, tx, gormtx.NewGormIdempotencyStore(db))
+	d := events.NewDispatcher(store, gormtx.NewGormOutboxCursorStore(db), tx, gormtx.NewGormIdempotencyStore(db))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandlerGorm(apiKeys))
 	if _, err := d.RunOnce(bg, 10); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -405,10 +407,14 @@ func TestGorm_AC2_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	committedKeys := map[string]struct{}{}
 	revoke := revokeKeysHandlerGorm(apiKeys)
 
-	// Two independent dispatchers sharing the same store/idempotency table.
+	// Two dispatchers sharing the same store, idempotency table, AND cursor sidecar, so
+	// both read the same head event before either advances — a genuine concurrent
+	// double-delivery. (The SDK assumes one dispatcher per service; this deliberately
+	// shares the cursor to prove the idempotency marker is the exactly-once guard.)
 	idem := gormtx.NewGormIdempotencyStore(db)
+	cursors := gormtx.NewGormOutboxCursorStore(db)
 	mkDispatcher := func() *events.Dispatcher {
-		d := events.NewDispatcher(store, tx, idem)
+		d := events.NewDispatcher(store, cursors, tx, idem)
 		d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
 			if err := revoke(hctx, evt); err != nil {
 				return err
@@ -424,43 +430,29 @@ func TestGorm_AC2_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 		return d
 	}
 
-	// Force the same row to be claimable by clearing the lease before each racer, so
-	// both genuinely contend for delivery.
-	if err := db.WithContext(ctx).Model(&gormtx.OutboxRow{}).
-		Where("id IS NOT NULL").
-		Updates(map[string]any{"delivered_time": nil, "leased_until": nil}).Error; err != nil {
-		t.Fatalf("reset lease: %v", err)
-	}
-
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// A racer that hits a transient marker conflict / busy is acceptable
-			// (at-least-once: the row stays undelivered for retry); the exactly-once
-			// invariant is checked on the live key count below.
+			// A racer that hits a transient marker conflict is acceptable (at-least-once:
+			// the cursor stays put for retry); the exactly-once invariant is checked on
+			// the live key count below.
 			_, _ = mkDispatcher().RunOnce(ctx, 10)
 		}()
 	}
 	wg.Wait()
 
 	// Exactly-once invariant: the key is revoked, and there is no path by which the
-	// revoke ran twice with effect (a hard delete is idempotent on the row, but a
-	// double-COMMIT of the marker would have violated the unique constraint — which
-	// is exactly what we rely on). The key must be gone and stay gone.
+	// revoke ran twice with effect (a double-COMMIT of the marker would have violated
+	// the unique constraint — exactly what we rely on). The key must be gone and stay gone.
 	if remaining, _, _ := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10}); len(remaining) != 0 {
 		t.Fatalf("the key must be revoked exactly once and stay revoked, %d present", len(remaining))
 	}
-	// The outbox row must end up delivered (at least one racer succeeded).
-	var undelivered int64
-	db.WithContext(ctx).Model(&gormtx.OutboxRow{}).Where("delivered_time IS NULL").Count(&undelivered)
-	if undelivered != 0 {
-		// A surviving undelivered row would be re-delivered by a later poll; drive one
-		// more pass to confirm it converges (still exactly-once via the marker).
-		if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
-			t.Fatalf("convergence pass: %v", err)
-		}
+	// Drive one more pass so the cursor converges past the event (a racer that lost the
+	// marker race left the cursor un-advanced) — still exactly-once via the marker.
+	if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
+		t.Fatalf("convergence pass: %v", err)
 	}
 }
 

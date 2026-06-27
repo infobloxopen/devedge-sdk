@@ -113,41 +113,50 @@ func (s *MemoryIdempotencyStore) Record(ctx context.Context, key string) error {
 // compile-time check.
 var _ IdempotencyStore = (*MemoryIdempotencyStore)(nil)
 
+// DefaultCursorName is the sidecar cursor name a Dispatcher uses when the caller does
+// not set one with [WithCursorName]. A service runs a single in-process dispatcher
+// instance (the SDK assumption — the external WAL/queue consumer is the scale-out
+// path), so one named cursor per dispatcher is sufficient.
+const DefaultCursorName = "default"
+
 // Dispatcher delivers committed outbox events to registered handlers at-least-once
-// (F032 G-3). The dev default is an in-process poller (F032 D-3): it claims
-// eligible rows from the [persistence.OutboxStore] (a claimed-flag/lease claim,
-// NOT SELECT ... FOR UPDATE SKIP LOCKED — ent sql/lock is off in this repo) and
-// runs each registered handler for the event's type in its own
-// [persistence.TxRunner] transaction.
+// (F032 G-3) for SAME-DB cross-aggregate reactions (e.g. iam UserSuspended → revoke
+// the user's API keys). The dev default is an in-process FORWARD-CURSOR consumer
+// (F033): the outbox table is WRITE-ONLY, so the dispatcher never claims, leases,
+// marks, or deletes an outbox row. Instead it keeps its OWN position in a sidecar
+// ([persistence.OutboxCursorStore]), reads the outbox forward
+// ([persistence.OutboxStore.ReadAfter] — `(created_time, id) > cursor ORDER BY
+// created_time, id LIMIT n`), delivers each event to its handlers in commit/created
+// order, and ADVANCES the sidecar cursor past it. Cross-server delivery (publishing to
+// queues) is OUT OF SCOPE — that is an external project that tails the outbox via the
+// [persistence.OutboxCDCConsumer] seam.
 //
-// F033 (append-only, churn-free): the outbox table is never DELETEd from on the
-// dispatch path — retention drains it by dropping whole partitions
-// ([persistence.OutboxRetention]). On success the dispatcher makes ONE terminal
-// delivered-mark per event ([persistence.OutboxStore.MarkDelivered]) that excludes
-// the row from every future claim, so a delivered event is never re-leased,
-// re-attempted, or aged into the poison cutoff — the happy path is one bounded UPDATE
-// per event, not a per-poll re-lease. The per-(event, handler) idempotency marker is
-// the exactly-once correctness guard for a rare in-flight double-claim (a lease that
-// lapsed before the delivered-mark committed); a poison event that never delivers
-// stops being claimed once Attempts reaches maxAttempts (the poison cutoff, enforced
-// by ClaimUndelivered).
+// Exactly-once effect: delivery is AT-LEAST-ONCE (a crash between deliver and
+// cursor-advance re-delivers the same event), guarded into an exactly-once EFFECT by
+// the per-(event, handler) [IdempotencyStore] marker, which commits INSIDE the
+// handler's transaction. A re-delivery whose marker is already committed is a no-op.
+// This is robust even if cursor concurrency is imperfect; the SDK assumes a single
+// dispatcher instance per service for the cursor regardless.
 //
 // Delivery semantics:
-//   - At-least-once: a handler error (or crash) leaves the event un-applied and
-//     un-marked, so a later claim re-delivers it. Handlers MUST be idempotent.
-//   - Idempotency: each (event id, handler) pair is recorded in the
-//     [IdempotencyStore] once its tx commits; a redelivery skips an already-applied
-//     pair, so a duplicate delivery is a no-op (AC-2). This guards the window between
-//     a lapsed lease and the delivered-mark.
-//   - Churn-free happy path: a delivered row is marked once and then excluded from
-//     claims — no per-poll re-lease UPDATE of an already-delivered event (F033).
-//   - Poison cutoff: an event that never delivers stops being claimed once it has
-//     been attempted maxAttempts times, so a permanently failing event stops looping
-//     (F033 AC-3) — a delivered event never reaches the cutoff.
-//   - Per-event ordering only: events for one aggregate claim in append order, but
-//     no global order is promised (F032 non-goal).
+//   - Forward cursor: events are read and delivered in (created_time, id) order
+//     (commit/created order). Per-aggregate ordering is therefore preserved.
+//   - At-least-once + idempotency = exactly-once effect: a handler error (or crash)
+//     leaves the cursor un-advanced, so a later RunOnce re-delivers; the idempotency
+//     marker makes a re-delivery a no-op. Handlers MUST be idempotent.
+//   - Write-only outbox: the dispatcher NEVER mutates an outbox row — all progress is
+//     the sidecar cursor. A delivered event is never re-touched or re-written.
+//   - Poison / head-of-line: the head event is the oldest un-consumed event. If it
+//     fails delivery, the cursor does not advance (it would skip the gap), so the
+//     batch stops at the head — bounded head-of-line blocking. After maxAttempts
+//     consecutive failures on the SAME head event, the dispatcher records it to the
+//     sidecar dead-letter and advances PAST it, so one permanently-failing event does
+//     not wedge the stream forever (F033 AC-3). The head-failure count lives in the
+//     sidecar, not in an outbox attempts column.
 type Dispatcher struct {
 	store       persistence.OutboxStore
+	cursors     persistence.OutboxCursorStore
+	cursorName  string
 	tx          persistence.TxRunner
 	idem        IdempotencyStore
 	maxAttempts int
@@ -163,8 +172,9 @@ type registeredHandler struct {
 // DispatcherOption configures a Dispatcher.
 type DispatcherOption func(*Dispatcher)
 
-// WithMaxAttempts sets the poison cutoff: a row attempted this many times is no
-// longer claimed (F033). A non-positive value keeps the default
+// WithMaxAttempts sets the poison cutoff: after this many consecutive failed
+// deliveries of the SAME head event, the dispatcher dead-letters it (in the sidecar)
+// and advances the cursor past it (F033). A non-positive value keeps the default
 // ([persistence.DefaultMaxOutboxAttempts]).
 func WithMaxAttempts(n int) DispatcherOption {
 	return func(d *Dispatcher) {
@@ -174,12 +184,30 @@ func WithMaxAttempts(n int) DispatcherOption {
 	}
 }
 
-// NewDispatcher returns a Dispatcher that claims from store, runs handlers in tx,
-// and dedups via idem. tx is the [persistence.TxRunner] for the aggregates the
-// handlers write (each handler runs inside it). idem may be nil to use a fresh
-// in-memory [MemoryIdempotencyStore]. The poison cutoff defaults to
-// [persistence.DefaultMaxOutboxAttempts]; override it with [WithMaxAttempts].
-func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem IdempotencyStore, opts ...DispatcherOption) *Dispatcher {
+// WithCursorName sets the sidecar cursor name this dispatcher advances. Defaults to
+// [DefaultCursorName]. Use it only if a service runs more than one logical cursor over
+// the same outbox (uncommon — the SDK assumes one dispatcher per service).
+func WithCursorName(name string) DispatcherOption {
+	return func(d *Dispatcher) {
+		if name != "" {
+			d.cursorName = name
+		}
+	}
+}
+
+// NewDispatcher returns a Dispatcher that reads store forward via the cursors sidecar,
+// runs handlers in tx, and dedups via idem. cursors is the
+// [persistence.OutboxCursorStore] the dispatcher advances (its own progress — the
+// outbox is write-only); pass nil to use a fresh in-memory
+// [persistence.MemoryOutboxCursorStore] (dev default). tx is the
+// [persistence.TxRunner] for the aggregates the handlers write (each handler runs
+// inside it). idem may be nil to use a fresh in-memory [MemoryIdempotencyStore]. The
+// poison cutoff defaults to [persistence.DefaultMaxOutboxAttempts]; override it with
+// [WithMaxAttempts].
+func NewDispatcher(store persistence.OutboxStore, cursors persistence.OutboxCursorStore, tx persistence.TxRunner, idem IdempotencyStore, opts ...DispatcherOption) *Dispatcher {
+	if cursors == nil {
+		cursors = persistence.NewMemoryOutboxCursorStore()
+	}
 	if idem == nil {
 		idem = NewMemoryIdempotencyStore()
 	}
@@ -195,6 +223,8 @@ func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem 
 	}
 	d := &Dispatcher{
 		store:       store,
+		cursors:     cursors,
+		cursorName:  DefaultCursorName,
 		tx:          tx,
 		idem:        idem,
 		maxAttempts: persistence.DefaultMaxOutboxAttempts,
@@ -308,55 +338,77 @@ func (d *Dispatcher) deliver(ctx context.Context, evt Event) error {
 	return nil
 }
 
-// RunOnce claims up to limit eligible events (Attempts < maxAttempts, lease lapsed)
-// and delivers each. It returns the number of events successfully delivered (all
-// their handlers applied). An event whose handler errors is left for a later RunOnce
-// (at-least-once retry); RunOnce does not fail the whole batch for one bad event. A
-// poller calls RunOnce on a tick; tests call it directly to drive delivery
-// deterministically.
+// RunOnce reads up to limit events forward from the sidecar cursor and delivers each
+// in (created_time, id) order, advancing the cursor PAST every event it resolves. It
+// returns the number of events resolved this pass (delivered, deduped, or
+// dead-lettered) — i.e. how far the cursor advanced. A poller calls RunOnce on a tick;
+// tests call it directly to drive delivery deterministically.
 //
-// F033 (append-only, churn-free): on success the row gets a SINGLE terminal
-// delivered-mark (MarkDelivered) — one bounded UPDATE per event — which excludes it
-// from every future claim, so a delivered event is never re-leased, re-attempted, or
-// aged into the poison cutoff (no per-poll write churn). The row is NEVER DELETEd;
-// retention drops whole partitions. The per-(event, handler) idempotency marker
-// remains the exactly-once correctness guard for a rare in-flight double-claim (a
-// lease that lapsed before MarkDelivered committed).
+// F033 forward cursor (write-only outbox): the dispatcher NEVER mutates an outbox row.
+// It loads its position from the sidecar, ReadAfter(cursor, limit) pulls the next batch
+// without touching the rows, and on a successful deliver() it advances the sidecar
+// cursor to that event. Because events are read in order, the FIRST event of the batch
+// is the head (oldest un-consumed). If the head fails, the cursor cannot advance past
+// it without skipping a gap, so the batch stops there — bounded head-of-line blocking.
+// The head-failure count is tracked in the sidecar; after maxAttempts consecutive
+// failures on the same head event it is dead-lettered (recorded in the sidecar) and the
+// cursor advances past it so the stream is not wedged forever (AC-3). The outbox row is
+// never touched — only the sidecar records the dead-letter verdict.
+//
+// Exactly-once effect: a crash between deliver() and the cursor-advance re-delivers the
+// event on the next RunOnce; the per-(event, handler) idempotency marker (committed in
+// the handler tx) makes that re-delivery a no-op — at-least-once + idempotency.
 func (d *Dispatcher) RunOnce(ctx context.Context, limit int) (delivered int, err error) {
-	claimed, err := d.store.ClaimUndelivered(ctx, d.maxAttempts, limit)
+	cursor, headFailures, err := d.cursors.LoadCursor(ctx, d.cursorName)
 	if err != nil {
-		return 0, fmt.Errorf("claim undelivered: %w", err)
+		return 0, fmt.Errorf("load cursor %q: %w", d.cursorName, err)
 	}
-	for _, rec := range claimed {
+	batch, err := d.store.ReadAfter(ctx, cursor, limit)
+	if err != nil {
+		return 0, fmt.Errorf("read outbox after cursor: %w", err)
+	}
+	for _, rec := range batch {
 		evt := eventFromRecord(rec)
+		pos := persistence.OutboxCursor{CreatedTime: rec.CreatedTime, ID: rec.ID}
 		if derr := d.deliver(ctx, evt); derr != nil {
-			// Release the lease so the retry is prompt rather than lease-delayed; the
-			// row stays for re-claim (until it crosses the maxAttempts poison cutoff).
-			// Surface the first error so a caller can log it, but keep processing the
-			// batch (one bad event must not stall the others — at-least-once).
-			_ = d.store.Release(ctx, rec.ID)
-			if err == nil {
-				err = derr
+			// The head event failed. Bump its sidecar head-failure count; do NOT advance
+			// the cursor (advancing would skip the gap and lose the event — write-only
+			// outbox, the cursor is the only progress). Stop the batch here so order and
+			// the head-of-line property hold (a later event must not be delivered before
+			// this one). After maxAttempts on this same head event, dead-letter it and
+			// advance past it so a permanently failing event does not wedge the stream.
+			headFailures++
+			if headFailures >= d.maxAttempts {
+				if dlErr := d.cursors.DeadLetter(ctx, d.cursorName, rec, derr.Error()); dlErr != nil {
+					return delivered, fmt.Errorf("dead-letter %s: %w", rec.ID, dlErr)
+				}
+				if serr := d.cursors.SaveCursor(ctx, d.cursorName, pos, 0); serr != nil {
+					return delivered, fmt.Errorf("advance past poison %s: %w", rec.ID, serr)
+				}
+				delivered++ // resolved by dead-lettering; the cursor moved past it
+				return delivered, fmt.Errorf("dead-lettered poison event %s after %d attempts: %w", rec.ID, headFailures, derr)
 			}
-			continue
+			if serr := d.cursors.SaveCursor(ctx, d.cursorName, cursor, headFailures); serr != nil {
+				return delivered, fmt.Errorf("save head-failure count: %w", serr)
+			}
+			return delivered, fmt.Errorf("deliver %s: %w", rec.ID, derr)
 		}
-		// Delivered: every handler's marker is committed. Stamp the row delivered ONCE
-		// so it is never re-claimed — the churn-free happy path (one UPDATE per event,
-		// never a DELETE). A failure to mark is non-fatal: the worst case is a single
-		// idempotent redelivery on a later poll (the markers make it a no-op), so it
-		// must not fail the batch; surface it as the batch error if none is set yet.
-		if merr := d.store.MarkDelivered(ctx, rec.ID); merr != nil && err == nil {
-			err = fmt.Errorf("mark delivered %s: %w", rec.ID, merr)
+		// Delivered (every handler applied or was already-applied). Advance the cursor
+		// past this event and reset the head-failure count — the next head is the next
+		// event. The outbox row is untouched.
+		cursor = pos
+		headFailures = 0
+		if serr := d.cursors.SaveCursor(ctx, d.cursorName, cursor, 0); serr != nil {
+			return delivered, fmt.Errorf("advance cursor past %s: %w", rec.ID, serr)
 		}
 		delivered++
 	}
-	return delivered, err
+	return delivered, nil
 }
 
 // Poll runs RunOnce on every tick of interval until ctx is cancelled. It is the
-// in-process poller dev default; a caller wires it as a goroutine. Errors from a
-// tick are reported through onErr (nil to ignore) so one bad event does not stop
-// the loop.
+// in-process poller dev default; a caller wires it as a goroutine. Errors from a tick
+// are reported through onErr (nil to ignore) so one bad event does not stop the loop.
 func (d *Dispatcher) Poll(ctx context.Context, interval time.Duration, batch int, onErr func(error)) {
 	if interval <= 0 {
 		interval = time.Second
@@ -378,7 +430,14 @@ func (d *Dispatcher) Poll(ctx context.Context, interval time.Duration, batch int
 	}
 }
 
-// eventFromRecord rebuilds the Event a handler sees from a claimed outbox row.
+// Cursor returns the dispatcher's current forward position (for tests/introspection):
+// the (created_time, id) of the last event it consumed.
+func (d *Dispatcher) Cursor(ctx context.Context) (persistence.OutboxCursor, error) {
+	c, _, err := d.cursors.LoadCursor(ctx, d.cursorName)
+	return c, err
+}
+
+// eventFromRecord rebuilds the Event a handler sees from an outbox row.
 func eventFromRecord(rec *persistence.OutboxRecord) Event {
 	return Event{
 		ID:            rec.ID,

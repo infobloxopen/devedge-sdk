@@ -18,6 +18,8 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/idemmarker"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outboxcursor"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outboxdeadletter"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 )
 
@@ -79,13 +81,15 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			account.Table:    account.ValidColumn,
-			apikey.Table:     apikey.ValidColumn,
-			group.Table:      group.ValidColumn,
-			idemmarker.Table: idemmarker.ValidColumn,
-			membership.Table: membership.ValidColumn,
-			outbox.Table:     outbox.ValidColumn,
-			user.Table:       user.ValidColumn,
+			account.Table:          account.ValidColumn,
+			apikey.Table:           apikey.ValidColumn,
+			group.Table:            group.ValidColumn,
+			idemmarker.Table:       idemmarker.ValidColumn,
+			membership.Table:       membership.ValidColumn,
+			outbox.Table:           outbox.ValidColumn,
+			outboxcursor.Table:     outboxcursor.ValidColumn,
+			outboxdeadletter.Table: outboxdeadletter.ValidColumn,
+			user.Table:             user.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

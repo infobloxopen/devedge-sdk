@@ -50,7 +50,7 @@ func newOrderAggregateWithOutbox(failAfter error) (
 ) {
 	roots := persistence.NewMemoryRepository(func(o *ordr) string { return o.ID })
 	items := persistence.NewMemoryRepository(func(i *lineItem) string { return i.ID })
-	store := persistence.NewMemoryOutboxStore(0)
+	store := persistence.NewMemoryOutboxStore()
 	// One runner spanning all three participants: this is what lets a Publish issued
 	// from inside Save's tx share the aggregate write's commit.
 	tx := persistence.NewMemoryTxRunner(roots, items, store)
@@ -158,7 +158,7 @@ func TestIntegration_AggregateSavePublishesEventAtomically(t *testing.T) {
 	// The full loop: a dispatcher delivers the committed event to a handler in its
 	// own Atomically (F030 again, on the same runner).
 	got := ""
-	d := events.NewDispatcher(store, tx, events.NewMemoryIdempotencyStore())
+	d := events.NewDispatcher(store, persistence.NewMemoryOutboxCursorStore(), tx, events.NewMemoryIdempotencyStore())
 	d.Subscribe("ItemAdded", "record", func(hctx context.Context, evt events.Event) error {
 		if err := persistence.RequireTx(hctx); err != nil {
 			return err // the handler must run inside its own tx
@@ -173,11 +173,11 @@ func TestIntegration_AggregateSavePublishesEventAtomically(t *testing.T) {
 	if delivered != 1 || got != "i1" {
 		t.Fatalf("the event must reach the handler: delivered=%d payload=%q", delivered, got)
 	}
-	// F033 (append-only): delivery NEVER deletes the event row — it gets a single
-	// terminal delivered-mark and then survives until a partition drop. The handler ran
-	// (got=="i1"); the row count only ever grows (no per-row DELETE on the dispatch path).
+	// F033 (write-only): delivery NEVER mutates or deletes the event row — the
+	// dispatcher only advances its sidecar cursor. The handler ran (got=="i1"); the row
+	// count only ever grows (no per-row UPDATE/DELETE on the dispatch path).
 	if all := store.All(); len(all) != 1 {
-		t.Fatalf("append-only: the delivered event row must survive (count only grows), got %d", len(all))
+		t.Fatalf("write-only: the consumed event row must survive (count only grows), got %d", len(all))
 	}
 }
 

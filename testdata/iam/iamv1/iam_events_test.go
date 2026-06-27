@@ -113,7 +113,7 @@ func TestAC3_UserSuspendedRevokesKeysEventually(t *testing.T) {
 	// The idempotency store is the SQL-backed EntIdempotencyStore, so the marker
 	// commits with the handler's revoke in one ent transaction (the ent path is now
 	// genuinely transactional, not the in-memory store).
-	d := events.NewDispatcher(store, tx, iamv1.NewEntIdempotencyStore(client))
+	d := events.NewDispatcher(store, iamv1.NewEntOutboxCursorStore(client), tx, iamv1.NewEntIdempotencyStore(client))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandler(client, apiKeys))
 	delivered, err := d.RunOnce(ctx, 10)
 	if err != nil {
@@ -255,7 +255,7 @@ func TestTenantIsolation_DispatchScopesHandlerToEventTenant(t *testing.T) {
 
 	// Dispatch with a BACKGROUND ctx that has NO tenant — modelling a real poller.
 	bg := context.Background()
-	d := events.NewDispatcher(store, tx, iamv1.NewEntIdempotencyStore(client))
+	d := events.NewDispatcher(store, iamv1.NewEntOutboxCursorStore(client), tx, iamv1.NewEntIdempotencyStore(client))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandler(client, apiKeys))
 	if _, err := d.RunOnce(bg, 10); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -374,8 +374,13 @@ func TestAC2_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	committedEffects := 0
 	revoke := revokeKeysHandler(client, apiKeys)
 	idem := iamv1.NewEntIdempotencyStore(client)
+	// One SHARED cursor sidecar: both dispatchers read the same head event before either
+	// advances, so they genuinely contend for the same delivery. (The SDK assumes one
+	// dispatcher per service; this deliberately violates that to prove the idempotency
+	// marker — not the cursor — is the exactly-once guard.)
+	cursors := iamv1.NewEntOutboxCursorStore(client)
 	mkDispatcher := func() *events.Dispatcher {
-		d := events.NewDispatcher(store, tx, idem)
+		d := events.NewDispatcher(store, cursors, tx, idem)
 		d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
 			if err := revoke(hctx, evt); err != nil {
 				return err
@@ -393,8 +398,8 @@ func TestAC2_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// A racer that hits the marker conflict / a busy row is acceptable
-			// (at-least-once: the row stays for retry); exactly-once is asserted below.
+			// A racer that hits the marker conflict is acceptable (at-least-once: the
+			// cursor stays put for retry); exactly-once is asserted below.
 			_, _ = mkDispatcher().RunOnce(ctx, 10)
 		}()
 	}
@@ -404,12 +409,10 @@ func TestAC2_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	if remaining, _, _ := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10}); len(remaining) != 0 {
 		t.Fatalf("the key must be revoked exactly once and stay revoked, %d present", len(remaining))
 	}
-	// A surviving undelivered row would be re-delivered by a later poll; drive one
-	// more pass so the row is terminal before asserting on the marker count.
-	if undelivered, _ := client.Outbox.Query().Where(entoutbox.DeliveredTimeIsNil()).Count(ctx); undelivered != 0 {
-		if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
-			t.Fatalf("convergence pass: %v", err)
-		}
+	// Drive one more pass so the cursor converges past the event before asserting on the
+	// marker count (a racer that lost the marker race left the cursor un-advanced).
+	if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
+		t.Fatalf("convergence pass: %v", err)
 	}
 	// Exactly one idempotency marker committed across the two racers: the marker is
 	// unique per (event, handler), so a single marker row is the engine-level proof
