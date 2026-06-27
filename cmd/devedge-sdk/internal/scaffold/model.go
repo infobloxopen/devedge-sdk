@@ -39,7 +39,7 @@ const (
 	protobufVersion       = "v1.36.11"
 	gormVersion           = "v1.31.1"
 	// ent backend deps (mirror testdata/apikey + testdata/fleet).
-	entVersion     = "v0.14.6"
+	entVersion           = "v0.14.6"
 	moderncSQLiteVersion = "v1.52.0"
 	fieldBindingVersion  = "v1.0.0-alpha.1"
 )
@@ -64,6 +64,12 @@ type Options struct {
 	NoGenerate bool
 	// Force allows generating into a non-empty directory.
 	Force bool
+	// Aggregate scaffolds the resource as a DDD aggregate ROOT that owns a member
+	// (containment) resource, and wires the aggregate + transactional-outbox
+	// machinery in the generated main (a TxRunner, an AggregateRepository over the
+	// generated graph-load primitive, and an outbox Publisher + Dispatcher). When
+	// false the scaffold emits the plain Tier-1 CRUD service (byte-stable default).
+	Aggregate bool
 }
 
 // Model is the fully-resolved template data. Field names are referenced by the
@@ -75,11 +81,26 @@ type Model struct {
 	ResourceSnake  string // snake_case resource, e.g. "order"
 	ResourcePlural string // lower plural, e.g. "orders"
 	ServiceLower   string // lower service name, e.g. "orders"
-	Module         string // go module path
-	Org            string // apx org
-	RepoName       string // apx repo name (last path element of Module)
-	Backend        Backend
-	BinName        string // server binary name, e.g. "orders"
+
+	// Aggregate is true when the resource is scaffolded as a DDD aggregate root
+	// (gates the aggregate + outbox wiring in the templates). The Member* fields
+	// describe the owned containment member that gives the root a graph to load.
+	Aggregate   bool
+	Member      string // PascalCase member resource type, e.g. "OrderItem"
+	MemberSnake string // snake_case member type, e.g. "order_item"
+	// MemberField is the root's repeated containment field name (a SINGLE word, so
+	// the proto field, the ent edge, and entc's camelCased accessor all agree —
+	// mirrors fleet's `vehicles`). The proto field is its lower-case form, the Go
+	// accessor is MemberField + Get.
+	MemberField      string // Go field name on the root proto, e.g. "Items"
+	MemberFieldProto string // proto field name (lower), e.g. "items"
+	MemberFieldFK    string // FK column on the member pointing back at the root, e.g. "order_id"
+	MemberFKGoField  string // Go field name of that FK on the member proto, e.g. "OrderId"
+	Module           string // go module path
+	Org              string // apx org
+	RepoName         string // apx repo name (last path element of Module)
+	Backend          Backend
+	BinName          string // server binary name, e.g. "orders"
 
 	ProtoPackage    string // proto package, e.g. "orders.v1"
 	ProtoPathSuffix string // path of the .proto SOURCE under proto/, e.g. "orders/v1"
@@ -165,6 +186,12 @@ func (o Options) Validate() (*Model, error) {
 
 	repoName := module[strings.LastIndex(module, "/")+1:]
 
+	// An aggregate root owns a member (containment) resource so the generated
+	// Load<Root>Aggregate graph-load primitive is emitted (it is only generated for
+	// a root that has at least one containment member). The member is named
+	// "<Resource>Item" so it never collides with the root's own type/columns.
+	member := res + "Item"
+
 	m := &Model{
 		Service:        pascal(svc),
 		ServiceType:    res + "Service",
@@ -172,18 +199,26 @@ func (o Options) Validate() (*Model, error) {
 		ResourceSnake:  snake(res),
 		ResourcePlural: snake(res) + "s",
 		ServiceLower:   svc,
-		Module:         module,
-		Org:            org,
-		RepoName:       repoName,
-		Backend:        o.Backend,
-		BinName:        svc,
-		ProtoPackage:   svc + ".v1",
-		ProtoPathSuffix: svc + "/v1",
-		ProtoFile:      svc + ".proto",
-		GoPkg:          svc + "v1",
-		GoImportPath:   module + "/gen/" + svc + "v1",
-		GRPCPort:       "9090",
-		HTTPPort:       "8080",
+
+		Aggregate:        o.Aggregate,
+		Member:           member,
+		MemberSnake:      snake(member),
+		MemberField:      "Items",
+		MemberFieldProto: "items",
+		MemberFieldFK:    snake(res) + "_id",
+		MemberFKGoField:  res + "Id",
+		Module:           module,
+		Org:              org,
+		RepoName:         repoName,
+		Backend:          o.Backend,
+		BinName:          svc,
+		ProtoPackage:     svc + ".v1",
+		ProtoPathSuffix:  svc + "/v1",
+		ProtoFile:        svc + ".proto",
+		GoPkg:            svc + "v1",
+		GoImportPath:     module + "/gen/" + svc + "v1",
+		GRPCPort:         "9090",
+		HTTPPort:         "8080",
 
 		SDKVersion:            resolveSDKVersion(),
 		GlebarezSQLiteVersion: glebarezSQLiteVersion,

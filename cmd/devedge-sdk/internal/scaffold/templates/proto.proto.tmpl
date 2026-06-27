@@ -18,9 +18,23 @@ import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/authz/v1/authz.proto";
 import "infoblox/field/v1/field.proto";
+{{- if .Aggregate}}
+import "infoblox/ddd/v1/ddd.proto";
+{{- end}}
 
 // {{.Resource}} is the resource managed by {{.Service}}.
+{{- if .Aggregate}}
+//
+// {{.Resource}} is a DDD aggregate ROOT: it owns its {{.Member}} members
+// (containment). The {{.Resource}}→{{.Member}} edge generates OnDelete: Cascade,
+// the etag is the aggregate version an AggregateRepository.Save bumps on any
+// member change, and the generated Load{{.Resource}}Aggregate{{"{"}}Gorm{{"}"}} graph-load
+// primitive eager-loads the whole cluster (wired in server/main.go).
+{{- end}}
 message {{.Resource}} {
+{{- if .Aggregate}}
+  option (infoblox.ddd.v1.aggregate) = {root: true};
+{{- end}}
   option (google.api.resource) = {
     type: "{{.ProtoPackage}}/{{.Resource}}"
     pattern: "{{.ResourcePlural}}/{{"{"}}{{.ResourceSnake}}{{"}"}}"
@@ -39,7 +53,33 @@ message {{.Resource}} {
   string etag         = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
   // AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.
   google.protobuf.Timestamp delete_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+{{- if .Aggregate}}
+  // has_many: the owned {{.Member}} members, keyed by the {{.MemberFieldFK}} FK on the
+  // member side. This containment edge is what makes {{.Resource}} an aggregate with a
+  // graph to load and save atomically. The field is a single word ("{{.MemberFieldProto}}") so
+  // the proto field, the ent edge, and entc's accessor all agree.
+  repeated {{.Member}} {{.MemberFieldProto}} = 8 [(infoblox.field.v1.opts) = {has_many: {foreign_key: "{{.MemberFieldFK}}"}}];
+{{- end}}
 }
+{{- if .Aggregate}}
+
+// {{.Member}} is a MEMBER owned by the {{.Resource}} aggregate (containment): it is
+// written THROUGH the root, never independently, so it has NO CRUD service of its
+// own — the boot-time boundary gate fails closed on a direct member write. Its
+// belongs_to {{.Resource}} FK generates OnDelete: Cascade.
+message {{.Member}} {
+  option (infoblox.ddd.v1.member) = {root: "{{.Resource}}"};
+
+  string id           = 1;
+  string account_id   = 2;
+  string display_name = 3 [(infoblox.field.v1.opts) = {index: true}];
+  // Scalar FK to the owning {{.Resource}}, queryable per AIP and reused by the
+  // belongs_to edge below.
+  string {{.MemberFieldFK}} = 4;
+  // belongs_to: the parent {{.Resource}}; the FK ({{.MemberFieldFK}}) lives on this table.
+  {{.Resource}} {{.ResourceSnake}} = 5 [(infoblox.field.v1.opts) = {belongs_to: {foreign_key: "{{.MemberFieldFK}}"}}];
+}
+{{- end}}
 
 // {{.ServiceType}} is a CRUD service over {{.Resource}}. EVERY rpc carries an
 // (infoblox.authz.v1.rule): the server asserts at boot that all methods are

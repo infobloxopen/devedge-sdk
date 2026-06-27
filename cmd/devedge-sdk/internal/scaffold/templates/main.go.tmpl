@@ -13,11 +13,26 @@
 // the handler + rule wiring are generated. To add custom (non-CRUD) logic, embed
 // {{.GoPkg}}.{{.ServiceType}}CRUDHandler, override the methods you change, and
 // register it with {{.GoPkg}}.Register{{.ServiceType}}(s, h).
+{{- if .Aggregate}}
+//
+// {{.Resource}} is a DDD aggregate ROOT (it owns {{.Member}} members). This file
+// additionally wires the aggregate + transactional-outbox machinery out of the box:
+//   - a gormtx.GormTxRunner makes a root+members Save one transaction;
+//   - a persistence.AggregateRepository loads/saves the whole {{.Resource}} cluster
+//     atomically over the generated Load{{.Resource}}AggregateGorm graph-load primitive;
+//   - an events.Publisher + events.Dispatcher form a transactional outbox so a
+//     change to {{.Resource}} can react onto another aggregate by eventual consistency.
+//
+// See newAggregate / newOutbox below; both are constructed in newServer.
+{{- end}}
 package main
 
 import (
 	"context"
 	"log"
+{{- if .Aggregate}}
+	"time"
+{{- end}}
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -25,11 +40,137 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+{{- if .Aggregate}}
+	"github.com/infobloxopen/devedge-sdk/events"
+{{- end}}
 	"github.com/infobloxopen/devedge-sdk/persistence"
+{{- if .Aggregate}}
+	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
+{{- end}}
 	"github.com/infobloxopen/devedge-sdk/server"
 
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
+
+{{- if .Aggregate}}
+
+// newDB opens the database and migrates the aggregate's models plus the reusable
+// SDK outbox + idempotency tables. SQLite (pure-Go, no CGo) keeps the scaffold
+// runnable out of the box; swap the dialector for postgres/mysql in production.
+func newDB() (*gorm.DB, error) {
+	// Silence GORM's default logger: it writes every SQL statement and an ANSI
+	// "record not found" line for each miss, which floods test/dev output. Use
+	// logger.Default.LogMode(logger.Warn) to surface slow queries/errors only, or
+	// pass a logger.Interface adapter to route through your structured logger.
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := db.AutoMigrate(
+		&{{.GoPkg}}.{{.Resource}}Model{},
+		&{{.GoPkg}}.{{.Member}}Model{},
+		&gormtx.OutboxRow{},
+		&gormtx.IdemMarker{},
+	); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+// newAggregate wires the SDK's backend-neutral persistence.AggregateRepository
+// over the generated GORM repositories: Load uses the generated graph-load
+// primitive Load{{.Resource}}AggregateGorm, and Save tracks {{.Member}} (member)
+// mutations against the stored cluster — adds/updates/removes through the
+// generated {{.Member}}Repository — all inside ONE gormtx.GormTxRunner
+// transaction, bumping the {{.Resource}} (root) etag on any member change.
+//
+// The service's standard CRUD still runs over the flat {{.Resource}} repository;
+// this aggregate repository is the seam for a custom handler that mutates the whole
+// {{.Resource}} cluster atomically (embed the generated CRUDHandler and override the
+// methods that need it).
+func newAggregate(db *gorm.DB) *persistence.GenericAggregateRepository[*{{.GoPkg}}.{{.Resource}}, string] {
+	roots := {{.GoPkg}}.New{{.Resource}}Repository(db)
+	members := {{.GoPkg}}.New{{.Member}}Repository(db)
+	return persistence.NewGenericAggregateRepository(persistence.AggregateSpec[*{{.GoPkg}}.{{.Resource}}, string]{
+		Tx:       gormtx.NewGormTxRunner(db),
+		RootRepo: roots,
+		KeyOf:    func(r *{{.GoPkg}}.{{.Resource}}) string { return r.GetId() },
+		EtagOf:   func(r *{{.GoPkg}}.{{.Resource}}) string { return r.GetEtag() },
+		LoadMembers: func(ctx context.Context, root *{{.GoPkg}}.{{.Resource}}) (*{{.GoPkg}}.{{.Resource}}, error) {
+			return {{.GoPkg}}.Load{{.Resource}}AggregateGorm(ctx, db, root.GetId())
+		},
+		SaveMembers: func(ctx context.Context, root *{{.GoPkg}}.{{.Resource}}) (bool, error) {
+			// Member-mutation tracking: diff the incoming members against what is
+			// stored (loaded fresh inside the tx) and apply adds/updates/removes.
+			stored, err := {{.GoPkg}}.Load{{.Resource}}AggregateGorm(ctx, db, root.GetId())
+			if err != nil {
+				return false, err
+			}
+			storedByID := map[string]*{{.GoPkg}}.{{.Member}}{}
+			for _, mbr := range stored.Get{{.MemberField}}() {
+				storedByID[mbr.GetId()] = mbr
+			}
+			changed := false
+			wantIDs := map[string]struct{}{}
+			for _, mbr := range root.Get{{.MemberField}}() {
+				wantIDs[mbr.GetId()] = struct{}{}
+				mbr.{{.MemberFKGoField}} = root.GetId()
+				if mbr.AccountId == "" {
+					mbr.AccountId = root.GetAccountId()
+				}
+				if _, ok := storedByID[mbr.GetId()]; !ok {
+					if _, cerr := members.Create(ctx, mbr); cerr != nil {
+						return false, cerr
+					}
+					changed = true
+				} else {
+					if _, uerr := members.Update(ctx, mbr.GetId(), mbr); uerr != nil {
+						return false, uerr
+					}
+					changed = true
+				}
+			}
+			for id := range storedByID {
+				if _, keep := wantIDs[id]; !keep {
+					if derr := members.Delete(ctx, id); derr != nil {
+						return false, derr
+					}
+					changed = true
+				}
+			}
+			return changed, nil
+		},
+	})
+}
+
+// newOutbox wires the F032 transactional-outbox seam over the reusable SDK GORM
+// stores: a Publisher records a domain event in the SAME transaction as the
+// aggregate change that emitted it (call pub.Publish inside the GormTxRunner's
+// Atomically), and a Dispatcher delivers committed events at-least-once to the
+// handlers you Subscribe — each running in its OWN transaction (eventual
+// consistency across aggregates). The GormIdempotencyStore makes delivery
+// exactly-once. Wire your cross-aggregate reactions with d.Subscribe(...) and run
+// d.Poll(ctx, ...) (or d.RunOnce on a tick) from a background goroutine.
+func newOutbox(db *gorm.DB) (events.Publisher, *events.Dispatcher) {
+	tx := gormtx.NewGormTxRunner(db)
+	store := gormtx.NewGormOutboxStore(db)
+	pub := events.NewOutboxPublisher(store)
+	d := events.NewDispatcher(store, tx, gormtx.NewGormIdempotencyStore(db))
+	// Example: react to your aggregate's events here.
+	//   d.Subscribe("{{.ResourceSnake}}.changed", "my-reaction", func(ctx context.Context, evt events.Event) error { ... })
+	return pub, d
+}
+
+// runRetention drops aged outbox data WITHOUT per-row deletes (whole-partition
+// drops on a partitioned SQL backend; a windowed delete on the sqlite dev
+// backend). The SDK owns no cron loop: schedule this from your own scheduler.
+// retentionWindow is how long delivered events are kept before they age out.
+func runRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRetention, retentionWindow time.Duration) (int, error) {
+	return gormtx.RunRetention(ctx, db, store, retentionWindow)
+}
+{{- else}}
 
 // newRepository opens the database, migrates the generated model, and returns the
 // generated GORM repository. SQLite (pure-Go, no CGo) keeps the scaffold runnable
@@ -50,6 +191,7 @@ func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string],
 	}
 	return {{.GoPkg}}.New{{.Resource}}Repository(db), nil
 }
+{{- end}}
 
 // newServer builds a fully wired server with the given authorizer and listen
 // addresses. Returns an error (rather than panicking) so tests can assert the
@@ -67,10 +209,27 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 	if err != nil {
 		return nil, err
 	}
+{{- if .Aggregate}}
+	db, err := newDB()
+	if err != nil {
+		return nil, err
+	}
+	// Aggregate + outbox machinery wired out of the box. The flat CRUD handler is
+	// registered below; agg/pub/d/runRetention are ready for a custom handler that
+	// mutates the {{.Resource}} cluster atomically and reacts across aggregates via
+	// the outbox. They are assigned to _ here so the scaffold compiles and runs
+	// before you add your own handler + dispatch loop.
+	agg := newAggregate(db)
+	pub, d := newOutbox(db)
+	_, _, _ = agg, pub, d
+	_ = runRetention
+	repo := {{.GoPkg}}.New{{.Resource}}Repository(db)
+{{- else}}
 	repo, err := newRepository()
 	if err != nil {
 		return nil, err
 	}
+{{- end}}
 	// One call: construct the generated default CRUD handler over repo, register it
 	// (gRPC + REST gateway), and contribute the service's authz rules.
 	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {
