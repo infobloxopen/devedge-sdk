@@ -29,6 +29,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"log/slog"
 	"time"
@@ -39,6 +40,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	"github.com/infobloxopen/devedge-sdk/config"
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/events"
 {{- end}}
@@ -191,15 +193,19 @@ func runRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRete
 
 // newRepository opens the database, migrates the generated model, and returns
 // both the generated GORM repository and the underlying *gorm.DB (used to
-// register a DB-ping readiness check). SQLite (pure-Go, no CGo) keeps the
-// scaffold runnable out of the box; swap the dialector for postgres/mysql in
+// register a DB-ping readiness check). dsn is the connection string; when empty
+// it defaults to an in-memory SQLite database. SQLite (pure-Go, no CGo) keeps
+// the scaffold runnable out of the box; swap the dialector for postgres/mysql in
 // production.
-func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], *gorm.DB, error) {
+func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], *gorm.DB, error) {
+	if dsn == "" {
+		dsn = "file::memory:?cache=shared"
+	}
 	// Silence GORM's default logger: it writes every SQL statement and an ANSI
 	// "record not found" line for each miss, which floods test/dev output. Use
 	// logger.Default.LogMode(logger.Warn) to surface slow queries/errors only, or
 	// pass a logger.Interface adapter to route through your structured logger.
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -212,10 +218,11 @@ func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string],
 }
 {{- end}}
 
-// newServer builds a fully wired server with the given authorizer and listen
-// addresses. Returns an error (rather than panicking) so tests can assert the
-// fail-closed authz gate. The smoke test passes ":0" for kernel-assigned ports.
-func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.Server, error) {
+// newServer builds a fully wired server with the given authorizer, listen
+// addresses, and database DSN. Returns an error (rather than panicking) so tests
+// can assert the fail-closed authz gate. The smoke test passes ":0" for
+// kernel-assigned ports and "" for the DSN (in-memory sqlite).
+func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) (*server.Server, error) {
 {{- if .Aggregate}}
 	db, err := newDB()
 	if err != nil {
@@ -236,7 +243,7 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 		return nil, err
 	}
 {{- else}}
-	repo, gormDB, err := newRepository()
+	repo, gormDB, err := newRepository(dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -275,17 +282,38 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 func main() {
 	ctx := context.Background()
 
+	// Configuration — load server options from flags, environment, and .env file.
+	// Precedence (highest → lowest): flags > env ({{.ServiceUpper}}_*) > .env file > defaults.
+	//
+	// Key env vars:
+	//   {{.ServiceUpper}}_GRPC_ADDR   — gRPC listen address  (default :{{.GRPCPort}})
+	//   {{.ServiceUpper}}_HTTP_ADDR   — HTTP gateway address  (default :{{.HTTPPort}})
+	//   {{.ServiceUpper}}_LOG_LEVEL   — log level             (default info)
+	//   {{.ServiceUpper}}_OTLP_ENDPOINT — OTel collector      (default: $OTEL_EXPORTER_OTLP_ENDPOINT)
+	//   {{.ServiceUpper}}_DSN          — database DSN          (default: in-memory sqlite)
+	fs := flag.NewFlagSet("{{.BinName}}", flag.ExitOnError)
+	var opts config.ServerOptions
+	opts.GRPCAddr = ":{{.GRPCPort}}"
+	opts.HTTPAddr = ":{{.HTTPPort}}"
+	if err := config.Load(&opts,
+		config.Flags(fs),
+		config.Env("{{.ServiceUpper}}_"),
+		config.DotEnv(".env"),
+	); err != nil {
+		log.Fatalf("{{.BinName}}: config: %v", err)
+	}
+	_ = fs.Parse(nil) // parse after Load so flag defaults match opts defaults
+
 	// Observability is wired behind the SDK's OTel seam. otel.Setup installs the
 	// global tracer/meter providers + a W3C propagator; the server's built-in
 	// otelgrpc/otelhttp instrumentation then emits per-RPC spans + RED metrics and
 	// one end-to-end trace across the REST gateway hop, with no per-handler code.
-	// The default "otlp" exporter is driven by the standard OTEL_* env
-	// (OTEL_EXPORTER_OTLP_ENDPOINT, ...) — with no endpoint set it no-ops cleanly,
-	// so the service still runs locally with zero observability overhead. Set
-	// `Exporter: "stdout"` for local-dev traces on the console, "none" to disable.
+	// OTLPEndpoint comes from config ({{.ServiceUpper}}_OTLP_ENDPOINT); when empty it
+	// honours $OTEL_EXPORTER_OTLP_ENDPOINT, no-opping cleanly if that is also unset.
 	shutdown, err := otel.Setup(ctx, otel.Config{
 		ServiceName:    "{{.BinName}}",
 		ServiceVersion: version,
+		OTLPEndpoint:   opts.OTLPEndpoint,
 	})
 	if err != nil {
 		log.Fatalf("{{.BinName}}: observability: %v", err)
@@ -307,11 +335,11 @@ func main() {
 		Verbs:    []authz.Verb{"*"},
 		Resource: "*",
 	})
-	s, err := newServer(authorizer, ":{{.GRPCPort}}", ":{{.HTTPPort}}")
+	s, err := newServer(authorizer, opts.GRPCAddr, opts.HTTPAddr, opts.DSN)
 	if err != nil {
 		log.Fatalf("{{.BinName}}: init: %v", err)
 	}
-	log.Printf("{{.BinName}}: serving gRPC on :{{.GRPCPort}}, HTTP on :{{.HTTPPort}}")
+	log.Printf("{{.BinName}}: serving gRPC on %s, HTTP on %s", opts.GRPCAddr, opts.HTTPAddr)
 	if err := s.Serve(ctx); err != nil {
 		log.Fatalf("{{.BinName}}: serve: %v", err)
 	}

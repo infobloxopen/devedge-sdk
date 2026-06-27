@@ -12,14 +12,24 @@ import (
 // depend on the API only; the SDK + exporters are confined to the single
 // observability/otel adapter (mirror of the franz-go/kafkabus discipline).
 var otelSDKImportGuards = []string{
-	"go.opentelemetry.io/otel/sdk",       // SDK trace/metric/resource impl
+	"go.opentelemetry.io/otel/sdk",        // SDK trace/metric/resource impl
 	"go.opentelemetry.io/otel/exporters/", // every OTLP/stdout exporter
+}
+
+// koanfImportGuards is the set of import-path fragments that must NEVER appear
+// in the transitive dependency closure of the core config package. koanf (and
+// any heavy config library) is confined to the config/koanf adapter — the core
+// config package is stdlib-only.
+var koanfImportGuards = []string{
+	"github.com/knadh/koanf",
 }
 
 // coreRoots are the package roots that make up the clean core (AC-4). events is
 // included as its top-level package only — events/kafkabus is the sanctioned
 // broker adapter and is excluded, exactly as observability/otel is the sanctioned
 // observability adapter and is the ONE package allowed to import the SDK.
+// The top-level config package is included (stdlib-only seam); config/koanf is
+// the sanctioned heavy adapter and is excluded here.
 var coreRoots = []string{
 	"./server/...",
 	"./middleware/...",
@@ -28,6 +38,7 @@ var coreRoots = []string{
 	"./events",
 	"./lro/...",
 	"./secret/...",
+	"./config",
 }
 
 // TestCleanCore_NoOTelSDKImport is the load-bearing dependency-light gate (AC-4):
@@ -68,5 +79,46 @@ func TestObservabilityAdapter_DoesImportOTelSDK(t *testing.T) {
 		if !strings.Contains(deps, guard) {
 			t.Errorf("observability/otel adapter is expected to import %q but it is absent from its closure", guard)
 		}
+	}
+}
+
+// TestCleanCore_NoKoanfImport guards that the core config package (stdlib-only
+// seam) does not transitively pull koanf or any heavy config library. koanf is
+// confined to the config/koanf adapter — the exact same discipline as OTel SDK
+// vs observability/otel.
+func TestCleanCore_NoKoanfImport(t *testing.T) {
+	// Check only the core config package (NOT config/koanf which is the adapter).
+	out, err := exec.Command("go", "list", "-deps", "./config").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps ./config: %v\n%s", err, out)
+	}
+	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		dep = strings.TrimSpace(dep)
+		for _, guard := range koanfImportGuards {
+			if strings.Contains(dep, guard) {
+				t.Errorf("core config package must not depend on %q (koanf leak): %q is in the transitive dependency closure", guard, dep)
+			}
+		}
+	}
+}
+
+// TestKoanfAdapter_DoesImportKoanf is the converse assertion: the config/koanf
+// adapter MUST pull koanf (so the guard above is meaningful and the dep is
+// genuinely isolated to the adapter).
+func TestKoanfAdapter_DoesImportKoanf(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "./config/koanf/...").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps ./config/koanf: %v\n%s", err, out)
+	}
+	deps := string(out)
+	found := false
+	for _, guard := range koanfImportGuards {
+		if strings.Contains(deps, guard) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("config/koanf adapter is expected to import koanf but it is absent from its closure")
 	}
 }

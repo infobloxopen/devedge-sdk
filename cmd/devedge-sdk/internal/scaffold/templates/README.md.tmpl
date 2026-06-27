@@ -49,6 +49,37 @@ grpcurl -plaintext -H 'account-id: t1' -H 'groups: admin' \
 Swap the dev authorizer and `PrincipalFunc` in `server/main.go` for a real policy + verified-token
 function in production — nothing else changes.
 
+## Configuration
+
+The service loads its settings through the SDK's `config.Load` seam with the following precedence
+(highest → lowest): **flags > environment > `.env` file > built-in defaults**.
+
+| Env var | Flag | Default | Purpose |
+|---|---|---|---|
+| `{{.ServiceUpper}}_GRPC_ADDR` | `-GRPC_ADDR` | `:{{.GRPCPort}}` | gRPC listen address |
+| `{{.ServiceUpper}}_HTTP_ADDR` | `-HTTP_ADDR` | `:{{.HTTPPort}}` | HTTP gateway address |
+| `{{.ServiceUpper}}_LOG_LEVEL` | `-LOG_LEVEL` | `info` | Minimum log level (debug/info/warn/error) |
+| `{{.ServiceUpper}}_OTLP_ENDPOINT` | `-OTLP_ENDPOINT` | `""` | OTel collector endpoint (falls back to `$OTEL_EXPORTER_OTLP_ENDPOINT`) |
+| `{{.ServiceUpper}}_DSN` | `-DSN` | `""` | Database connection string (empty → in-memory SQLite) |
+
+**Examples:**
+
+Override via environment:
+```sh
+{{.ServiceUpper}}_GRPC_ADDR=:9191 {{.ServiceUpper}}_HTTP_ADDR=:8181 make run
+```
+
+Override via `.env` file (create a `.env` in the project root):
+```ini
+{{.ServiceUpper}}_GRPC_ADDR=:9191
+{{.ServiceUpper}}_DSN=postgres://user:pass@localhost/mydb
+```
+
+Override via flag:
+```sh
+go run ./server -GRPC_ADDR :9191 -HTTP_ADDR :8181
+```
+
 ## Health & readiness probes
 
 The server exposes probe endpoints on the HTTP gateway (`:{{.HTTPPort}}`):
