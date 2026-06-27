@@ -24,6 +24,16 @@ var koanfImportGuards = []string{
 	"github.com/knadh/koanf",
 }
 
+// breakerLibImportGuards is the set of circuit-breaker library import-path
+// fragments that must NEVER appear in the transitive closure of the clean core.
+// The resilience package ships the CircuitBreaker INTERFACE only; concrete libs
+// (gobreaker, hystrix-go, etc.) are confined to consumer code.
+var breakerLibImportGuards = []string{
+	"sony/gobreaker",
+	"afex/hystrix-go",
+	"eapache/go-resiliency",
+}
+
 // coreRoots are the package roots that make up the clean core (AC-4). events is
 // included as its top-level package only — events/kafkabus is the sanctioned
 // broker adapter and is excluded, exactly as observability/otel is the sanctioned
@@ -39,6 +49,7 @@ var coreRoots = []string{
 	"./lro/...",
 	"./secret/...",
 	"./config",
+	"./resilience/...",
 }
 
 // TestCleanCore_NoOTelSDKImport is the load-bearing dependency-light gate (AC-4):
@@ -97,6 +108,27 @@ func TestCleanCore_NoKoanfImport(t *testing.T) {
 		for _, guard := range koanfImportGuards {
 			if strings.Contains(dep, guard) {
 				t.Errorf("core config package must not depend on %q (koanf leak): %q is in the transitive dependency closure", guard, dep)
+			}
+		}
+	}
+}
+
+// TestCleanCore_NoBreakerLibImport guards that the resilience package (and the
+// broader core) does not transitively import any concrete circuit-breaker
+// library. The resilience package ships the CircuitBreaker INTERFACE only;
+// concrete implementations (sony/gobreaker, afex/hystrix-go, etc.) must be
+// supplied by consumers and must never appear in the core's closure.
+func TestCleanCore_NoBreakerLibImport(t *testing.T) {
+	args := append([]string{"list", "-deps"}, coreRoots...)
+	out, err := exec.Command("go", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps core roots: %v\n%s", err, out)
+	}
+	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		dep = strings.TrimSpace(dep)
+		for _, guard := range breakerLibImportGuards {
+			if strings.Contains(dep, guard) {
+				t.Errorf("clean core must not depend on circuit-breaker lib %q: %q found in transitive closure", guard, dep)
 			}
 		}
 	}

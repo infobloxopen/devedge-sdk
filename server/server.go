@@ -32,6 +32,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
+	"github.com/infobloxopen/devedge-sdk/resilience"
 )
 
 // DefaultGRPCAddr is the default listen address for the gRPC endpoint.
@@ -78,6 +79,36 @@ type Config struct {
 	// NOT_SERVING. Liveness (/healthz, gRPC health Check on "") is always
 	// process-up only — deps never go in the liveness check.
 	ReadinessChecks []sdkhealth.Check
+	// Resilience configures optional resilience policy interceptors inserted into
+	// the default chain. server.New applies a 30-second request timeout when the
+	// zero value is supplied; rate limiting and circuit breaking are opt-in (nil).
+	Resilience ResilienceConfig
+}
+
+// ResilienceConfig holds the resilience policy settings for the server's
+// default interceptor chain.
+type ResilienceConfig struct {
+	// RequestTimeout bounds every unary handler invocation. server.New defaults
+	// to 30s when this field is zero; set to resilience.NoTimeout to explicitly
+	// disable the timeout. Per-method overrides (PerMethodTimeout) take
+	// precedence; a per-method value of resilience.NoTimeout disables that
+	// method's timeout regardless of RequestTimeout.
+	//
+	// A handler that exceeds the deadline receives codes.DeadlineExceeded.
+	// Handlers should honour ctx.Done() for clean early exit.
+	RequestTimeout time.Duration
+	// PerMethodTimeout overrides RequestTimeout for specific gRPC full-method
+	// names (e.g. "/mypackage.MyService/LongOp": 5*time.Minute). Set a method's
+	// value to resilience.NoTimeout to disable the timeout for that method only.
+	PerMethodTimeout map[string]time.Duration
+	// RateLimiter, when non-nil, is inserted right after TenantIDUnary (before
+	// authz) to shed excess load early with codes.ResourceExhausted. Default
+	// nil = off. Use resilience.NewTokenBucket or supply your own implementation.
+	RateLimiter resilience.RateLimiter
+	// CircuitBreaker, when non-nil, wraps handler invocations just inside the
+	// framework chain. Default nil = off. Plug in sony/gobreaker,
+	// afex/hystrix-go, or any resilience.CircuitBreaker implementation.
+	CircuitBreaker resilience.CircuitBreaker
 }
 
 // Server is the assembled gRPC server (plus optional HTTP gateway).
@@ -132,6 +163,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	// Apply the 30s request-timeout default when the field is zero-valued (not
+	// explicitly set). Use resilience.NoTimeout in ResilienceConfig to opt out.
+	if cfg.Resilience.RequestTimeout == 0 {
+		cfg.Resilience.RequestTimeout = 30 * time.Second
+	}
 
 	// Seed the accumulated rule set from Config.Rules (now an optional additive
 	// override; the generated Register<Svc> contributes the rest via AddRules).
@@ -149,10 +185,24 @@ func New(cfg Config) (*Server, error) {
 
 	// Interceptor chain — outermost first. FieldMaskUnary reads the live verb map
 	// (FullMethod -> verb) so update-method mask validation covers AddRules rules.
+	//
+	// Resilience placement:
+	//   - RateLimitUnary: right after TenantIDUnary, before LoggingUnary/authz —
+	//     sheds load before any authz work; still has tenant context.
+	//   - BreakerUnary: framework-chain innermost (after DeduplicateUnary) — just
+	//     outside the actual handler, per spec.
+	//   - TimeoutUnary: truly innermost (after cfg.Interceptors and BreakerUnary)
+	//     — bounds the handler call itself.
 	chain := []grpc.UnaryServerInterceptor{
 		middleware.RequestIDUnary(),
 		middleware.ErrorMapperUnary(),
 		middleware.TenantIDUnary(),
+	}
+	// Rate-limit: shed load early, before logging and authz.
+	if cfg.Resilience.RateLimiter != nil {
+		chain = append(chain, resilience.RateLimitUnary(cfg.Resilience.RateLimiter))
+	}
+	chain = append(chain,
 		// LoggingUnary sits after request-ID/tenant (so the record carries both)
 		// and before authz (so it captures the final code, e.g. PermissionDenied).
 		// It is trace-correlated and redacts secret-annotated payload fields.
@@ -163,8 +213,18 @@ func New(cfg Config) (*Server, error) {
 		middleware.ReadMaskUnary(),
 		middleware.ValidateOnlyUnary(),
 		middleware.DeduplicateUnary(cfg.DeduplicationStore),
-	}
+	)
 	chain = append(chain, cfg.Interceptors...)
+	// Breaker: just outside the handler (framework-chain innermost position,
+	// after any caller-supplied interceptors).
+	if cfg.Resilience.CircuitBreaker != nil {
+		chain = append(chain, resilience.BreakerUnary(cfg.Resilience.CircuitBreaker))
+	}
+	// Timeout: truly innermost — wraps the actual handler invocation.
+	// Applied when RequestTimeout > 0 (or when per-method overrides exist).
+	if cfg.Resilience.RequestTimeout > 0 || len(cfg.Resilience.PerMethodTimeout) > 0 {
+		chain = append(chain, resilience.TimeoutUnary(cfg.Resilience.RequestTimeout, cfg.Resilience.PerMethodTimeout))
+	}
 
 	// StatsHandler installs the OTel gRPC server instrumentation: per-RPC server
 	// spans + RED metrics (rpc.server.duration, request/response sizes) emitted to
