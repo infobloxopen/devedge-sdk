@@ -141,7 +141,7 @@ func TestComposeTarget_SameSurface(t *testing.T) {
 		"ORDERS_HTTP_ADDR:",
 		"ORDERS_LOG_LEVEL:",
 		"ORDERS_DSN:",
-		"/healthz",            // healthcheck hits the same liveness path
+		"/healthz",                    // healthcheck hits the same liveness path
 		"OTEL_EXPORTER_OTLP_ENDPOINT", // observability surface (commented activation)
 		"stop_grace_period: 30s",
 		"postgres:",
@@ -318,5 +318,59 @@ func TestEmbeddedChart_LintAndTemplate(t *testing.T) {
 	// liveness probe must not check deps (it is /healthz, not /readyz).
 	if !strings.Contains(rendered, "livenessProbe:") || !strings.Contains(rendered, "readinessProbe:") {
 		t.Error("rendered Deployment missing liveness/readiness probes")
+	}
+}
+
+// TestEmittedChartRef_MatchesEmbeddedChart is the chart-drift guard (AC-2
+// failure-mode): the chart name + version the emitted HelmRelease/OCIRepository
+// pin MUST equal the embedded Chart.yaml's name + version. The embedded chart is
+// the single source of truth and is what the framework publishes; if these drift,
+// a scaffolded service references a chart coordinate that was never published.
+func TestEmittedChartRef_MatchesEmbeddedChart(t *testing.T) {
+	files, err := ChartFiles()
+	if err != nil {
+		t.Fatalf("ChartFiles: %v", err)
+	}
+	var chart struct {
+		Name    string `yaml:"name"`
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(files["Chart.yaml"], &chart); err != nil {
+		t.Fatalf("parse embedded Chart.yaml: %v", err)
+	}
+
+	// The exported constants the k8s target renders from must equal the embedded
+	// chart (so a Chart.yaml bump that forgets the constants fails this test).
+	if ChartName != chart.Name {
+		t.Errorf("ChartName const %q != embedded Chart.yaml name %q", ChartName, chart.Name)
+	}
+	if DefaultChartVersion != chart.Version {
+		t.Errorf("DefaultChartVersion const %q != embedded Chart.yaml version %q", DefaultChartVersion, chart.Version)
+	}
+
+	// And the emitted Flux artifacts must reference exactly that name + version.
+	arts, err := Render([]string{"k8s"}, sampleService(), Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	emitted := map[string]string{}
+	for _, a := range arts {
+		emitted[a.Path] = string(a.Contents)
+	}
+	hr := emitted["deploy/k8s/helmrelease.yaml"]
+	oci := emitted["deploy/k8s/oci-repository.yaml"]
+	for _, want := range []string{
+		"chart: " + chart.Name,             // HelmRelease chart.spec.chart
+		`version: "` + chart.Version + `"`, // HelmRelease chart.spec.version
+	} {
+		if !strings.Contains(hr, want) {
+			t.Errorf("HelmRelease missing %q (drift from embedded Chart.yaml):\n%s", want, hr)
+		}
+	}
+	if !strings.Contains(oci, "/"+chart.Name) {
+		t.Errorf("OCIRepository url does not reference the embedded chart name %q:\n%s", chart.Name, oci)
+	}
+	if !strings.Contains(oci, `tag: "`+chart.Version+`"`) {
+		t.Errorf("OCIRepository tag does not pin the embedded chart version %q:\n%s", chart.Version, oci)
 	}
 }

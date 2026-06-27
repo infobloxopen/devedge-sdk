@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
-	"path"
 	"strings"
 	"text/template"
 )
@@ -25,7 +24,7 @@ func (k8sTarget) Render(svc ServiceView, opts Options) ([]Artifact, error) {
 		Service:            svc.Name,
 		Namespace:          opts.Namespace,
 		ChartRepo:          opts.ChartRepo,
-		ChartName:          "devedge-service",
+		ChartName:          ChartName,
 		ChartVersion:       opts.ChartVersion,
 		EnvPrefix:          svc.EnvPrefix,
 		GRPCPort:           svc.GRPCPort,
@@ -123,11 +122,16 @@ func ChartFiles() (map[string][]byte, error) {
 	return out, err
 }
 
-// ChartName is the framework chart's name (Chart.yaml `name`), referenced by the
-// emitted HelmRelease chart.spec.chart.
+// ChartName is the framework chart's name. It MUST equal the embedded
+// Chart.yaml `name`; it is the value the emitted HelmRelease chart.spec.chart and
+// OCIRepository reference. A test cross-checks it against the embedded Chart.yaml
+// so the emitted artifacts cannot drift from the published chart.
 const ChartName = "devedge-service"
 
-var _ = path.Base // keep path imported for future use without churn
+// DefaultChartVersion is the chart version the emitted OCIRepository/HelmRelease
+// pin when Options.ChartVersion is unset. It MUST equal the embedded Chart.yaml
+// `version` (guarded by a test) so a scaffold pins the version it ships.
+const DefaultChartVersion = "0.1.0"
 
 const k8sOCIRepositoryTmpl = `# Flux source for the framework-owned Helm chart. The chart is PUBLISHED by the
 # framework to an OCI registry (see deploy/k8s/README.md); this service repo never
