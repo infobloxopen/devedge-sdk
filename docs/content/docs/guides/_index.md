@@ -3,8 +3,6 @@ title: Guides
 weight: 8
 sidebar:
   open: false
-aliases:
-  - /docs/guides/
 ---
 
 > **The guides have moved.** The content previously here is now organized under
