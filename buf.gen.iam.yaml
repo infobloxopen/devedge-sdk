@@ -1,0 +1,33 @@
+version: v2
+# F031 IAM worked example (AC-7): accounts/users/groups/memberships/api-keys.
+# Generates the full backend set (go, grpc, authz, svc, storage, gateway, ent)
+# into testdata/iam/, which has its own go.mod (gorm + ent), keeping those deps
+# out of devedge-sdk's go.mod. protoc-gen-storage runs here too, proving that a
+# (infoblox.ddd.v1.references) field does not break the GORM backend (it emits the
+# referenced field as a plain scalar FK — aggregate support is a GORM non-goal).
+inputs:
+  - directory: testdata/iam
+plugins:
+  - local: protoc-gen-go
+    out: testdata/iam
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/iam
+  - local: protoc-gen-go-grpc
+    out: testdata/iam
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/iam
+  - local: protoc-gen-devedge-authz
+    out: testdata/iam
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/iam
+  - local: protoc-gen-svc
+    out: testdata/iam
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/iam
+  - local: protoc-gen-storage
+    out: testdata/iam
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/iam
+  - local: protoc-gen-grpc-gateway
+    out: testdata/iam
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/iam
+  - local: protoc-gen-ent
+    out: testdata/iam
+    # protoc-gen-storage above also emits into iamv1; it owns the AIP-122
+    # resource-name helpers, so ent must not re-emit them (with_storage).
+    opt: with_storage=true

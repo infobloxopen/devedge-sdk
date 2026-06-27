@@ -1,0 +1,73 @@
+// SDK-OWNED annotation schema. Unlike infoblox/{authz,field,storage}, the
+// infoblox.ddd.v1 namespace is defined and OWNED by devedge-sdk: it has no
+// canonical published counterpart, so its Go binding is generated LOCALLY,
+// in-repo (see buf.gen.ddd.yaml / `make generate`), with a devedge-sdk go_package.
+// This is safe — and the one place the repo intentionally generates an
+// annotation .pb.go locally — precisely because the namespace is SDK-private: no
+// other module registers infoblox.ddd.v1, so there is no register-once collision
+// (the rationale that keeps field.v1/authz.v1 import-only applies only to SHARED,
+// externally-published packages).
+//
+// These annotations declare DDD aggregate boundaries:
+//   - (infoblox.ddd.v1.aggregate) on a message marks it as an aggregate ROOT.
+//   - (infoblox.ddd.v1.member)    on a message marks it as a MEMBER owned by a
+//     named root (a containment relationship; member writes route through the
+//     root and the boot-time boundary gate fails closed on a direct member write).
+//   - (infoblox.ddd.v1.references) on a field is a CROSS-aggregate link: it emits
+//     a scalar foreign key + ID only, with NO traversable graph edge, so code
+//     cannot walk or mutate across aggregate roots. (Contrast field.v1's
+//     belongs_to/has_many, which stay = within-aggregate CONTAINMENT edges.)
+syntax = "proto3";
+
+package infoblox.ddd.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1;dddv1";
+
+// Aggregate marks a message as an aggregate ROOT — the consistency boundary that
+// owns its members. An AggregateRepository loads the root's containment cluster
+// and saves it in one transaction, bumping the root etag on any member change.
+message Aggregate {
+  // root must be true to mark the message as an aggregate root. (A field rather
+  // than a bare presence bit so the annotation reads explicitly in the proto.)
+  bool root = 1;
+}
+
+// Member marks a message as a MEMBER owned by an aggregate root: it is part of
+// the root's consistency boundary, written THROUGH the root, never independently.
+// The boot-time boundary gate (AssertAggregateBoundaries) fails closed if a
+// member resource registers a write-capable standard method (Create/Update/
+// Delete/Undelete/Batch*); Get/List stay addressable (reads ≠ write authority).
+message Member {
+  // root names the owning aggregate root message (its proto message name, e.g.
+  // "Order" for an Item member_of Order).
+  string root = 1;
+}
+
+// References declares a CROSS-aggregate link on a message field: a pointer to a
+// resource in ANOTHER aggregate. It generates a scalar foreign key + ID and NO
+// traversable graph edge (so code cannot walk or mutate across roots), and its FK
+// stays restrict/SetNull (NOT OnDelete: Cascade — cross-aggregate links are not
+// owned). Contrast field.v1's belongs_to/has_many, which are within-aggregate
+// CONTAINMENT (graph edges, cascade on the owned side).
+message References {
+  // aggregate names the referenced aggregate root message (e.g. "User").
+  string aggregate = 1;
+  // foreign_key is the scalar FK column name on THIS table (e.g. "user_id").
+  string foreign_key = 2;
+}
+
+extend google.protobuf.MessageOptions {
+  // aggregate marks the message as an aggregate root.
+  // Extension number 50010 (alongside authz.rule = 50001, field.opts = 50003).
+  Aggregate aggregate = 50010;
+  // member marks the message as a member owned by a named root.
+  Member member = 50011;
+}
+
+extend google.protobuf.FieldOptions {
+  // references marks a field as a cross-aggregate link (scalar FK + ID, no edge).
+  // Extension number 50012.
+  References references = 50012;
+}

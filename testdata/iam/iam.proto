@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+// F031 IAM worked example (AC-7). A multi-resource fixture proving the DDD
+// aggregate machinery end to end:
+//
+//   - account_id is the TENANT PARTITION (TenantMixin), NOT an aggregate — every
+//     other resource is account-scoped.
+//   - Group is an aggregate ROOT that OWNS its Memberships (containment): the
+//     Group→Membership FK cascades on delete, Membership is written THROUGH the
+//     group (its write RPCs are not exposed — only Get/List), and the boundary
+//     gate fails closed on any registered membership write.
+//   - ApiKey is its OWN aggregate, REFERENCING a User in another aggregate via
+//     (infoblox.ddd.v1.references): a scalar user_id FK + ID, NO traversable edge.
+//   - Auth lookup is a PROJECTION (LookupByKeyValueHash on the secret key_value),
+//     never an aggregate Load.
+package iam.v1;
+
+option go_package = "github.com/infobloxopen/devedge-sdk/testdata/iam/iamv1;iamv1";
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "infoblox/authz/v1/authz.proto";
+import "infoblox/field/v1/field.proto";
+import "infoblox/ddd/v1/ddd.proto";
+
+// Account is the tenant partition itself. It is a plain resource (not tenant-
+// scoped — it has no account_id discriminator; its own id IS the tenant key).
+message Account {
+  string id           = 1;
+  string display_name = 2 [(infoblox.field.v1.opts) = {unique: true}];
+  string etag         = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// User is an account-scoped principal. A small aggregate of its own.
+message User {
+  option (infoblox.ddd.v1.aggregate) = {root: true};
+
+  string id           = 1;
+  string account_id   = 2; // tenant partition (TenantMixin)
+  string email        = 3 [(infoblox.field.v1.opts) = {unique: true}];
+  string display_name = 4;
+  string etag         = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Group is an aggregate ROOT that owns its Memberships (the rule-holding
+// aggregate: the membership rules live inside the group's consistency boundary).
+message Group {
+  option (infoblox.ddd.v1.aggregate) = {root: true};
+
+  string id           = 1;
+  string account_id   = 2; // tenant partition (TenantMixin)
+  string display_name = 3 [(infoblox.field.v1.opts) = {unique: true}];
+  // has_many containment: the owned Memberships. Cascade on group delete.
+  repeated Membership memberships = 4 [(infoblox.field.v1.opts) = {has_many: {foreign_key: "group_id"}}];
+  string etag         = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Membership is a MEMBER of the Group aggregate (owned by the rule-holder). It is
+// addressable for reads (Get/List) but written THROUGH the group; its belongs_to
+// Group FK cascades on group delete.
+message Membership {
+  option (infoblox.ddd.v1.member) = {root: "Group"};
+
+  string id         = 1;
+  string account_id = 2; // tenant partition (TenantMixin)
+  string group_id   = 3; // scalar FK + belongs_to (containment)
+  string user_id    = 4; // the member user (an id reference, no edge)
+  string role       = 5; // e.g. "admin" / "member" — the invariant subject ("≥1 admin")
+  // belongs_to the owning Group; the FK (group_id) lives on this table.
+  Group group       = 6 [(infoblox.field.v1.opts) = {belongs_to: {foreign_key: "group_id"}}];
+}
+
+// ApiKey is its OWN aggregate that REFERENCES a User in another aggregate via
+// (infoblox.ddd.v1.references): a scalar user_id FK + ID and NO edge. The secret
+// key_value drives a LookupByKeyValueHash projection used for auth (not a Load).
+message ApiKey {
+  option (infoblox.ddd.v1.aggregate) = {root: true};
+
+  string id         = 1;
+  string account_id = 2; // tenant partition (TenantMixin)
+  string user_id    = 3; // scalar FK to the referenced User aggregate
+  // key_value is the raw key material — secret: stored as hash+cipher, never
+  // plaintext. The generated LookupByKeyValueHash is the auth projection.
+  string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];
+  string key_prefix = 5;
+  // Cross-aggregate reference to the owning User: scalar FK (user_id) + ID, NO
+  // traversable edge — code cannot walk from an ApiKey into the User aggregate.
+  User user         = 6 [(infoblox.ddd.v1.references) = {aggregate: "User", foreign_key: "user_id"}];
+  string etag       = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// ---- Services ----
+
+service AccountService {
+  rpc GetAccount(GetAccountRequest) returns (Account) {
+    option (google.api.http) = {get: "/v1/accounts/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "get", resource: "accounts"};
+  }
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse) {
+    option (google.api.http) = {get: "/v1/accounts"};
+    option (infoblox.authz.v1.rule) = {verb: "list", resource: "accounts"};
+  }
+  rpc CreateAccount(CreateAccountRequest) returns (Account) {
+    option (google.api.http) = {post: "/v1/accounts", body: "account"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "accounts"};
+  }
+}
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User) {
+    option (google.api.http) = {get: "/v1/users/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "get", resource: "users"};
+  }
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {
+    option (google.api.http) = {get: "/v1/users"};
+    option (infoblox.authz.v1.rule) = {verb: "list", resource: "users"};
+  }
+  rpc CreateUser(CreateUserRequest) returns (User) {
+    option (google.api.http) = {post: "/v1/users", body: "user"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "users"};
+  }
+}
+
+service GroupService {
+  rpc GetGroup(GetGroupRequest) returns (Group) {
+    option (google.api.http) = {get: "/v1/groups/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "get", resource: "groups"};
+  }
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse) {
+    option (google.api.http) = {get: "/v1/groups"};
+    option (infoblox.authz.v1.rule) = {verb: "list", resource: "groups"};
+  }
+  rpc CreateGroup(CreateGroupRequest) returns (Group) {
+    option (google.api.http) = {post: "/v1/groups", body: "group"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "groups"};
+  }
+}
+
+// MembershipService is a MEMBER service: it exposes ONLY reads (Get/List). The
+// member resource is written through its Group root, so no Create/Update/Delete
+// RPC is declared — keeping the boundary gate satisfied (AC-1's serving case).
+service MembershipService {
+  rpc GetMembership(GetMembershipRequest) returns (Membership) {
+    option (google.api.http) = {get: "/v1/memberships/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "get", resource: "memberships"};
+  }
+  rpc ListMemberships(ListMembershipsRequest) returns (ListMembershipsResponse) {
+    option (google.api.http) = {get: "/v1/memberships"};
+    option (infoblox.authz.v1.rule) = {verb: "list", resource: "memberships"};
+  }
+}
+
+service ApiKeyService {
+  rpc GetApiKey(GetApiKeyRequest) returns (ApiKey) {
+    option (google.api.http) = {get: "/v1/apikeys/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "get", resource: "api_keys"};
+  }
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse) {
+    option (google.api.http) = {get: "/v1/apikeys"};
+    option (infoblox.authz.v1.rule) = {verb: "list", resource: "api_keys"};
+  }
+  rpc CreateApiKey(CreateApiKeyRequest) returns (ApiKey) {
+    option (google.api.http) = {post: "/v1/apikeys", body: "api_key"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "api_keys"};
+  }
+}
+
+// ---- Request/response messages ----
+
+message GetAccountRequest      { string id = 1; }
+message ListAccountsRequest    { int32 page_size = 1; string page_token = 2; }
+message ListAccountsResponse   { repeated Account accounts = 1; string next_page_token = 2; }
+message CreateAccountRequest   { Account account = 1; }
+
+message GetUserRequest         { string id = 1; }
+message ListUsersRequest       { int32 page_size = 1; string page_token = 2; }
+message ListUsersResponse      { repeated User users = 1; string next_page_token = 2; }
+message CreateUserRequest      { User user = 1; }
+
+message GetGroupRequest        { string id = 1; }
+message ListGroupsRequest      { int32 page_size = 1; string page_token = 2; }
+message ListGroupsResponse     { repeated Group groups = 1; string next_page_token = 2; }
+message CreateGroupRequest     { Group group = 1; }
+
+message GetMembershipRequest   { string id = 1; }
+message ListMembershipsRequest { int32 page_size = 1; string page_token = 2; }
+message ListMembershipsResponse { repeated Membership memberships = 1; string next_page_token = 2; }
+
+message GetApiKeyRequest       { string id = 1; }
+message ListApiKeysRequest     { int32 page_size = 1; string page_token = 2; }
+message ListApiKeysResponse    { repeated ApiKey api_keys = 1; string next_page_token = 2; }
+message CreateApiKeyRequest    { ApiKey api_key = 1; }

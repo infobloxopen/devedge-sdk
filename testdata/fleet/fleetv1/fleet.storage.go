@@ -16,6 +16,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -62,6 +63,7 @@ func fromModel_Fleet(m *FleetModel) *Fleet {
 	if m.DeletedAt.Valid {
 		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
 	}
+	p.Etag = m.ETag
 	if FromModelFleetCustom != nil {
 		FromModelFleetCustom(m, p)
 	}
@@ -170,6 +172,7 @@ func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, er
 			m.AccountId = tenantID
 		}
 	}
+	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelFleetOnCreate != nil {
 		ToModelFleetOnCreate(entity, m)
 	}
@@ -187,6 +190,7 @@ func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, er
 func (r *FleetRepository) Update(ctx context.Context, key string, entity *Fleet, fieldMask ...string) (*Fleet, error) {
 	m := toModel_Fleet(entity)
 	m.ID = key
+	m.ETag = etag.New() // AIP-154: bump the ETag on every update
 	if ToModelFleetOnUpdate != nil {
 		ToModelFleetOnUpdate(entity, m)
 	}
@@ -207,6 +211,7 @@ func (r *FleetRepository) Update(ctx context.Context, key string, entity *Fleet,
 			}
 			dbCols = append(dbCols, col)
 		}
+		dbCols = append(dbCols, "etag") // a masked update still changes the resource
 		// Select makes GORM write the named columns even when their value is
 		// the zero value (false, 0, ""); a bare struct Updates would skip them.
 		if err := q.Select(dbCols).Updates(m).Error; err != nil {
@@ -222,6 +227,7 @@ func (r *FleetRepository) Update(ctx context.Context, key string, entity *Fleet,
 		updates := map[string]interface{}{
 			"display_name": m.DisplayName,
 		}
+		updates["etag"] = m.ETag
 		if err := q.Updates(updates).Error; err != nil {
 			if ce := persistence.ConstraintError(err); ce != nil {
 				return nil, ce

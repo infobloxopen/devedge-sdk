@@ -49,6 +49,26 @@ func (_u *FleetUpdate) ClearDeleteTime() *FleetUpdate {
 	return _u
 }
 
+// SetEtag sets the "etag" field.
+func (_u *FleetUpdate) SetEtag(v string) *FleetUpdate {
+	_u.mutation.SetEtag(v)
+	return _u
+}
+
+// SetNillableEtag sets the "etag" field if the given value is not nil.
+func (_u *FleetUpdate) SetNillableEtag(v *string) *FleetUpdate {
+	if v != nil {
+		_u.SetEtag(*v)
+	}
+	return _u
+}
+
+// ClearEtag clears the value of the "etag" field.
+func (_u *FleetUpdate) ClearEtag() *FleetUpdate {
+	_u.mutation.ClearEtag()
+	return _u
+}
+
 // SetDisplayName sets the "display_name" field.
 func (_u *FleetUpdate) SetDisplayName(v string) *FleetUpdate {
 	_u.mutation.SetDisplayName(v)
@@ -152,6 +172,12 @@ func (_u *FleetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.DeleteTimeCleared() {
 		_spec.ClearField(fleet.FieldDeleteTime, field.TypeTime)
 	}
+	if value, ok := _u.mutation.Etag(); ok {
+		_spec.SetField(fleet.FieldEtag, field.TypeString, value)
+	}
+	if _u.mutation.EtagCleared() {
+		_spec.ClearField(fleet.FieldEtag, field.TypeString)
+	}
 	if value, ok := _u.mutation.DisplayName(); ok {
 		_spec.SetField(fleet.FieldDisplayName, field.TypeString, value)
 	}
@@ -240,6 +266,26 @@ func (_u *FleetUpdateOne) SetNillableDeleteTime(v *time.Time) *FleetUpdateOne {
 // ClearDeleteTime clears the value of the "delete_time" field.
 func (_u *FleetUpdateOne) ClearDeleteTime() *FleetUpdateOne {
 	_u.mutation.ClearDeleteTime()
+	return _u
+}
+
+// SetEtag sets the "etag" field.
+func (_u *FleetUpdateOne) SetEtag(v string) *FleetUpdateOne {
+	_u.mutation.SetEtag(v)
+	return _u
+}
+
+// SetNillableEtag sets the "etag" field if the given value is not nil.
+func (_u *FleetUpdateOne) SetNillableEtag(v *string) *FleetUpdateOne {
+	if v != nil {
+		_u.SetEtag(*v)
+	}
+	return _u
+}
+
+// ClearEtag clears the value of the "etag" field.
+func (_u *FleetUpdateOne) ClearEtag() *FleetUpdateOne {
+	_u.mutation.ClearEtag()
 	return _u
 }
 
@@ -375,6 +421,12 @@ func (_u *FleetUpdateOne) sqlSave(ctx context.Context) (_node *Fleet, err error)
 	}
 	if _u.mutation.DeleteTimeCleared() {
 		_spec.ClearField(fleet.FieldDeleteTime, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Etag(); ok {
+		_spec.SetField(fleet.FieldEtag, field.TypeString, value)
+	}
+	if _u.mutation.EtagCleared() {
+		_spec.ClearField(fleet.FieldEtag, field.TypeString)
 	}
 	if value, ok := _u.mutation.DisplayName(); ok {
 		_spec.SetField(fleet.FieldDisplayName, field.TypeString, value)

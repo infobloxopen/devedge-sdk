@@ -184,6 +184,35 @@ skipped in the GORM model (it needs JSONB serialization), so reach for these opt
 field references another resource. The related message must itself be a stored resource (it has an
 `id` field, so `<Related>Model` is generated).
 
+## `(infoblox.ddd.v1.*)` — aggregate boundaries
+
+The SDK-owned `infoblox.ddd.v1` annotations declare DDD aggregate boundaries. Unlike
+`authz.v1`/`field.v1` (consumed as bindings from the published `infobloxopen/apis` module),
+`ddd.v1` is **defined and owned by this SDK** and its Go binding is generated **locally,
+in-repo** — safe precisely because the namespace is SDK-private (no register-once collision).
+
+| Option | Number | Declare on | Meaning |
+|---|---|---|---|
+| `aggregate {root: true}` | 50010 | a message | the message is an aggregate **root** (consistency boundary) |
+| `member {root: "<Root>"}` | 50011 | a message | the message is a **member** owned by the named root (containment) |
+| `references {aggregate, foreign_key}` | 50012 | a message field | a **cross-aggregate** link: scalar FK + ID, **no** traversable edge |
+
+```proto
+import "infoblox/ddd/v1/ddd.proto";
+
+message Order { option (infoblox.ddd.v1.aggregate) = {root: true}; /* ... */ }
+message Item  { option (infoblox.ddd.v1.member) = {root: "Order"}; /* ... */ }
+
+message ApiKey {
+  // a scalar user_id FK + ID, no edge into the User aggregate.
+  User user = 6 [(infoblox.ddd.v1.references) = {aggregate: "User", foreign_key: "user_id"}];
+}
+```
+
+`member`/`aggregate` drive containment cascade, member write-redirection, and the
+fail-closed boundary gate; `references` keeps cross-aggregate links ID-only. See
+[Aggregates](../aggregates/) for the full model and `testdata/iam/` for a worked example.
+
 ## Extension numbers
 
 The annotations are protobuf custom options:
@@ -194,14 +223,22 @@ extend google.protobuf.MethodOptions {
 }
 extend google.protobuf.FieldOptions {
   FieldOptions opts = 50003;  // (infoblox.field.v1.opts)
+  References references = 50012; // (infoblox.ddd.v1.references)
+}
+extend google.protobuf.MessageOptions {
+  Aggregate aggregate = 50010; // (infoblox.ddd.v1.aggregate)
+  Member member = 50011;       // (infoblox.ddd.v1.member)
 }
 ```
 
-Both numbers (`50001`, `50003`) are in the protobuf **50000–99999 "internal use"** range. Before
-any cross-org publication, obtain a globally-unique number from the protobuf registry.
+The numbers (`50001`, `50003`, `50010`–`50012`) are in the protobuf **50000–99999 "internal
+use"** range. Before any cross-org publication, obtain a globally-unique number from the
+protobuf registry.
 
 {{< callout type="warning" >}}
-The copy of `authz.proto` checked into the SDK repo is a **mirror** for codegen input only — its
-`go_package` points at the canonical `infobloxopen/apis` module, so no Go is generated from the
-local copy. Keep it byte-identical to the canonical file.
+The copies of `authz.proto` / `field.proto` checked into the SDK repo are **mirrors** for
+codegen input only — their `go_package` points at the canonical `infobloxopen/apis` module,
+so no Go is generated from the local copy. Keep them byte-identical to the canonical file.
+The SDK-owned `ddd.proto` is the exception: it is generated locally (its `go_package` points
+at this module), since the `infoblox.ddd.v1` namespace has no canonical counterpart.
 {{< /callout >}}
