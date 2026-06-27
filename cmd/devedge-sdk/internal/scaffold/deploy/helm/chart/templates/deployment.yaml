@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "devedge-service.fullname" . }}
+  labels:
+    {{- include "devedge-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "devedge-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "devedge-service.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Graceful shutdown: paired with the service's signal.NotifyContext (SIGTERM
+      # → drain in-flight RPCs + flush OTel). Keep in sync with the SDK shutdown
+      # budget and compose's stop_grace_period.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ required "image.repository is required (set it in your values overlay)" .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+          env:
+            # config.ServerOptions env (#93), namespaced by the service's config
+            # prefix. These names MUST match the prefix + config keys the service
+            # main loads — they are set from values, not hard-coded, so they
+            # cannot drift from the code.
+            - name: {{ .Values.config.envPrefix }}GRPC_ADDR
+              value: {{ .Values.config.grpcAddr | quote }}
+            - name: {{ .Values.config.envPrefix }}HTTP_ADDR
+              value: {{ .Values.config.httpAddr | quote }}
+            - name: {{ .Values.config.envPrefix }}LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            # DSN from the Secret (indirect-DSN: the env names a Secret key; the
+            # real connection string never appears in the manifest/overlay).
+            - name: {{ .Values.config.envPrefix }}DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devedge-service.dsnSecretName" . }}
+                  key: {{ .Values.dsn.secretKey }}
+            # Observability (#90): the standard OTEL_* exporter env. Set the
+            # endpoint to activate the observability/otel adapter; empty no-ops.
+            {{- if .Values.otel.exporter.otlp.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.exporter.otlp.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.otel.exporter.otlp.protocol | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.otel.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          # Liveness/readiness probes (#91): /healthz never checks deps (a dep
+          # blip must not kill a live pod); /readyz reflects readiness checks.
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

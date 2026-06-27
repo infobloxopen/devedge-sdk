@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strings"
+
+	"github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk/internal/scaffold/deploy"
 )
 
 // Backend selects the persistence code generator.
@@ -76,6 +78,11 @@ type Options struct {
 	// generated graph-load primitive, and an outbox Publisher + Dispatcher). When
 	// false the scaffold emits the plain Tier-1 CRUD service (byte-stable default).
 	Aggregate bool
+	// Deploy is the comma-separated list of deploy targets to render into the
+	// generated repo (e.g. "k8s,compose"). Empty renders the default set
+	// (k8s + compose); "none" disables deploy artifacts. Validated against the
+	// deploy target registry (F038).
+	Deploy string
 }
 
 // Model is the fully-resolved template data. Field names are referenced by the
@@ -139,6 +146,11 @@ type Model struct {
 	ModerncSQLiteVersion  string
 	FieldBindingVersion   string
 	OTelAPIVersion        string
+
+	// DeployTargets are the resolved deploy-target names to render (F038),
+	// validated against the deploy registry in Validate. Empty means no deploy
+	// artifacts (--deploy none).
+	DeployTargets []string
 }
 
 var (
@@ -194,6 +206,13 @@ func (o Options) Validate() (*Model, error) {
 
 	repoName := module[strings.LastIndex(module, "/")+1:]
 
+	// Resolve + validate the deploy targets against the registry (F038). An empty
+	// value renders the default set (k8s + compose); "none" disables deploy.
+	deployTargets, err := deploy.ParseTargets(o.Deploy)
+	if err != nil {
+		return nil, err
+	}
+
 	// An aggregate root owns a member (containment) resource so the generated
 	// Load<Root>Aggregate graph-load primitive is emitted (it is only generated for
 	// a root that has at least one containment member). The member is named
@@ -241,8 +260,31 @@ func (o Options) Validate() (*Model, error) {
 		ModerncSQLiteVersion:  moderncSQLiteVersion,
 		FieldBindingVersion:   fieldBindingVersion,
 		OTelAPIVersion:        otelAPIVersion,
+
+		DeployTargets: deployTargets,
 	}
 	return m, nil
+}
+
+// ServiceView projects the resolved Model onto the small, stable struct the
+// deploy targets consume (F038). The deploy package stays decoupled from the
+// full scaffold Model; the env names it needs are derived from EnvPrefix +
+// config.ServerOptions, never duplicated.
+//
+// A non-aggregate service declares a Postgres dependency so the compose/k8s
+// targets render a production-shaped DB wiring (the in-memory sqlite default is
+// dev-only); an aggregate service does the same — both persist.
+func (m *Model) ServiceView() deploy.ServiceView {
+	return deploy.ServiceView{
+		Name:      m.BinName,
+		Module:    m.Module,
+		EnvPrefix: m.ServiceUpper + "_",
+		GRPCPort:  m.GRPCPort,
+		HTTPPort:  m.HTTPPort,
+		Deps: []deploy.Dependency{
+			{Kind: "postgres", Image: "postgres:16-alpine"},
+		},
+	}
 }
 
 // resolveSDKVersion returns the version of the devedge-sdk module this binary

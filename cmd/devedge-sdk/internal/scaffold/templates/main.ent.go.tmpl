@@ -40,6 +40,8 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
@@ -292,7 +294,13 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) (*se
 }
 
 func main() {
-	ctx := context.Background()
+	// Graceful shutdown: cancel ctx on SIGTERM (k8s pod termination) or Ctrl-C so
+	// server.Serve returns and runs its graceful gRPC/HTTP drain, the readiness
+	// loop stops, and the deferred OTel flush below runs before exit. The
+	// chart's terminationGracePeriodSeconds / compose's stop_grace_period give
+	// this drain its time budget.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
 
 	// Configuration — load server options from flags, environment, and .env file.
 	// Precedence (highest → lowest): flags > env ({{.ServiceUpper}}_*) > .env file > defaults.

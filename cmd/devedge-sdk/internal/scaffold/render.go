@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk/internal/scaffold/deploy"
 )
 
 // renderTemplate executes the named template (under templates/) against m.
@@ -65,7 +67,30 @@ func renderTemplates(dir string, m *Model) error {
 			return fmt.Errorf("write %s: %w", o.rel, err)
 		}
 	}
+	if err := renderDeploy(dir, m); err != nil {
+		return err
+	}
 	return appendGitignore(dir, m)
+}
+
+// renderDeploy renders the selected deploy targets (F038) into the generated
+// repo. Each target is an adapter behind the deploy seam; the service repo gets
+// only the rendered artifacts (for k8s: a Flux HelmRelease + OCIRepository +
+// values overlay — never the framework-owned chart, which stays embedded).
+func renderDeploy(dir string, m *Model) error {
+	if len(m.DeployTargets) == 0 {
+		return nil
+	}
+	arts, err := deploy.Render(m.DeployTargets, m.ServiceView(), deploy.Options{})
+	if err != nil {
+		return fmt.Errorf("render deploy: %w", err)
+	}
+	for _, a := range arts {
+		if err := writeFile(dir, a.Path, a.Contents, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", a.Path, err)
+		}
+	}
+	return nil
 }
 
 func bufGenTemplate(b Backend) string {

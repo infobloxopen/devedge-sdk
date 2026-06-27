@@ -1,0 +1,98 @@
+# Default values for the devedge-service chart. A scaffolded service ships only a
+# thin values overlay (deploy/k8s/values.yaml) that sets image.repository and the
+# env it needs; everything else has a working default here. Developers never edit
+# the chart — only the overlay.
+
+# Number of replicas.
+replicaCount: 1
+
+image:
+  # repository is set by the service's values overlay, e.g. ghcr.io/acme/orders.
+  repository: ""
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# nameOverride / fullnameOverride tune the generated object names.
+nameOverride: ""
+fullnameOverride: ""
+
+# Service ports. These MUST match the container's listen addresses, which are
+# driven by the config env below (config.ServerOptions GRPC_ADDR / HTTP_ADDR).
+service:
+  type: ClusterIP
+  grpcPort: 9090
+  httpPort: 8080
+
+# Liveness/readiness probe paths served by every SDK service on the HTTP port
+# (health & readiness, #91). Do not change unless the SDK changes the paths.
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /readyz
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# config.ServerOptions env (#93). The service main loads these with the env
+# prefix below; the chart sets the prefixed names (e.g. ORDERS_GRPC_ADDR). The
+# listen addresses bind 0.0.0.0 so the probes/Service can reach the container.
+config:
+  # envPrefix is the config.Env prefix, e.g. "ORDERS_". Set by the overlay.
+  envPrefix: ""
+  grpcAddr: ":9090"
+  httpAddr: ":8080"
+  logLevel: info
+
+# Observability (#90): the standard OTEL_* exporter env. Setting endpoint here
+# activates the observability/otel adapter; empty no-ops cleanly.
+otel:
+  exporter:
+    otlp:
+      endpoint: ""          # OTEL_EXPORTER_OTLP_ENDPOINT, e.g. otel-collector:4317
+      protocol: grpc        # OTEL_EXPORTER_OTLP_PROTOCOL
+  # Extra OTEL_* vars merged verbatim (e.g. OTEL_RESOURCE_ATTRIBUTES).
+  extraEnv: {}
+
+# DSN secret (devedge indirect-DSN + real-DSN-file convention). When
+# dsn.existingSecret is set, the chart mounts that Secret; otherwise it creates
+# one from dsn.value. The container reads <ENVPREFIX>DSN.
+dsn:
+  # value is the connection string; rendered into a chart-owned Secret when
+  # existingSecret is empty. Leave empty to use the service's built-in default.
+  value: ""
+  # existingSecret references a pre-provisioned Secret instead (recommended in
+  # prod — the DSN never lands in the values overlay or git).
+  existingSecret: ""
+  # secretKey is the key within the Secret holding the DSN.
+  secretKey: dsn
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  path: /
+  pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Termination grace period, paired with the service's signal.NotifyContext
+# graceful shutdown (SIGTERM → drain + OTel flush). Keep >= the in-flight
+# request budget. Matches compose's stop_grace_period.
+terminationGracePeriodSeconds: 30
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -54,6 +54,7 @@ func newNewServiceCmd() *cobra.Command {
 		noGenerate bool
 		force      bool
 		aggregate  bool
+		deployTgts string
 	)
 	c := &cobra.Command{
 		Use:   "service <name>",
@@ -95,6 +96,7 @@ path so the generated go.mod + imports are correct, e.g.
 				NoGenerate: noGenerate,
 				Force:      force,
 				Aggregate:  aggregate,
+				Deploy:     deployTgts,
 			}
 			m, err := scaffold.Generate(cmd.Context(), opts, cmd.OutOrStdout())
 			if err != nil {
@@ -132,5 +134,6 @@ path so the generated go.mod + imports are correct, e.g.
 	c.Flags().BoolVar(&noGenerate, "no-generate", false, "skip the first buf generate + go mod tidy")
 	c.Flags().BoolVar(&force, "force", false, "scaffold into a non-empty directory")
 	c.Flags().BoolVar(&aggregate, "aggregate", false, "scaffold the resource as a DDD aggregate root (owns a member resource) and wire the TxRunner + AggregateRepository + transactional-outbox Publisher/Dispatcher in main")
+	c.Flags().StringVar(&deployTgts, "deploy", "", "deploy targets to render (comma-separated): k8s,compose (default both); \"none\" to skip. k8s emits a Flux HelmRelease+OCIRepository+values overlay (framework-owned Helm chart); compose emits docker-compose.yml")
 	return c
 }
