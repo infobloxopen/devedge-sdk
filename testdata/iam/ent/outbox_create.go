@@ -4,7 +4,6 @@ package ent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -96,48 +95,6 @@ func (_c *OutboxCreate) SetNillableCreatedTime(v *time.Time) *OutboxCreate {
 	return _c
 }
 
-// SetDeliveredTime sets the "delivered_time" field.
-func (_c *OutboxCreate) SetDeliveredTime(v time.Time) *OutboxCreate {
-	_c.mutation.SetDeliveredTime(v)
-	return _c
-}
-
-// SetNillableDeliveredTime sets the "delivered_time" field if the given value is not nil.
-func (_c *OutboxCreate) SetNillableDeliveredTime(v *time.Time) *OutboxCreate {
-	if v != nil {
-		_c.SetDeliveredTime(*v)
-	}
-	return _c
-}
-
-// SetAttempts sets the "attempts" field.
-func (_c *OutboxCreate) SetAttempts(v int) *OutboxCreate {
-	_c.mutation.SetAttempts(v)
-	return _c
-}
-
-// SetNillableAttempts sets the "attempts" field if the given value is not nil.
-func (_c *OutboxCreate) SetNillableAttempts(v *int) *OutboxCreate {
-	if v != nil {
-		_c.SetAttempts(*v)
-	}
-	return _c
-}
-
-// SetLeasedUntil sets the "leased_until" field.
-func (_c *OutboxCreate) SetLeasedUntil(v time.Time) *OutboxCreate {
-	_c.mutation.SetLeasedUntil(v)
-	return _c
-}
-
-// SetNillableLeasedUntil sets the "leased_until" field if the given value is not nil.
-func (_c *OutboxCreate) SetNillableLeasedUntil(v *time.Time) *OutboxCreate {
-	if v != nil {
-		_c.SetLeasedUntil(*v)
-	}
-	return _c
-}
-
 // SetID sets the "id" field.
 func (_c *OutboxCreate) SetID(v string) *OutboxCreate {
 	_c.mutation.SetID(v)
@@ -151,7 +108,6 @@ func (_c *OutboxCreate) Mutation() *OutboxMutation {
 
 // Save creates the Outbox in the database.
 func (_c *OutboxCreate) Save(ctx context.Context) (*Outbox, error) {
-	_c.defaults()
 	return withHooks(ctx, _c.sqlSave, _c.mutation, _c.hooks)
 }
 
@@ -177,19 +133,8 @@ func (_c *OutboxCreate) ExecX(ctx context.Context) {
 	}
 }
 
-// defaults sets the default values of the builder before save.
-func (_c *OutboxCreate) defaults() {
-	if _, ok := _c.mutation.Attempts(); !ok {
-		v := outbox.DefaultAttempts
-		_c.mutation.SetAttempts(v)
-	}
-}
-
 // check runs all checks and user-defined validators on the builder.
 func (_c *OutboxCreate) check() error {
-	if _, ok := _c.mutation.Attempts(); !ok {
-		return &ValidationError{Name: "attempts", err: errors.New(`ent: missing required field "Outbox.attempts"`)}
-	}
 	return nil
 }
 
@@ -249,18 +194,6 @@ func (_c *OutboxCreate) createSpec() (*Outbox, *sqlgraph.CreateSpec) {
 		_spec.SetField(outbox.FieldCreatedTime, field.TypeTime, value)
 		_node.CreatedTime = value
 	}
-	if value, ok := _c.mutation.DeliveredTime(); ok {
-		_spec.SetField(outbox.FieldDeliveredTime, field.TypeTime, value)
-		_node.DeliveredTime = &value
-	}
-	if value, ok := _c.mutation.Attempts(); ok {
-		_spec.SetField(outbox.FieldAttempts, field.TypeInt, value)
-		_node.Attempts = value
-	}
-	if value, ok := _c.mutation.LeasedUntil(); ok {
-		_spec.SetField(outbox.FieldLeasedUntil, field.TypeTime, value)
-		_node.LeasedUntil = &value
-	}
 	return _node, _spec
 }
 
@@ -282,7 +215,6 @@ func (_c *OutboxCreateBulk) Save(ctx context.Context) ([]*Outbox, error) {
 	for i := range _c.builders {
 		func(i int, root context.Context) {
 			builder := _c.builders[i]
-			builder.defaults()
 			var mut Mutator = MutateFunc(func(ctx context.Context, m Mutation) (Value, error) {
 				mutation, ok := m.(*OutboxMutation)
 				if !ok {

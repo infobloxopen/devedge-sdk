@@ -13,16 +13,16 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
 )
 
-// openOutboxDB opens a shared-cache in-memory SQLite GORM db with the outbox
-// table migrated. cache=shared keeps the in-memory db alive across connections so
-// a committed write is visible to a fresh query.
+// openOutboxDB opens a shared-cache in-memory SQLite GORM db with the write-only outbox
+// table plus the dispatcher sidecar tables migrated. cache=shared keeps the in-memory
+// db alive across connections so a committed write is visible to a fresh query.
 func openOutboxDB(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(openTestSQLite("file:"+dsn+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&gormtx.OutboxRow{}); err != nil {
+	if err := db.AutoMigrate(&gormtx.OutboxRow{}, &gormtx.OutboxCursorRow{}, &gormtx.OutboxDeadLetterRow{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return db
@@ -38,8 +38,8 @@ func countOutbox(t *testing.T, db *gorm.DB, id string) int64 {
 	return n
 }
 
-// TestGormOutbox_AppendOutsideTxErrors proves the F032 D-1 guard: Append without
-// an enclosing Atomically returns ErrNoTransaction and writes nothing.
+// TestGormOutbox_AppendOutsideTxErrors proves the F032 D-1 guard: Append without an
+// enclosing Atomically returns ErrNoTransaction and writes nothing.
 func TestGormOutbox_AppendOutsideTxErrors(t *testing.T) {
 	db := openOutboxDB(t, "gorm_outbox_notx")
 	store := gormtx.NewGormOutboxStore(db)
@@ -70,9 +70,9 @@ func TestGormOutbox_AppendCommitsWithTx(t *testing.T) {
 	}
 }
 
-// TestGormOutbox_AppendRollsBackWithTx proves AC-1 (rollback side, the atomic
-// enlist): an Append issued through the tx is discarded when the transaction
-// rolls back — no orphan row on a separate connection.
+// TestGormOutbox_AppendRollsBackWithTx proves AC-1 (rollback side, the atomic enlist):
+// an Append issued through the tx is discarded when the transaction rolls back — no
+// orphan row on a separate connection.
 func TestGormOutbox_AppendRollsBackWithTx(t *testing.T) {
 	db := openOutboxDB(t, "gorm_outbox_rollback")
 	store := gormtx.NewGormOutboxStore(db)
@@ -93,152 +93,117 @@ func TestGormOutbox_AppendRollsBackWithTx(t *testing.T) {
 	}
 }
 
-// TestGormOutbox_LeaseLifecycle exercises Claim → MarkDelivered / Release under the
-// F033 append-only churn-free model. A claimed row is hidden by its lease; a released
-// row is immediately re-claimable (attempts increment on every claim); a row that is
-// MarkDelivered drops out of all future claims (the single terminal mark — no per-poll
-// re-lease churn) and is never deleted.
-func TestGormOutbox_LeaseLifecycle(t *testing.T) {
-	db := openOutboxDB(t, "gorm_outbox_lease")
+// TestGormOutbox_WriteOnly_ReadForwardCursor exercises the F033 write-only forward
+// scan: ReadAfter returns rows strictly after the cursor in (created_time, id) order
+// and NEVER mutates a row. The dispatcher's progress lives in the sidecar, not the
+// outbox, so reading the same cursor twice returns the same rows and the row count is
+// unchanged.
+func TestGormOutbox_WriteOnly_ReadForwardCursor(t *testing.T) {
+	db := openOutboxDB(t, "gorm_outbox_cursor")
 	clock := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
-	store := gormtx.NewGormOutboxStore(db,
-		gormtx.WithOutboxLeaseTTL(time.Minute),
-		gormtx.WithOutboxNowForTest(clock.Now),
-	)
+	store := gormtx.NewGormOutboxStore(db, gormtx.WithOutboxNowForTest(clock.Now))
 	tx := gormtx.NewGormTxRunner(db)
 
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	if err := tx.Atomically(context.Background(), func(ctx context.Context) error {
-		if aerr := store.Append(ctx, &persistence.OutboxRecord{ID: "e1", EventType: "X"}); aerr != nil {
+		if aerr := store.Append(ctx, &persistence.OutboxRecord{ID: "e1", EventType: "X", CreatedTime: base}); aerr != nil {
 			return aerr
 		}
-		return store.Append(ctx, &persistence.OutboxRecord{ID: "e2", EventType: "X"})
+		if aerr := store.Append(ctx, &persistence.OutboxRecord{ID: "e2", EventType: "X", CreatedTime: base}); aerr != nil {
+			return aerr // shares e1's created_time; id breaks the tie
+		}
+		return store.Append(ctx, &persistence.OutboxRecord{ID: "e3", EventType: "X", CreatedTime: base.Add(time.Minute)})
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Claim both: attempts bumped, lease stamped.
-	claimed, err := store.ClaimUndelivered(context.Background(), 5, 10)
+	// From the start, limit 2: the two oldest in (created_time, id) order.
+	got, err := store.ReadAfter(context.Background(), persistence.OutboxCursor{}, 2)
 	if err != nil {
-		t.Fatalf("claim: %v", err)
+		t.Fatalf("read: %v", err)
 	}
-	if len(claimed) != 2 {
-		t.Fatalf("expected 2 claimed, got %d", len(claimed))
+	if len(got) != 2 || got[0].ID != "e1" || got[1].ID != "e2" {
+		t.Fatalf("forward scan must return [e1 e2], got %+v", got)
 	}
-	for _, r := range claimed {
-		if r.Attempts != 1 {
-			t.Fatalf("claim must bump attempts to 1, got %d for %s", r.Attempts, r.ID)
-		}
+	// Reading the same cursor again is identical (non-mutating).
+	again, _ := store.ReadAfter(context.Background(), persistence.OutboxCursor{}, 2)
+	if len(again) != 2 || again[0].ID != "e1" || again[1].ID != "e2" {
+		t.Fatalf("ReadAfter must be non-mutating and repeatable, got %+v", again)
 	}
-
-	// A second claim BEFORE the lease lapses returns nothing (leased rows hidden).
-	again, err := store.ClaimUndelivered(context.Background(), 5, 10)
+	// Advance the cursor past e2; next read returns only e3.
+	cursor := persistence.OutboxCursor{CreatedTime: got[1].CreatedTime, ID: got[1].ID}
+	next, err := store.ReadAfter(context.Background(), cursor, 10)
 	if err != nil {
-		t.Fatalf("re-claim: %v", err)
+		t.Fatalf("read after cursor: %v", err)
 	}
-	if len(again) != 0 {
-		t.Fatalf("leased rows must be hidden from a competing claim, got %d", len(again))
-	}
-
-	// MarkDelivered stamps e1's terminal delivered-mark, excluding it from all future
-	// claims (the churn-free happy path). Release e2 to drop its lease for a prompt
-	// re-claim. Advance the clock past the lease so e2's lapsed lease lets it re-claim.
-	if err := store.MarkDelivered(context.Background(), "e1"); err != nil {
-		t.Fatalf("mark delivered: %v", err)
-	}
-	if err := store.Release(context.Background(), "e2"); err != nil {
-		t.Fatalf("release: %v", err)
+	if len(next) != 1 || next[0].ID != "e3" {
+		t.Fatalf("read after e2 must return only e3, got %+v", next)
 	}
 
-	// e1 is delivered (never re-claimed — churn-free); only e2 (released) re-claims.
-	third, err := store.ClaimUndelivered(context.Background(), 5, 10)
-	if err != nil {
-		t.Fatalf("third claim: %v", err)
-	}
-	if len(third) != 1 || third[0].ID != "e2" {
-		t.Fatalf("after MarkDelivered(e1)+Release(e2), claim must return only e2 (e1 delivered, never re-claimed), got %+v", third)
-	}
-	if third[0].Attempts != 2 {
-		t.Fatalf("re-claimed e2 must have attempts=2, got %d", third[0].Attempts)
-	}
-
-	// Churn-free: even after e2's lease lapses, e1 stays out of the claim set forever —
-	// a delivered event is never re-leased/re-attempted. Advance well past the lease.
-	clock.t = clock.t.Add(10 * time.Minute)
-	for i := range 5 {
-		batch, cerr := store.ClaimUndelivered(context.Background(), 5, 10)
-		if cerr != nil {
-			t.Fatalf("churn poll %d: %v", i, cerr)
-		}
-		for _, r := range batch {
-			if r.ID == "e1" {
-				t.Fatalf("a delivered event (e1) was re-claimed on poll %d — per-poll churn", i)
-			}
-		}
-	}
-
-	// AC-1 (append-only): MarkDelivered and the claims above NEVER deleted a row. The
-	// table still holds both rows.
+	// Write-only: the three rows are intact (reads never deleted/added).
 	var total int64
 	if err := db.WithContext(context.Background()).Model(&gormtx.OutboxRow{}).Count(&total).Error; err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if total != 2 {
-		t.Fatalf("append-only: the dispatch path must never delete a row, count=%d want 2", total)
+	if total != 3 {
+		t.Fatalf("write-only: ReadAfter must never mutate the table, count=%d want 3", total)
 	}
 }
 
-// TestGormOutbox_PoisonCutoff proves AC-3's poison half: a row stops being claimed
-// once its attempts reach maxAttempts, so a permanently failing event does not loop
-// forever (and the append-only row is never deleted — it is parked for retention).
-func TestGormOutbox_PoisonCutoff(t *testing.T) {
-	db := openOutboxDB(t, "gorm_outbox_poison")
-	clock := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
-	store := gormtx.NewGormOutboxStore(db,
-		gormtx.WithOutboxLeaseTTL(time.Minute),
-		gormtx.WithOutboxNowForTest(clock.Now),
-	)
-	tx := gormtx.NewGormTxRunner(db)
-	if err := tx.Atomically(context.Background(), func(ctx context.Context) error {
-		return store.Append(ctx, &persistence.OutboxRecord{ID: "poison", EventType: "X"})
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+// TestGormOutboxCursorStore_LoadSaveDeadLetter proves the sidecar cursor store on GORM:
+// a never-saved cursor is the zero position; SaveCursor upserts the position +
+// head-failure count; DeadLetter parks a poison event. None of this touches the
+// write-only outbox.
+func TestGormOutboxCursorStore_LoadSaveDeadLetter(t *testing.T) {
+	db := openOutboxDB(t, "gorm_outbox_sidecar")
+	cur := gormtx.NewGormOutboxCursorStore(db)
+	ctx := context.Background()
 
-	const maxAttempts = 3
-	for i := 0; i < maxAttempts; i++ {
-		claimed, err := store.ClaimUndelivered(context.Background(), maxAttempts, 10)
-		if err != nil {
-			t.Fatalf("claim %d: %v", i, err)
-		}
-		if len(claimed) != 1 {
-			t.Fatalf("attempt %d must still be claimable (attempts=%d < max=%d), got %d claimed", i, i, maxAttempts, len(claimed))
-		}
-		// Simulate a failed delivery: release the lease so the next claim is prompt.
-		if err := store.Release(context.Background(), "poison"); err != nil {
-			t.Fatalf("release: %v", err)
-		}
-	}
-	// Now attempts == maxAttempts: the row is poison and no longer claimed.
-	after, err := store.ClaimUndelivered(context.Background(), maxAttempts, 10)
+	pos, fails, err := cur.LoadCursor(ctx, "default")
 	if err != nil {
-		t.Fatalf("post-cutoff claim: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	if len(after) != 0 {
-		t.Fatalf("a row at maxAttempts must no longer be claimed (poison cutoff), got %d", len(after))
+	if !pos.IsZero() || fails != 0 {
+		t.Fatalf("a never-saved cursor must be zero/0, got %+v fails=%d", pos, fails)
 	}
-	// Append-only: the poison row is still present (parked for retention), not deleted.
-	var total int64
-	db.WithContext(context.Background()).Model(&gormtx.OutboxRow{}).Count(&total)
-	if total != 1 {
-		t.Fatalf("poison row must be parked (append-only), not deleted; count=%d", total)
+
+	want := persistence.OutboxCursor{CreatedTime: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), ID: "e7"}
+	if err := cur.SaveCursor(ctx, "default", want, 2); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	// Re-save (upsert) to a new position to prove it updates, not duplicates.
+	want2 := persistence.OutboxCursor{CreatedTime: want.CreatedTime.Add(time.Hour), ID: "e9"}
+	if err := cur.SaveCursor(ctx, "default", want2, 0); err != nil {
+		t.Fatalf("re-save: %v", err)
+	}
+	got, fails, err := cur.LoadCursor(ctx, "default")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !got.CreatedTime.Equal(want2.CreatedTime) || got.ID != want2.ID || fails != 0 {
+		t.Fatalf("cursor upsert must reflect the latest save, got %+v fails=%d", got, fails)
+	}
+	var cursorRows int64
+	db.WithContext(ctx).Model(&gormtx.OutboxCursorRow{}).Count(&cursorRows)
+	if cursorRows != 1 {
+		t.Fatalf("SaveCursor must upsert (one row per cursor name), got %d rows", cursorRows)
+	}
+
+	if err := cur.DeadLetter(ctx, "default", &persistence.OutboxRecord{ID: "poison", EventType: "T", CreatedTime: want.CreatedTime}, "boom"); err != nil {
+		t.Fatalf("dead-letter: %v", err)
+	}
+	var dead int64
+	db.WithContext(ctx).Model(&gormtx.OutboxDeadLetterRow{}).Where("event_id = ?", "poison").Count(&dead)
+	if dead != 1 {
+		t.Fatalf("dead-letter must park the poison event, got %d", dead)
 	}
 }
 
-// TestGormOutbox_DropPartitionsBefore_SQLite proves the dev-backend retention model:
-// on the non-partitioned SQLite backend, DropPartitionsBefore forgets rows older than
-// t (the windowed model of a partition drop) while current-window rows survive. It is
-// the OutboxRetention contract for the dev backend (the real partition DDL is exercised
-// on PG in the iam fixture).
+// TestGormOutbox_DropPartitionsBefore_SQLite proves the dev-backend retention model: on
+// the non-partitioned SQLite backend, DropPartitionsBefore forgets rows older than t
+// (the windowed model of a partition drop) while current-window rows survive. It is the
+// OutboxRetention contract for the dev backend (the real partition DDL is exercised on
+// PG/MySQL in the iam fixture).
 func TestGormOutbox_DropPartitionsBefore_SQLite(t *testing.T) {
 	db := openOutboxDB(t, "gorm_outbox_retention")
 	store := gormtx.NewGormOutboxStore(db)
@@ -271,42 +236,7 @@ func TestGormOutbox_DropPartitionsBefore_SQLite(t *testing.T) {
 	}
 }
 
-// TestGormOutbox_LeaseLapseAllowsReclaim proves a leased row re-claims once its
-// lease lapses (the safety net behind at-least-once).
-func TestGormOutbox_LeaseLapseAllowsReclaim(t *testing.T) {
-	db := openOutboxDB(t, "gorm_outbox_lapse")
-	clock := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
-	store := gormtx.NewGormOutboxStore(db,
-		gormtx.WithOutboxLeaseTTL(time.Minute),
-		gormtx.WithOutboxNowForTest(clock.Now),
-	)
-	tx := gormtx.NewGormTxRunner(db)
-
-	if err := tx.Atomically(context.Background(), func(ctx context.Context) error {
-		return store.Append(ctx, &persistence.OutboxRecord{ID: "e1", EventType: "X"})
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	if claimed, err := store.ClaimUndelivered(context.Background(), 5, 10); err != nil || len(claimed) != 1 {
-		t.Fatalf("first claim: n=%d err=%v", len(claimed), err)
-	}
-	// Before the lease lapses: hidden.
-	if again, _ := store.ClaimUndelivered(context.Background(), 5, 10); len(again) != 0 {
-		t.Fatalf("row must stay leased, got %d", len(again))
-	}
-	// Advance past the lease.
-	clock.t = clock.t.Add(2 * time.Minute)
-	reclaimed, err := store.ClaimUndelivered(context.Background(), 5, 10)
-	if err != nil {
-		t.Fatalf("reclaim: %v", err)
-	}
-	if len(reclaimed) != 1 || reclaimed[0].Attempts != 2 {
-		t.Fatalf("lapsed lease must re-claim with attempts=2, got %+v", reclaimed)
-	}
-}
-
-// fakeClock is a settable clock for deterministic lease tests.
+// fakeClock is a settable clock for deterministic created-time tests.
 type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) Now() time.Time { return c.t }

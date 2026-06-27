@@ -20,7 +20,7 @@ type widget struct {
 // commit. Returns the publisher, the repo, the store, and the runner.
 func setup() (*events.OutboxPublisher, *persistence.MemoryRepository[*widget, string], *persistence.MemoryOutboxStore, *persistence.MemoryTxRunner) {
 	repo := persistence.NewMemoryRepository(func(w *widget) string { return w.ID })
-	store := persistence.NewMemoryOutboxStore(0)
+	store := persistence.NewMemoryOutboxStore()
 	tx := persistence.NewMemoryTxRunner(repo, store)
 	pub := events.NewOutboxPublisher(store)
 	return pub, repo, store, tx

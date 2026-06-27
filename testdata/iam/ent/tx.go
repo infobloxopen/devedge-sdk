@@ -24,6 +24,10 @@ type Tx struct {
 	Membership *MembershipClient
 	// Outbox is the client for interacting with the Outbox builders.
 	Outbox *OutboxClient
+	// OutboxCursor is the client for interacting with the OutboxCursor builders.
+	OutboxCursor *OutboxCursorClient
+	// OutboxDeadLetter is the client for interacting with the OutboxDeadLetter builders.
+	OutboxDeadLetter *OutboxDeadLetterClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 
@@ -163,6 +167,8 @@ func (tx *Tx) init() {
 	tx.IdemMarker = NewIdemMarkerClient(tx.config)
 	tx.Membership = NewMembershipClient(tx.config)
 	tx.Outbox = NewOutboxClient(tx.config)
+	tx.OutboxCursor = NewOutboxCursorClient(tx.config)
+	tx.OutboxDeadLetter = NewOutboxDeadLetterClient(tx.config)
 	tx.User = NewUserClient(tx.config)
 }
 

@@ -24,7 +24,6 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
 	"github.com/infobloxopen/devedge-sdk/secret"
 	entiam "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
-	entoutbox "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/iamv1"
 )
 
@@ -162,8 +161,12 @@ func TestPG_Gorm_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	committedEffects := 0
 	revoke := revokeKeysHandlerGorm(apiKeys)
 	idem := gormtx.NewGormIdempotencyStore(db)
+	// One SHARED cursor sidecar so both racers read the same head event before either
+	// advances (a genuine concurrent double-delivery — the SDK assumes one dispatcher
+	// per service; this proves the marker, not the cursor, is the exactly-once guard).
+	cursors := gormtx.NewGormOutboxCursorStore(db)
 	mkDispatcher := func() *events.Dispatcher {
-		d := events.NewDispatcher(store, tx, idem)
+		d := events.NewDispatcher(store, cursors, tx, idem)
 		d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
 			if err := revoke(hctx, evt); err != nil {
 				return err
@@ -176,22 +179,14 @@ func TestPG_Gorm_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 		return d
 	}
 
-	// Make the row claimable by both racers (clear the lease) so they genuinely
-	// contend for the same delivery.
-	if err := db.WithContext(ctx).Model(&gormtx.OutboxRow{}).
-		Where("id IS NOT NULL").
-		Updates(map[string]any{"delivered_time": nil, "leased_until": nil}).Error; err != nil {
-		t.Fatalf("reset lease: %v", err)
-	}
-
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// A racer that hits the marker conflict / a busy row is acceptable
-			// (at-least-once: the row stays for retry); exactly-once is asserted on the
-			// live key count and the committed-effect count below.
+			// A racer that hits the marker conflict is acceptable (at-least-once: the
+			// cursor stays put for retry); exactly-once is asserted on the live key count
+			// and the committed-effect count below.
 			_, _ = mkDispatcher().RunOnce(ctx, 10)
 		}()
 	}
@@ -201,15 +196,11 @@ func TestPG_Gorm_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	if remaining, _, _ := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10}); len(remaining) != 0 {
 		t.Fatalf("the key must be revoked exactly once and stay revoked, %d present", len(remaining))
 	}
-	// ...and the handler's committed effect ran at most once across the two racers
-	// (the marker UNIQUE rolled back the loser's effect). A surviving undelivered row
-	// would be re-delivered later; drive a convergence pass so the row is terminal.
-	var undelivered int64
-	db.WithContext(ctx).Model(&gormtx.OutboxRow{}).Where("delivered_time IS NULL").Count(&undelivered)
-	if undelivered != 0 {
-		if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
-			t.Fatalf("convergence pass: %v", err)
-		}
+	// ...and the handler's committed effect ran at most once across the two racers (the
+	// marker UNIQUE rolled back the loser's effect). Drive a convergence pass so the
+	// shared cursor advances past the event before asserting on the marker count.
+	if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
+		t.Fatalf("convergence pass: %v", err)
 	}
 	// The handler effect (revoking the key) committed exactly once: the committed
 	// idempotency marker is unique per (event, handler), so a single marker row in
@@ -269,8 +260,12 @@ func TestPG_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	committedEffects := 0
 	revoke := revokeKeysHandler(client, apiKeys)
 	idem := iamv1.NewEntIdempotencyStore(client)
+	// One SHARED cursor sidecar so both racers read the same head event before either
+	// advances (a genuine concurrent double-delivery — the SDK assumes one dispatcher
+	// per service; this proves the marker, not the cursor, is the exactly-once guard).
+	cursors := iamv1.NewEntOutboxCursorStore(client)
 	mkDispatcher := func() *events.Dispatcher {
-		d := events.NewDispatcher(store, tx, idem)
+		d := events.NewDispatcher(store, cursors, tx, idem)
 		d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
 			if err := revoke(hctx, evt); err != nil {
 				return err
@@ -283,23 +278,14 @@ func TestPG_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 		return d
 	}
 
-	// Make the row claimable by both racers (clear the lease + delivered) so they
-	// genuinely contend for the same delivery.
-	if _, err := client.Outbox.Update().
-		ClearDeliveredTime().
-		ClearLeasedUntil().
-		Save(ctx); err != nil {
-		t.Fatalf("reset lease: %v", err)
-	}
-
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// A racer that hits the marker conflict / a busy row is acceptable
-			// (at-least-once: the row stays for retry); exactly-once is asserted on the
-			// live key count and the committed-marker count below.
+			// A racer that hits the marker conflict is acceptable (at-least-once: the
+			// cursor stays put for retry); exactly-once is asserted on the live key count
+			// and the committed-marker count below.
 			_, _ = mkDispatcher().RunOnce(ctx, 10)
 		}()
 	}
@@ -309,12 +295,10 @@ func TestPG_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	if remaining, _, _ := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10}); len(remaining) != 0 {
 		t.Fatalf("the key must be revoked exactly once and stay revoked, %d present", len(remaining))
 	}
-	// ...and a surviving undelivered row would be re-delivered later; drive a
-	// convergence pass so the row is terminal before asserting on the marker count.
-	if undelivered, _ := client.Outbox.Query().Where(entoutbox.DeliveredTimeIsNil()).Count(ctx); undelivered != 0 {
-		if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
-			t.Fatalf("convergence pass: %v", err)
-		}
+	// ...drive a convergence pass so the shared cursor advances past the event before
+	// asserting on the marker count (a racer that lost the marker race left it un-advanced).
+	if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
+		t.Fatalf("convergence pass: %v", err)
 	}
 	// The handler effect committed exactly once: the committed idempotency marker is
 	// unique per (event, handler), so a single marker row in the table is the

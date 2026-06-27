@@ -81,6 +81,30 @@ func (f OutboxFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, erro
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.OutboxMutation", m)
 }
 
+// The OutboxCursorFunc type is an adapter to allow the use of ordinary
+// function as OutboxCursor mutator.
+type OutboxCursorFunc func(context.Context, *ent.OutboxCursorMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f OutboxCursorFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.OutboxCursorMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.OutboxCursorMutation", m)
+}
+
+// The OutboxDeadLetterFunc type is an adapter to allow the use of ordinary
+// function as OutboxDeadLetter mutator.
+type OutboxDeadLetterFunc func(context.Context, *ent.OutboxDeadLetterMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f OutboxDeadLetterFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.OutboxDeadLetterMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.OutboxDeadLetterMutation", m)
+}
+
 // The UserFunc type is an adapter to allow the use of ordinary
 // function as User mutator.
 type UserFunc func(context.Context, *ent.UserMutation) (ent.Value, error)

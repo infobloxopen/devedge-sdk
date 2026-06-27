@@ -28,13 +28,7 @@ type Outbox struct {
 	// Payload holds the value of the "payload" field.
 	Payload []byte `json:"payload,omitempty"`
 	// CreatedTime holds the value of the "created_time" field.
-	CreatedTime time.Time `json:"created_time,omitempty"`
-	// DeliveredTime holds the value of the "delivered_time" field.
-	DeliveredTime *time.Time `json:"delivered_time,omitempty"`
-	// Attempts holds the value of the "attempts" field.
-	Attempts int `json:"attempts,omitempty"`
-	// LeasedUntil holds the value of the "leased_until" field.
-	LeasedUntil  *time.Time `json:"leased_until,omitempty"`
+	CreatedTime  time.Time `json:"created_time,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -45,11 +39,9 @@ func (*Outbox) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case outbox.FieldPayload:
 			values[i] = new([]byte)
-		case outbox.FieldAttempts:
-			values[i] = new(sql.NullInt64)
 		case outbox.FieldID, outbox.FieldAccountID, outbox.FieldAggregateType, outbox.FieldAggregateID, outbox.FieldEventType:
 			values[i] = new(sql.NullString)
-		case outbox.FieldCreatedTime, outbox.FieldDeliveredTime, outbox.FieldLeasedUntil:
+		case outbox.FieldCreatedTime:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -108,26 +100,6 @@ func (_m *Outbox) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.CreatedTime = value.Time
 			}
-		case outbox.FieldDeliveredTime:
-			if value, ok := values[i].(*sql.NullTime); !ok {
-				return fmt.Errorf("unexpected type %T for field delivered_time", values[i])
-			} else if value.Valid {
-				_m.DeliveredTime = new(time.Time)
-				*_m.DeliveredTime = value.Time
-			}
-		case outbox.FieldAttempts:
-			if value, ok := values[i].(*sql.NullInt64); !ok {
-				return fmt.Errorf("unexpected type %T for field attempts", values[i])
-			} else if value.Valid {
-				_m.Attempts = int(value.Int64)
-			}
-		case outbox.FieldLeasedUntil:
-			if value, ok := values[i].(*sql.NullTime); !ok {
-				return fmt.Errorf("unexpected type %T for field leased_until", values[i])
-			} else if value.Valid {
-				_m.LeasedUntil = new(time.Time)
-				*_m.LeasedUntil = value.Time
-			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -181,19 +153,6 @@ func (_m *Outbox) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("created_time=")
 	builder.WriteString(_m.CreatedTime.Format(time.ANSIC))
-	builder.WriteString(", ")
-	if v := _m.DeliveredTime; v != nil {
-		builder.WriteString("delivered_time=")
-		builder.WriteString(v.Format(time.ANSIC))
-	}
-	builder.WriteString(", ")
-	builder.WriteString("attempts=")
-	builder.WriteString(fmt.Sprintf("%v", _m.Attempts))
-	builder.WriteString(", ")
-	if v := _m.LeasedUntil; v != nil {
-		builder.WriteString("leased_until=")
-		builder.WriteString(v.Format(time.ANSIC))
-	}
 	builder.WriteByte(')')
 	return builder.String()
 }

@@ -24,5 +24,11 @@ type Membership func(*sql.Selector)
 // Outbox is the predicate function for outbox builders.
 type Outbox func(*sql.Selector)
 
+// OutboxCursor is the predicate function for outboxcursor builders.
+type OutboxCursor func(*sql.Selector)
+
+// OutboxDeadLetter is the predicate function for outboxdeadletter builders.
+type OutboxDeadLetter func(*sql.Selector)
+
 // User is the predicate function for user builders.
 type User func(*sql.Selector)

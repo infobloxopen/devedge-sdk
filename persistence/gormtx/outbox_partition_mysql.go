@@ -58,9 +58,10 @@ func toDays(t time.Time) int {
 	return int(t.UTC().Unix()/86400) + toDaysSinceUnixEpoch
 }
 
-// mysqlOutboxParentDDL is the MySQL declarative RANGE-partitioned parent for the
-// gormtx "outbox" table. created_time is in the primary key because a MySQL
-// partition column must appear in every unique key. The %s is the inline partition
+// mysqlOutboxParentDDLFmt is the MySQL declarative RANGE-partitioned parent for the
+// WRITE-ONLY gormtx "outbox" table. created_time is in the primary key because a MySQL
+// partition column must appear in every unique key. F033: no dispatcher-bookkeeping
+// columns — the table is written once and read forward. The %s is the inline partition
 // list (at least one partition; MySQL requires it).
 const mysqlOutboxParentDDLFmt = `
 CREATE TABLE IF NOT EXISTS outbox (
@@ -71,11 +72,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 	event_type     varchar(255),
 	payload        longblob,
 	created_time   datetime(6) NOT NULL,
-	delivered_time datetime(6),
-	attempts       int NOT NULL DEFAULT 0,
-	leased_until   datetime(6),
-	PRIMARY KEY (id, created_time),
-	KEY idx_outbox_claim (attempts, leased_until)
+	PRIMARY KEY (id, created_time)
 ) PARTITION BY RANGE (TO_DAYS(created_time)) (
 %s
 )`

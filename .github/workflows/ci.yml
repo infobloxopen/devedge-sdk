@@ -90,6 +90,34 @@ jobs:
             exit 1
           fi
 
+      # Event-bus Phase 2: the iam fixture carries the Kafka production-path validation
+      # (TestKafka_*) — the kafkabus adapter (franz-go) + the PostgreSQL advisory-lock
+      # relay leader proven end-to-end on a REAL broker (Redpanda, Kafka-API compatible)
+      # via testcontainers: outbox → leader-elected relay → Kafka → consumer-group →
+      # handler, with the two-consumer partition split, per-key ordering, exactly-once
+      # under redelivery, and single-relay-under-the-lock all asserted. They SKIP cleanly
+      # without Docker but RUN on ubuntu-latest.
+      - name: Integration tests (iam fixture — Kafka event-bus on Redpanda)
+        run: cd testdata/iam && go test -run '^TestKafka_' ./...
+
+      # Guard against the Kafka tests silently SKIPPING in CI. The Phase-2 Kafka
+      # production-path proof must RUN, not skip — fail the job if any TestKafka_ reports
+      # SKIP, mirroring the PG/MySQL guards above.
+      - name: Assert Kafka (Redpanda) tests actually ran (not skipped)
+        run: |
+          set -euo pipefail
+          echo "== iam: TestKafka_ must run, not skip =="
+          out="$(cd testdata/iam && go test -run '^TestKafka_' -v ./... 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -q -- '--- SKIP: TestKafka_'; then
+            echo "::error::Kafka (Redpanda) validation tests SKIPPED in iam — Docker/testcontainers unavailable on the runner. Phase-2 Kafka validation did not run."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q -- '--- PASS: TestKafka_'; then
+            echo "::error::No TestKafka_ test PASSED in iam — expected the Kafka validation suite to run."
+            exit 1
+          fi
+
   security-check:
     name: Security Check
     runs-on: ubuntu-latest

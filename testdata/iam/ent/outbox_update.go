@@ -140,67 +140,6 @@ func (_u *OutboxUpdate) ClearCreatedTime() *OutboxUpdate {
 	return _u
 }
 
-// SetDeliveredTime sets the "delivered_time" field.
-func (_u *OutboxUpdate) SetDeliveredTime(v time.Time) *OutboxUpdate {
-	_u.mutation.SetDeliveredTime(v)
-	return _u
-}
-
-// SetNillableDeliveredTime sets the "delivered_time" field if the given value is not nil.
-func (_u *OutboxUpdate) SetNillableDeliveredTime(v *time.Time) *OutboxUpdate {
-	if v != nil {
-		_u.SetDeliveredTime(*v)
-	}
-	return _u
-}
-
-// ClearDeliveredTime clears the value of the "delivered_time" field.
-func (_u *OutboxUpdate) ClearDeliveredTime() *OutboxUpdate {
-	_u.mutation.ClearDeliveredTime()
-	return _u
-}
-
-// SetAttempts sets the "attempts" field.
-func (_u *OutboxUpdate) SetAttempts(v int) *OutboxUpdate {
-	_u.mutation.ResetAttempts()
-	_u.mutation.SetAttempts(v)
-	return _u
-}
-
-// SetNillableAttempts sets the "attempts" field if the given value is not nil.
-func (_u *OutboxUpdate) SetNillableAttempts(v *int) *OutboxUpdate {
-	if v != nil {
-		_u.SetAttempts(*v)
-	}
-	return _u
-}
-
-// AddAttempts adds value to the "attempts" field.
-func (_u *OutboxUpdate) AddAttempts(v int) *OutboxUpdate {
-	_u.mutation.AddAttempts(v)
-	return _u
-}
-
-// SetLeasedUntil sets the "leased_until" field.
-func (_u *OutboxUpdate) SetLeasedUntil(v time.Time) *OutboxUpdate {
-	_u.mutation.SetLeasedUntil(v)
-	return _u
-}
-
-// SetNillableLeasedUntil sets the "leased_until" field if the given value is not nil.
-func (_u *OutboxUpdate) SetNillableLeasedUntil(v *time.Time) *OutboxUpdate {
-	if v != nil {
-		_u.SetLeasedUntil(*v)
-	}
-	return _u
-}
-
-// ClearLeasedUntil clears the value of the "leased_until" field.
-func (_u *OutboxUpdate) ClearLeasedUntil() *OutboxUpdate {
-	_u.mutation.ClearLeasedUntil()
-	return _u
-}
-
 // Mutation returns the OutboxMutation object of the builder.
 func (_u *OutboxUpdate) Mutation() *OutboxMutation {
 	return _u.mutation
@@ -277,24 +216,6 @@ func (_u *OutboxUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.CreatedTimeCleared() {
 		_spec.ClearField(outbox.FieldCreatedTime, field.TypeTime)
-	}
-	if value, ok := _u.mutation.DeliveredTime(); ok {
-		_spec.SetField(outbox.FieldDeliveredTime, field.TypeTime, value)
-	}
-	if _u.mutation.DeliveredTimeCleared() {
-		_spec.ClearField(outbox.FieldDeliveredTime, field.TypeTime)
-	}
-	if value, ok := _u.mutation.Attempts(); ok {
-		_spec.SetField(outbox.FieldAttempts, field.TypeInt, value)
-	}
-	if value, ok := _u.mutation.AddedAttempts(); ok {
-		_spec.AddField(outbox.FieldAttempts, field.TypeInt, value)
-	}
-	if value, ok := _u.mutation.LeasedUntil(); ok {
-		_spec.SetField(outbox.FieldLeasedUntil, field.TypeTime, value)
-	}
-	if _u.mutation.LeasedUntilCleared() {
-		_spec.ClearField(outbox.FieldLeasedUntil, field.TypeTime)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -428,67 +349,6 @@ func (_u *OutboxUpdateOne) ClearCreatedTime() *OutboxUpdateOne {
 	return _u
 }
 
-// SetDeliveredTime sets the "delivered_time" field.
-func (_u *OutboxUpdateOne) SetDeliveredTime(v time.Time) *OutboxUpdateOne {
-	_u.mutation.SetDeliveredTime(v)
-	return _u
-}
-
-// SetNillableDeliveredTime sets the "delivered_time" field if the given value is not nil.
-func (_u *OutboxUpdateOne) SetNillableDeliveredTime(v *time.Time) *OutboxUpdateOne {
-	if v != nil {
-		_u.SetDeliveredTime(*v)
-	}
-	return _u
-}
-
-// ClearDeliveredTime clears the value of the "delivered_time" field.
-func (_u *OutboxUpdateOne) ClearDeliveredTime() *OutboxUpdateOne {
-	_u.mutation.ClearDeliveredTime()
-	return _u
-}
-
-// SetAttempts sets the "attempts" field.
-func (_u *OutboxUpdateOne) SetAttempts(v int) *OutboxUpdateOne {
-	_u.mutation.ResetAttempts()
-	_u.mutation.SetAttempts(v)
-	return _u
-}
-
-// SetNillableAttempts sets the "attempts" field if the given value is not nil.
-func (_u *OutboxUpdateOne) SetNillableAttempts(v *int) *OutboxUpdateOne {
-	if v != nil {
-		_u.SetAttempts(*v)
-	}
-	return _u
-}
-
-// AddAttempts adds value to the "attempts" field.
-func (_u *OutboxUpdateOne) AddAttempts(v int) *OutboxUpdateOne {
-	_u.mutation.AddAttempts(v)
-	return _u
-}
-
-// SetLeasedUntil sets the "leased_until" field.
-func (_u *OutboxUpdateOne) SetLeasedUntil(v time.Time) *OutboxUpdateOne {
-	_u.mutation.SetLeasedUntil(v)
-	return _u
-}
-
-// SetNillableLeasedUntil sets the "leased_until" field if the given value is not nil.
-func (_u *OutboxUpdateOne) SetNillableLeasedUntil(v *time.Time) *OutboxUpdateOne {
-	if v != nil {
-		_u.SetLeasedUntil(*v)
-	}
-	return _u
-}
-
-// ClearLeasedUntil clears the value of the "leased_until" field.
-func (_u *OutboxUpdateOne) ClearLeasedUntil() *OutboxUpdateOne {
-	_u.mutation.ClearLeasedUntil()
-	return _u
-}
-
 // Mutation returns the OutboxMutation object of the builder.
 func (_u *OutboxUpdateOne) Mutation() *OutboxMutation {
 	return _u.mutation
@@ -595,24 +455,6 @@ func (_u *OutboxUpdateOne) sqlSave(ctx context.Context) (_node *Outbox, err erro
 	}
 	if _u.mutation.CreatedTimeCleared() {
 		_spec.ClearField(outbox.FieldCreatedTime, field.TypeTime)
-	}
-	if value, ok := _u.mutation.DeliveredTime(); ok {
-		_spec.SetField(outbox.FieldDeliveredTime, field.TypeTime, value)
-	}
-	if _u.mutation.DeliveredTimeCleared() {
-		_spec.ClearField(outbox.FieldDeliveredTime, field.TypeTime)
-	}
-	if value, ok := _u.mutation.Attempts(); ok {
-		_spec.SetField(outbox.FieldAttempts, field.TypeInt, value)
-	}
-	if value, ok := _u.mutation.AddedAttempts(); ok {
-		_spec.AddField(outbox.FieldAttempts, field.TypeInt, value)
-	}
-	if value, ok := _u.mutation.LeasedUntil(); ok {
-		_spec.SetField(outbox.FieldLeasedUntil, field.TypeTime, value)
-	}
-	if _u.mutation.LeasedUntilCleared() {
-		_spec.ClearField(outbox.FieldLeasedUntil, field.TypeTime)
 	}
 	_node = &Outbox{config: _u.config}
 	_spec.Assign = _node.assignValues

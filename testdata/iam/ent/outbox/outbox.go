@@ -23,12 +23,6 @@ const (
 	FieldPayload = "payload"
 	// FieldCreatedTime holds the string denoting the created_time field in the database.
 	FieldCreatedTime = "created_time"
-	// FieldDeliveredTime holds the string denoting the delivered_time field in the database.
-	FieldDeliveredTime = "delivered_time"
-	// FieldAttempts holds the string denoting the attempts field in the database.
-	FieldAttempts = "attempts"
-	// FieldLeasedUntil holds the string denoting the leased_until field in the database.
-	FieldLeasedUntil = "leased_until"
 	// Table holds the table name of the outbox in the database.
 	Table = "outboxes"
 )
@@ -42,9 +36,6 @@ var Columns = []string{
 	FieldEventType,
 	FieldPayload,
 	FieldCreatedTime,
-	FieldDeliveredTime,
-	FieldAttempts,
-	FieldLeasedUntil,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -56,11 +47,6 @@ func ValidColumn(column string) bool {
 	}
 	return false
 }
-
-var (
-	// DefaultAttempts holds the default value on creation for the "attempts" field.
-	DefaultAttempts int
-)
 
 // OrderOption defines the ordering options for the Outbox queries.
 type OrderOption func(*sql.Selector)
@@ -93,19 +79,4 @@ func ByEventType(opts ...sql.OrderTermOption) OrderOption {
 // ByCreatedTime orders the results by the created_time field.
 func ByCreatedTime(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCreatedTime, opts...).ToFunc()
-}
-
-// ByDeliveredTime orders the results by the delivered_time field.
-func ByDeliveredTime(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldDeliveredTime, opts...).ToFunc()
-}
-
-// ByAttempts orders the results by the attempts field.
-func ByAttempts(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldAttempts, opts...).ToFunc()
-}
-
-// ByLeasedUntil orders the results by the leased_until field.
-func ByLeasedUntil(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldLeasedUntil, opts...).ToFunc()
 }

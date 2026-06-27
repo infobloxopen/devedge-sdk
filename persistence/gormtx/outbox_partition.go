@@ -20,9 +20,11 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
-// outboxPartitionLayout is the column list / constraints shared by the partitioned
-// parent table. created_time is in the primary key because a PostgreSQL partition
-// key must appear in every unique constraint of the partitioned table.
+// outboxPartitionParentDDL is the column list / constraints of the WRITE-ONLY
+// partitioned parent table. created_time is in the primary key because a PostgreSQL
+// partition key must appear in every unique constraint of the partitioned table. F033:
+// there are NO dispatcher-bookkeeping columns (no delivered_time / attempts /
+// leased_until) — the table is written once (Append) and read forward (ReadAfter).
 const outboxPartitionParentDDL = `
 CREATE TABLE IF NOT EXISTS outbox (
 	id             varchar(36) NOT NULL,
@@ -32,9 +34,6 @@ CREATE TABLE IF NOT EXISTS outbox (
 	event_type     text,
 	payload        bytea,
 	created_time   timestamptz NOT NULL,
-	delivered_time timestamptz,
-	attempts       integer NOT NULL DEFAULT 0,
-	leased_until   timestamptz,
 	PRIMARY KEY (id, created_time)
 ) PARTITION BY RANGE (created_time)`
 

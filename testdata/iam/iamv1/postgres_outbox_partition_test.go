@@ -83,14 +83,13 @@ func outboxPartitionCount(t *testing.T, db *sql.DB) int {
 	return n
 }
 
-// pgOutboxAttempts returns the attempts count of the (single) outbox row for the
-// given aggregate_id — used to assert a delivered row is never re-written (its
-// attempts must not advance on a later poll).
-func pgOutboxAttempts(t *testing.T, db *sql.DB, aggregateID string) int {
+// pgOutboxRowCount returns how many outbox rows exist for the given aggregate_id —
+// used to assert the write-only invariant (delivery never deletes or duplicates a row).
+func pgOutboxRowCount(t *testing.T, db *sql.DB, aggregateID string) int {
 	t.Helper()
 	var n int
-	if err := db.QueryRow(`SELECT attempts FROM outboxes WHERE aggregate_id = $1`, aggregateID).Scan(&n); err != nil {
-		t.Fatalf("read attempts for %s: %v", aggregateID, err)
+	if err := db.QueryRow(`SELECT count(*) FROM outboxes WHERE aggregate_id = $1`, aggregateID).Scan(&n); err != nil {
+		t.Fatalf("count rows for %s: %v", aggregateID, err)
 	}
 	return n
 }
@@ -194,10 +193,8 @@ func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 
 	users := iamv1.NewUserEntRepository(client)
 	tx := iamv1.NewEntTxRunner(client)
-	// A 1ns lease so a NON-delivered row would be immediately re-claimable — this is
-	// what makes the no-re-claim assertion below meaningful: the ONLY thing keeping a
-	// delivered row out of the claim set is its terminal delivered-mark, not the lease.
-	store := iamv1.NewEntOutboxStore(client, time.Nanosecond, iamv1.WithEntOutboxRawDB(rawDB))
+	store := iamv1.NewEntOutboxStore(client, 0, iamv1.WithEntOutboxRawDB(rawDB))
+	cursors := iamv1.NewEntOutboxCursorStore(client)
 	pub := events.NewOutboxPublisher(store)
 	idem := iamv1.NewEntIdempotencyStore(client)
 
@@ -214,13 +211,13 @@ func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 	}
 
 	applied := 0
-	d := events.NewDispatcher(store, tx, idem)
+	d := events.NewDispatcher(store, cursors, tx, idem)
 	d.Subscribe(eventUserSuspended, "mark-applied", func(hctx context.Context, evt events.Event) error {
 		applied++
 		return nil
 	})
 
-	// Deliver: ClaimUndelivered(maxAttempts, limit) + dispatch.
+	// Deliver: ReadAfter(cursor, limit) + dispatch (forward cursor).
 	if delivered, err := d.RunOnce(ctx, 10); err != nil || delivered != 1 {
 		t.Fatalf("dispatch must deliver the event: delivered=%d err=%v", delivered, err)
 	}
@@ -228,32 +225,32 @@ func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 		t.Fatalf("handler must apply once, applied=%d", applied)
 	}
 
-	// AC-1 (append-only): the row was NOT deleted by delivery — the count is unchanged
-	// (the delivered-mark is an in-place UPDATE, never an insert/delete).
+	// AC-1 (write-only): the row was NOT deleted or mutated by delivery — the count is
+	// unchanged and the dispatcher only advanced its sidecar cursor.
 	if n := entOutboxCount(t, client); n != rowsAfterPublish {
-		t.Fatalf("append-only: dispatch must never delete a row, count went %d -> %d", rowsAfterPublish, n)
+		t.Fatalf("write-only: dispatch must never delete a row, count went %d -> %d", rowsAfterPublish, n)
 	}
-	// The delivered row carries a single terminal delivered_time and its attempts are
-	// at exactly 1 (one claim) — record the watermark to prove no per-poll re-write.
-	attemptsAtDelivery := pgOutboxAttempts(t, rawDB, "u1")
+	if c := pgOutboxRowCount(t, rawDB, "u1"); c != 1 {
+		t.Fatalf("write-only: the event row must be intact (exactly one), found %d", c)
+	}
 
-	// Churn-free happy path: re-running the dispatcher must NOT re-claim the delivered
-	// row (delivered rows are excluded from the claim), so the handler is not re-invoked
-	// and attempts do NOT advance — no per-poll re-lease UPDATE churn on a delivered event.
+	// Churn-free happy path: re-running the dispatcher must NOT re-deliver the consumed
+	// event (the cursor has advanced past it), so the handler is not re-invoked and the
+	// outbox is never touched again.
 	for i := 0; i < 3; i++ {
 		delivered, err := d.RunOnce(ctx, 10)
 		if err != nil {
 			t.Fatalf("re-run %d: %v", i, err)
 		}
 		if delivered != 0 {
-			t.Fatalf("re-run %d re-claimed a DELIVERED event (per-poll churn), delivered=%d", i, delivered)
+			t.Fatalf("re-run %d re-delivered a CONSUMED event (cursor must have advanced), delivered=%d", i, delivered)
 		}
 	}
 	if applied != 1 {
 		t.Fatalf("exactly-once: the handler must apply exactly once, applied=%d", applied)
 	}
-	if a := pgOutboxAttempts(t, rawDB, "u1"); a != attemptsAtDelivery {
-		t.Fatalf("churn-free: a delivered event must not be re-written, attempts went %d -> %d", attemptsAtDelivery, a)
+	if c := pgOutboxRowCount(t, rawDB, "u1"); c != 1 {
+		t.Fatalf("write-only: a consumed event row must not be re-written/duplicated, found %d", c)
 	}
 	markers, err := client.IdemMarker.Query().Count(ctx)
 	if err != nil {
@@ -263,35 +260,48 @@ func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 		t.Fatalf("exactly one idempotency marker must commit, found %d", markers)
 	}
 
-	// AC-3 poison cutoff: an always-failing handler stops being claimed after
-	// maxAttempts. Publish a poison event and drive a dispatcher whose handler always
-	// errors, with a small maxAttempts.
+	// AC-3 poison → dead-letter + cursor advances: an always-failing head event is
+	// attempted maxAttempts times (bounded head-of-line blocking), then dead-lettered in
+	// the sidecar and the cursor advances past it. Publish a poison event and drive a
+	// FRESH dispatcher (its own cursor) whose poison handler always errors; the earlier
+	// UserSuspended event has no handler on this dispatcher, so its delivery is a no-op
+	// that advances the cursor to the poison head.
 	if err := tx.Atomically(ctx, func(ctx context.Context) error {
 		return pub.Publish(ctx, events.Event{ID: "poison", Type: "poison.type", AggregateType: "User", AggregateID: "u1", Payload: []byte("u1")})
 	}); err != nil {
 		t.Fatalf("publish poison: %v", err)
 	}
 	const maxAttempts = 3
-	dp := events.NewDispatcher(store, tx, iamv1.NewEntIdempotencyStore(client), events.WithMaxAttempts(maxAttempts))
+	poisonCursors := iamv1.NewEntOutboxCursorStore(client)
+	dp := events.NewDispatcher(store, poisonCursors, tx, iamv1.NewEntIdempotencyStore(client), events.WithMaxAttempts(maxAttempts))
 	handlerCalls := 0
 	dp.Subscribe("poison.type", "always-fails", func(hctx context.Context, evt events.Event) error {
 		handlerCalls++
 		return errPoison
 	})
-	// Run more times than the cutoff; the row must stop being claimed at maxAttempts.
+	// Run more times than the cutoff; the poison head is attempted exactly maxAttempts
+	// times, then dead-lettered and skipped.
 	for i := 0; i < maxAttempts+3; i++ {
 		_, _ = dp.RunOnce(ctx, 10)
 	}
 	if handlerCalls != maxAttempts {
-		t.Fatalf("poison cutoff: the handler must be attempted exactly maxAttempts(%d) times, got %d", maxAttempts, handlerCalls)
+		t.Fatalf("poison: the handler must be attempted exactly maxAttempts(%d) times, got %d", maxAttempts, handlerCalls)
 	}
-	// Append-only: the poison row is parked, not deleted.
+	// The poison event was recorded in the SIDECAR dead-letter; the outbox row is intact.
+	var deadLettered int
+	if err := rawDB.QueryRow(`SELECT count(*) FROM outbox_dead_letters WHERE event_id = 'poison'`).Scan(&deadLettered); err != nil {
+		t.Fatalf("query dead-letter: %v", err)
+	}
+	if deadLettered != 1 {
+		t.Fatalf("the poison event must be dead-lettered in the sidecar, found %d", deadLettered)
+	}
+	// Write-only: the poison row is intact in the outbox (never deleted/mutated).
 	var poisonRows int
 	if err := rawDB.QueryRow(`SELECT count(*) FROM outboxes WHERE id = 'poison'`).Scan(&poisonRows); err != nil {
 		t.Fatalf("query poison row: %v", err)
 	}
 	if poisonRows != 1 {
-		t.Fatalf("poison row must be parked (append-only), not deleted, found %d", poisonRows)
+		t.Fatalf("poison row must be intact in the write-only outbox, found %d", poisonRows)
 	}
 }
 

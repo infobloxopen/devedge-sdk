@@ -3,17 +3,15 @@ package events
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
-	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
 // Handler reacts to a delivered domain event by changing ANOTHER aggregate. The
-// dispatcher runs each handler in its own [persistence.TxRunner.Atomically] (see
-// [Dispatcher.Run]), so a handler should treat ctx as already transactional and do
+// [Consumer] runs each handler in its own [persistence.TxRunner.Atomically] (see
+// [Consumer.deliver]), so a handler should treat ctx as already transactional and do
 // a single-aggregate write — the reaction is itself a safe aggregate write (F032
 // G-4). Returning an error leaves the event undelivered so it is re-tried
 // (at-least-once); handlers MUST therefore be idempotent (F032 D-4).
@@ -21,7 +19,7 @@ type Handler func(ctx context.Context, evt Event) error
 
 // ErrAlreadyApplied is returned by [IdempotencyStore.Record] when key has already
 // been recorded. It is the exactly-once guard: Record is called INSIDE the
-// handler's transaction, so a concurrent (or lapsed-lease) double-delivery races to
+// handler's transaction, so a concurrent (or redelivered) double-delivery races to
 // record the SAME (event, handler) marker; the loser gets ErrAlreadyApplied and its
 // whole handler transaction — effect AND marker — rolls back, leaving the side
 // effect applied exactly once even though the event was delivered more than once
@@ -81,7 +79,7 @@ func NewMemoryIdempotencyStore() *MemoryIdempotencyStore {
 // TxParticipant exposes the backing repository so a caller can enroll the marker
 // store in the handler's [persistence.MemoryTxRunner] — required for the marker to
 // commit/roll back atomically with the handler's aggregate write (the exactly-once
-// guarantee). The [Dispatcher] enrolls it automatically for a MemoryTxRunner.
+// guarantee). The [Consumer] enrolls it automatically for a MemoryTxRunner.
 func (s *MemoryIdempotencyStore) TxParticipant() persistence.MemoryRepositoryFor {
 	return s.repo
 }
@@ -113,123 +111,17 @@ func (s *MemoryIdempotencyStore) Record(ctx context.Context, key string) error {
 // compile-time check.
 var _ IdempotencyStore = (*MemoryIdempotencyStore)(nil)
 
-// Dispatcher delivers committed outbox events to registered handlers at-least-once
-// (F032 G-3). The dev default is an in-process poller (F032 D-3): it claims
-// eligible rows from the [persistence.OutboxStore] (a claimed-flag/lease claim,
-// NOT SELECT ... FOR UPDATE SKIP LOCKED — ent sql/lock is off in this repo) and
-// runs each registered handler for the event's type in its own
-// [persistence.TxRunner] transaction.
-//
-// F033 (append-only, churn-free): the outbox table is never DELETEd from on the
-// dispatch path — retention drains it by dropping whole partitions
-// ([persistence.OutboxRetention]). On success the dispatcher makes ONE terminal
-// delivered-mark per event ([persistence.OutboxStore.MarkDelivered]) that excludes
-// the row from every future claim, so a delivered event is never re-leased,
-// re-attempted, or aged into the poison cutoff — the happy path is one bounded UPDATE
-// per event, not a per-poll re-lease. The per-(event, handler) idempotency marker is
-// the exactly-once correctness guard for a rare in-flight double-claim (a lease that
-// lapsed before the delivered-mark committed); a poison event that never delivers
-// stops being claimed once Attempts reaches maxAttempts (the poison cutoff, enforced
-// by ClaimUndelivered).
-//
-// Delivery semantics:
-//   - At-least-once: a handler error (or crash) leaves the event un-applied and
-//     un-marked, so a later claim re-delivers it. Handlers MUST be idempotent.
-//   - Idempotency: each (event id, handler) pair is recorded in the
-//     [IdempotencyStore] once its tx commits; a redelivery skips an already-applied
-//     pair, so a duplicate delivery is a no-op (AC-2). This guards the window between
-//     a lapsed lease and the delivered-mark.
-//   - Churn-free happy path: a delivered row is marked once and then excluded from
-//     claims — no per-poll re-lease UPDATE of an already-delivered event (F033).
-//   - Poison cutoff: an event that never delivers stops being claimed once it has
-//     been attempted maxAttempts times, so a permanently failing event stops looping
-//     (F033 AC-3) — a delivered event never reaches the cutoff.
-//   - Per-event ordering only: events for one aggregate claim in append order, but
-//     no global order is promised (F032 non-goal).
-type Dispatcher struct {
-	store       persistence.OutboxStore
-	tx          persistence.TxRunner
-	idem        IdempotencyStore
-	maxAttempts int
-	mu          sync.RWMutex
-	handlers    map[string][]registeredHandler
-}
+// DefaultCursorName is the sidecar cursor name a [Relay] (and the compatibility
+// [Dispatcher]) uses when the caller does not set one with [WithCursorName] /
+// [WithRelayCursorName]. A service runs a single relay instance (the SDK assumption — the
+// external WAL/queue consumer is the scale-out path), so one named cursor per relay is
+// sufficient.
+const DefaultCursorName = "default"
 
+// registeredHandler pairs a handler with the name it dedups under.
 type registeredHandler struct {
 	name string
 	fn   Handler
-}
-
-// DispatcherOption configures a Dispatcher.
-type DispatcherOption func(*Dispatcher)
-
-// WithMaxAttempts sets the poison cutoff: a row attempted this many times is no
-// longer claimed (F033). A non-positive value keeps the default
-// ([persistence.DefaultMaxOutboxAttempts]).
-func WithMaxAttempts(n int) DispatcherOption {
-	return func(d *Dispatcher) {
-		if n > 0 {
-			d.maxAttempts = n
-		}
-	}
-}
-
-// NewDispatcher returns a Dispatcher that claims from store, runs handlers in tx,
-// and dedups via idem. tx is the [persistence.TxRunner] for the aggregates the
-// handlers write (each handler runs inside it). idem may be nil to use a fresh
-// in-memory [MemoryIdempotencyStore]. The poison cutoff defaults to
-// [persistence.DefaultMaxOutboxAttempts]; override it with [WithMaxAttempts].
-func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem IdempotencyStore, opts ...DispatcherOption) *Dispatcher {
-	if idem == nil {
-		idem = NewMemoryIdempotencyStore()
-	}
-	// Exactly-once requires the idempotency marker to commit in the SAME tx as the
-	// handler's aggregate write. For the in-memory dev default that means the marker
-	// store must be a participant of the handler's MemoryTxRunner; enroll it
-	// automatically so a caller need not remember to (AC-2). For other backends the
-	// caller wires an idem store that records in the handler's own backend tx.
-	if mem, ok := idem.(*MemoryIdempotencyStore); ok {
-		if mtx, ok := tx.(*persistence.MemoryTxRunner); ok {
-			tx = mtx.WithParticipants(mem.TxParticipant())
-		}
-	}
-	d := &Dispatcher{
-		store:       store,
-		tx:          tx,
-		idem:        idem,
-		maxAttempts: persistence.DefaultMaxOutboxAttempts,
-		handlers:    make(map[string][]registeredHandler),
-	}
-	for _, opt := range opts {
-		opt(d)
-	}
-	return d
-}
-
-// Subscribe registers fn as a handler for events of eventType (F032 G-4). name
-// identifies the handler in the idempotency key so two handlers of the same event
-// dedup independently. Multiple handlers may subscribe to one type; all must
-// succeed for the event to be marked delivered.
-func (d *Dispatcher) Subscribe(eventType, name string, fn Handler) {
-	// Fail fast at registration (a setup-time call) rather than letting a nil handler
-	// nil-panic on first delivery — which happens inside the poller goroutine, rolls
-	// back, and re-panics up through Poll, silently crashing delivery without ever
-	// reaching onErr. A nil handler is a programming error; surface it at the call site.
-	if fn == nil {
-		panic("events: Dispatcher.Subscribe called with a nil handler for event type " + eventType)
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.handlers[eventType] = append(d.handlers[eventType], registeredHandler{name: name, fn: fn})
-}
-
-func (d *Dispatcher) handlersFor(eventType string) []registeredHandler {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	hs := d.handlers[eventType]
-	out := make([]registeredHandler, len(hs))
-	copy(out, hs)
-	return out
 }
 
 // idempotencyKey is the per-(event, handler) dedup key. Keying on the event id
@@ -246,117 +138,146 @@ func idempotencyKey(eventID, handlerName string) string {
 	return eventID + "\x1f" + handlerName
 }
 
-// deliver runs every handler subscribed to evt.Type. For each handler it runs the
-// reaction AND records the idempotency marker in ONE transaction (G-4), so the
-// effect and the marker commit or roll back together. The exactly-once guard is the
-// in-tx unique marker: on a concurrent or lapsed-lease double-delivery, both copies
-// race to record the same (event, handler) marker; exactly one commits (effect +
-// marker) and the other gets [ErrAlreadyApplied] and rolls its whole transaction
-// back, so the side effect runs once even though the event was delivered twice
-// (AC-2). [IdempotencyStore.Seen] is only a fast-path pre-check that skips re-running
-// a long-committed handler; it is NOT relied on for correctness.
-//
-// deliver returns nil only when every handler is applied (committed now or
-// previously), so the caller marks the event delivered exactly once all reactions
-// are durable.
-func (d *Dispatcher) deliver(ctx context.Context, evt Event) error {
-	// Scope the handler to the EVENT's tenant. The dispatcher claims across all
-	// tenants (the outbox deliberately has no TenantMixin), so the caller's ctx
-	// tenant is unrelated to the event's. A tenant-scoped repository reads
-	// middleware.TenantIDFromContext to filter its writes; running the handler on
-	// the dispatcher's tenant (or none) would let it read/revoke ANOTHER tenant's
-	// aggregates — a cross-tenant write. Inject the event's account so the reaction
-	// targets exactly the tenant that emitted it.
-	if evt.AccountID != "" {
-		ctx = middleware.WithTenantID(ctx, evt.AccountID)
+// eventFromRecord rebuilds the Event a handler sees from an outbox row.
+func eventFromRecord(rec *persistence.OutboxRecord) Event {
+	return Event{
+		ID:            rec.ID,
+		Type:          rec.EventType,
+		AggregateType: rec.AggregateType,
+		AggregateID:   rec.AggregateID,
+		AccountID:     rec.AccountID,
+		Payload:       rec.Payload,
 	}
-	for _, h := range d.handlersFor(evt.Type) {
-		key := idempotencyKey(evt.ID, h.name)
-		// Fast path: skip a handler whose marker is already committed, so a redelivery
-		// of a long-applied event does not re-open a transaction. Correctness does not
-		// depend on this — the in-tx Record below is the real guard against a racy
-		// double-apply (two deliveries can both pass Seen before either records).
-		seen, err := d.idem.Seen(ctx, key)
-		if err != nil {
-			return fmt.Errorf("idempotency check: %w", err)
-		}
-		if seen {
-			continue // already applied — redelivery no-op (AC-2)
-		}
-		// Run the reaction AND record the marker in ONE aggregate transaction (G-4):
-		// the marker is unique, so a concurrent double-apply collides and the loser's
-		// whole tx (effect + marker) rolls back — the side effect commits exactly once.
-		// A handler error (or a lost race) leaves the event undelivered for a later
-		// retry (at-least-once).
-		txErr := d.tx.Atomically(ctx, func(ctx context.Context) error {
-			if herr := h.fn(ctx, evt); herr != nil {
-				return herr
-			}
-			// Record on the tx-bound ctx so the marker commits with the effect.
-			return d.idem.Record(ctx, key)
-		})
-		if txErr != nil {
-			if errors.Is(txErr, ErrAlreadyApplied) {
-				// A concurrent (or earlier, lease-lapsed) delivery already committed this
-				// (event, handler); our transaction rolled the duplicate effect back. The
-				// handler IS applied — treat as a no-op success and move on (AC-2).
-				continue
-			}
-			return fmt.Errorf("handler %q for %q: %w", h.name, evt.Type, txErr)
-		}
-	}
-	return nil
 }
 
-// RunOnce claims up to limit eligible events (Attempts < maxAttempts, lease lapsed)
-// and delivers each. It returns the number of events successfully delivered (all
-// their handlers applied). An event whose handler errors is left for a later RunOnce
-// (at-least-once retry); RunOnce does not fail the whole batch for one bad event. A
-// poller calls RunOnce on a tick; tests call it directly to drive delivery
-// deterministically.
+// Dispatcher is the SINGLE-PROCESS compatibility façade that composes the event-bus
+// stack — [Relay] (outbox→bus) + a synchronous in-process bus + [Consumer] (bus→handlers)
+// — behind the stable, pre-bus dispatcher API. It exists so callers (and the SDK's own
+// tests/examples) that wired the in-process forward-cursor dispatcher keep working while
+// the stack underneath is the new relay/bus/consumer split.
 //
-// F033 (append-only, churn-free): on success the row gets a SINGLE terminal
-// delivered-mark (MarkDelivered) — one bounded UPDATE per event — which excludes it
-// from every future claim, so a delivered event is never re-leased, re-attempted, or
-// aged into the poison cutoff (no per-poll write churn). The row is NEVER DELETEd;
-// retention drops whole partitions. The per-(event, handler) idempotency marker
-// remains the exactly-once correctness guard for a rare in-flight double-claim (a
-// lease that lapsed before MarkDelivered committed).
+// It delivers committed outbox events to registered handlers at-least-once (F032 G-3) for
+// SAME-DB cross-aggregate reactions (e.g. iam UserSuspended → revoke the user's API keys).
+// Under the hood [Dispatcher.RunOnce] pumps the relay one batch onto a synchronous bus
+// that delivers each message straight to the consumer's transactional, idempotency-guarded
+// handler path and propagates the handler result back — so the relay's forward cursor,
+// head-of-line poison handling (dead-letter after maxAttempts, then advance), and
+// write-only invariant are preserved exactly as before, now expressed as relay+consumer.
+//
+// For the full asynchronous stack (a real bus, a relay poll loop, and a consumer Consume
+// loop running as separate goroutines, Kafka-ready) wire [NewRelay] + a [Bus] (e.g.
+// [github.com/infobloxopen/devedge-sdk/events/membus]) + [NewConsumer] directly. The
+// Dispatcher is the synchronous, single-process convenience over the same machinery.
+//
+// Exactly-once effect: delivery is AT-LEAST-ONCE (a crash between deliver and
+// cursor-advance, or a redelivered message), guarded into an exactly-once EFFECT by the
+// per-(event, handler) [IdempotencyStore] marker, which commits INSIDE the handler's
+// transaction.
+type Dispatcher struct {
+	relay    *Relay
+	consumer *Consumer
+	bus      *syncBus
+
+	mu          sync.Mutex
+	maxAttempts int
+}
+
+// DispatcherOption configures a Dispatcher.
+type DispatcherOption func(*dispatcherConfig)
+
+type dispatcherConfig struct {
+	cursorName  string
+	maxAttempts int
+}
+
+// WithMaxAttempts sets the poison cutoff: after this many consecutive failed
+// deliveries of the SAME head event, the dispatcher dead-letters it (in the sidecar)
+// and advances the cursor past it (F033). A non-positive value keeps the default
+// ([persistence.DefaultMaxOutboxAttempts]).
+func WithMaxAttempts(n int) DispatcherOption {
+	return func(c *dispatcherConfig) {
+		if n > 0 {
+			c.maxAttempts = n
+		}
+	}
+}
+
+// WithCursorName sets the sidecar cursor name this dispatcher advances. Defaults to
+// [DefaultCursorName]. Use it only if a service runs more than one logical cursor over
+// the same outbox (uncommon — the SDK assumes one dispatcher per service).
+func WithCursorName(name string) DispatcherOption {
+	return func(c *dispatcherConfig) {
+		if name != "" {
+			c.cursorName = name
+		}
+	}
+}
+
+// NewDispatcher returns the compatibility Dispatcher composing a relay, a synchronous
+// in-process bus, and a consumer. store is read forward via the cursors sidecar
+// (pass nil for a fresh in-memory [persistence.MemoryOutboxCursorStore]); tx is the
+// [persistence.TxRunner] the handlers write in; idem may be nil for a fresh in-memory
+// [MemoryIdempotencyStore]. The poison cutoff defaults to
+// [persistence.DefaultMaxOutboxAttempts]; override it with [WithMaxAttempts].
+func NewDispatcher(store persistence.OutboxStore, cursors persistence.OutboxCursorStore, tx persistence.TxRunner, idem IdempotencyStore, opts ...DispatcherOption) *Dispatcher {
+	cfg := &dispatcherConfig{cursorName: DefaultCursorName, maxAttempts: persistence.DefaultMaxOutboxAttempts}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cursors == nil {
+		cursors = persistence.NewMemoryOutboxCursorStore()
+	}
+	bus := newSyncBus()
+	d := &Dispatcher{
+		bus:         bus,
+		consumer:    NewConsumer(bus, tx, idem),
+		maxAttempts: cfg.maxAttempts,
+	}
+	// The relay publishes the outbox onto the synchronous bus; the consumer is the bus's
+	// only subscriber. The relay's maxAttempts is what the dispatcher's poison test asserts
+	// on, but in the synchronous façade a handler failure surfaces through the bus Publish,
+	// so the relay's head-of-line/dead-letter machinery is what drives the poison behaviour.
+	d.relay = NewRelay(store, cursors, bus,
+		WithRelayCursorName(cfg.cursorName),
+		WithRelayMaxAttempts(cfg.maxAttempts),
+	)
+	return d
+}
+
+// Subscribe registers fn as a handler for events of eventType (F032 G-4). name
+// identifies the handler in the idempotency key so two handlers of the same event
+// dedup independently. Multiple handlers may subscribe to one type; all must
+// succeed for the event to be marked delivered.
+func (d *Dispatcher) Subscribe(eventType, name string, fn Handler) {
+	d.consumer.Subscribe(eventType, name, fn)
+}
+
+// RunOnce reads up to limit events forward from the sidecar cursor and delivers each
+// in (created_time, id) order, advancing the cursor PAST every event it resolves. It
+// returns the number of events resolved this pass (delivered, deduped, or
+// dead-lettered) — i.e. how far the cursor advanced. A poller calls RunOnce on a tick;
+// tests call it directly to drive delivery deterministically.
+//
+// It is a synchronous pump of the relay onto the in-process bus: the relay reads the next
+// batch, publishes each event to the synchronous bus, and the bus delivers it straight
+// through the consumer's transactional idempotency-guarded handler path. A handler error
+// becomes a bus-Publish error, so the relay leaves the cursor un-advanced (at-least-once)
+// and, after maxAttempts on the same head event, dead-letters it and advances past it —
+// preserving the pre-bus dispatcher semantics exactly. The write-only outbox is never
+// mutated.
 func (d *Dispatcher) RunOnce(ctx context.Context, limit int) (delivered int, err error) {
-	claimed, err := d.store.ClaimUndelivered(ctx, d.maxAttempts, limit)
-	if err != nil {
-		return 0, fmt.Errorf("claim undelivered: %w", err)
-	}
-	for _, rec := range claimed {
-		evt := eventFromRecord(rec)
-		if derr := d.deliver(ctx, evt); derr != nil {
-			// Release the lease so the retry is prompt rather than lease-delayed; the
-			// row stays for re-claim (until it crosses the maxAttempts poison cutoff).
-			// Surface the first error so a caller can log it, but keep processing the
-			// batch (one bad event must not stall the others — at-least-once).
-			_ = d.store.Release(ctx, rec.ID)
-			if err == nil {
-				err = derr
-			}
-			continue
-		}
-		// Delivered: every handler's marker is committed. Stamp the row delivered ONCE
-		// so it is never re-claimed — the churn-free happy path (one UPDATE per event,
-		// never a DELETE). A failure to mark is non-fatal: the worst case is a single
-		// idempotent redelivery on a later poll (the markers make it a no-op), so it
-		// must not fail the batch; surface it as the batch error if none is set yet.
-		if merr := d.store.MarkDelivered(ctx, rec.ID); merr != nil && err == nil {
-			err = fmt.Errorf("mark delivered %s: %w", rec.ID, merr)
-		}
-		delivered++
-	}
-	return delivered, err
+	// Serialize concurrent RunOnce on ONE dispatcher so two goroutines do not both pump
+	// the relay against the same cursor at once. (The cross-dispatcher concurrent test
+	// deliberately uses two SEPARATE dispatchers sharing a cursor to prove the idempotency
+	// marker — not this lock — is the exactly-once guard.)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.relay.PumpOnce(ctx, limit)
 }
 
 // Poll runs RunOnce on every tick of interval until ctx is cancelled. It is the
-// in-process poller dev default; a caller wires it as a goroutine. Errors from a
-// tick are reported through onErr (nil to ignore) so one bad event does not stop
-// the loop.
+// in-process poller dev default; a caller wires it as a goroutine. Errors from a tick
+// are reported through onErr (nil to ignore) so one bad event does not stop the loop.
 func (d *Dispatcher) Poll(ctx context.Context, interval time.Duration, batch int, onErr func(error)) {
 	if interval <= 0 {
 		interval = time.Second
@@ -378,14 +299,58 @@ func (d *Dispatcher) Poll(ctx context.Context, interval time.Duration, batch int
 	}
 }
 
-// eventFromRecord rebuilds the Event a handler sees from a claimed outbox row.
-func eventFromRecord(rec *persistence.OutboxRecord) Event {
-	return Event{
-		ID:            rec.ID,
-		Type:          rec.EventType,
-		AggregateType: rec.AggregateType,
-		AggregateID:   rec.AggregateID,
-		AccountID:     rec.AccountID,
-		Payload:       rec.Payload,
-	}
+// Cursor returns the dispatcher's current forward position (for tests/introspection):
+// the (created_time, id) of the last event it consumed.
+func (d *Dispatcher) Cursor(ctx context.Context) (persistence.OutboxCursor, error) {
+	return d.relay.Cursor(ctx)
 }
+
+// syncBus is the SYNCHRONOUS, in-process bus the compatibility [Dispatcher] uses: a
+// Publish delivers the message straight to the registered handlers in the calling
+// goroutine and returns their result, so the relay's PumpOnce sees a handler failure as a
+// Publish error and applies its head-of-line/poison machinery. It is NOT the async
+// dev/embedded bus (that is package membus); it exists only to make the relay+consumer
+// stack behave like the old single-call dispatcher.
+type syncBus struct {
+	mu   sync.RWMutex
+	subs map[string][]BusHandler // topic -> handlers (one per group key, but the dispatcher uses one group)
+}
+
+func newSyncBus() *syncBus {
+	return &syncBus{subs: make(map[string][]BusHandler)}
+}
+
+// Subscribe implements [BusSubscriber]: register fn for topic. The group is ignored — the
+// synchronous bus has a single in-process consumer (the dispatcher's consumer).
+func (b *syncBus) Subscribe(group, topic string, fn BusHandler) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.subs[topic] = append(b.subs[topic], fn)
+	return nil
+}
+
+// Publish implements [BusPublisher]: deliver msg synchronously to every handler for the
+// topic, returning the first handler error so the relay treats it as an un-published head
+// event (cursor stays put → at-least-once → poison after maxAttempts).
+func (b *syncBus) Publish(ctx context.Context, topic string, msg BusMessage) error {
+	b.mu.RLock()
+	hs := append([]BusHandler(nil), b.subs[topic]...)
+	b.mu.RUnlock()
+	for _, fn := range hs {
+		if err := fn(ctx, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Consume implements [BusSubscriber]: the synchronous bus delivers on Publish, so Consume
+// has nothing to pump — it simply blocks until ctx is cancelled. The Dispatcher drives
+// delivery through RunOnce/Poll, not Consume.
+func (b *syncBus) Consume(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// compile-time check.
+var _ Bus = (*syncBus)(nil)
