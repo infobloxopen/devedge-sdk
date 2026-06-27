@@ -87,9 +87,18 @@ func NewAccountRepository(db *gorm.DB) *AccountRepository {
 	return &AccountRepository{db: db}
 }
 
+func (r *AccountRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *AccountRepository) Get(ctx context.Context, key string) (*Account, error) {
 	var m AccountModel
-	if err := r.db.WithContext(ctx).Where("id = ?", key).First(&m).Error; err != nil {
+	if err := r.conn(ctx).Where("id = ?", key).First(&m).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, persistence.ErrNotFound
 		}
@@ -100,7 +109,7 @@ func (r *AccountRepository) Get(ctx context.Context, key string) (*Account, erro
 
 func (r *AccountRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Account, string, error) {
 	var models []AccountModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	if opts.Filter != "" {
 		cond, err := filter.Parse(opts.Filter, AccountColumns)
 		if err != nil {
@@ -148,7 +157,7 @@ func (r *AccountRepository) Create(ctx context.Context, entity *Account) (*Accou
 	if ToModelAccountOnCreate != nil {
 		ToModelAccountOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -166,7 +175,7 @@ func (r *AccountRepository) Update(ctx context.Context, key string, entity *Acco
 	if ToModelAccountOnUpdate != nil {
 		ToModelAccountOnUpdate(entity, m)
 	}
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if len(fieldMask) > 0 {
 		dbCols := make([]string, 0, len(fieldMask))
 		for _, f := range fieldMask {
@@ -204,7 +213,7 @@ func (r *AccountRepository) Update(ctx context.Context, key string, entity *Acco
 }
 
 func (r *AccountRepository) Delete(ctx context.Context, key string) error {
-	res := r.db.WithContext(ctx).Where("id = ?", key).Unscoped().Delete(&AccountModel{})
+	res := r.conn(ctx).Where("id = ?", key).Unscoped().Delete(&AccountModel{})
 	if res.Error != nil {
 		return fmt.Errorf("delete Account: %w", res.Error)
 	}
@@ -223,7 +232,7 @@ func (r *AccountRepository) BatchGet(ctx context.Context, keys []string) ([]*Acc
 		return []*Account{}, nil
 	}
 	var models []AccountModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	if err := q.Find(&models).Error; err != nil {
 		return nil, fmt.Errorf("batch get Account: %w", err)
 	}
@@ -247,8 +256,7 @@ func (r *AccountRepository) BatchUpdate(ctx context.Context, items []persistence
 		return []*Account{}, nil
 	}
 	out := make([]*Account, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &AccountRepository{db: tx}
+	run := func(txRepo *AccountRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -257,6 +265,17 @@ func (r *AccountRepository) BatchUpdate(ctx context.Context, items []persistence
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&AccountRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&AccountRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -277,8 +296,8 @@ func (r *AccountRepository) BatchDelete(ctx context.Context, keys []string) erro
 		seen[k] = struct{}{}
 		uniq = append(uniq, k)
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		res := q.Unscoped().Delete(&AccountModel{})
 		if res.Error != nil {
 			return fmt.Errorf("batch delete Account: %w", res.Error)
@@ -287,6 +306,14 @@ func (r *AccountRepository) BatchDelete(ctx context.Context, keys []string) erro
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
@@ -358,10 +385,19 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
+func (r *UserRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *UserRepository) Get(ctx context.Context, key string) (*User, error) {
 	var m UserModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -376,7 +412,7 @@ func (r *UserRepository) Get(ctx context.Context, key string) (*User, error) {
 
 func (r *UserRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*User, string, error) {
 	var models []UserModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -433,7 +469,7 @@ func (r *UserRepository) Create(ctx context.Context, entity *User) (*User, error
 	if ToModelUserOnCreate != nil {
 		ToModelUserOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -452,7 +488,7 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 		ToModelUserOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -498,7 +534,7 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 
 func (r *UserRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -521,7 +557,7 @@ func (r *UserRepository) BatchGet(ctx context.Context, keys []string) ([]*User, 
 		return []*User{}, nil
 	}
 	var models []UserModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -549,8 +585,7 @@ func (r *UserRepository) BatchUpdate(ctx context.Context, items []persistence.Ba
 		return []*User{}, nil
 	}
 	out := make([]*User, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &UserRepository{db: tx}
+	run := func(txRepo *UserRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -559,6 +594,17 @@ func (r *UserRepository) BatchUpdate(ctx context.Context, items []persistence.Ba
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&UserRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&UserRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -580,8 +626,8 @@ func (r *UserRepository) BatchDelete(ctx context.Context, keys []string) error {
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -593,6 +639,14 @@ func (r *UserRepository) BatchDelete(ctx context.Context, keys []string) error {
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
@@ -604,7 +658,7 @@ type GroupModel struct {
 	ID          string             `gorm:"primaryKey;type:varchar(36)"`
 	AccountId   string             `gorm:"column:account_id;uniqueIndex:ux_group_account_display_name,priority:1"`
 	DisplayName string             `gorm:"column:display_name;uniqueIndex:ux_group_account_display_name,priority:2"`
-	Memberships []*MembershipModel `gorm:"foreignKey:GroupId"`
+	Memberships []*MembershipModel `gorm:"foreignKey:GroupId;constraint:OnDelete:CASCADE"`
 	ETag        string             `gorm:"column:etag"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -661,10 +715,19 @@ func NewGroupRepository(db *gorm.DB) *GroupRepository {
 	return &GroupRepository{db: db}
 }
 
+func (r *GroupRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *GroupRepository) Get(ctx context.Context, key string) (*Group, error) {
 	var m GroupModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -679,7 +742,7 @@ func (r *GroupRepository) Get(ctx context.Context, key string) (*Group, error) {
 
 func (r *GroupRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Group, string, error) {
 	var models []GroupModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -736,7 +799,7 @@ func (r *GroupRepository) Create(ctx context.Context, entity *Group) (*Group, er
 	if ToModelGroupOnCreate != nil {
 		ToModelGroupOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -755,7 +818,7 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 		ToModelGroupOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -800,7 +863,7 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 
 func (r *GroupRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -823,7 +886,7 @@ func (r *GroupRepository) BatchGet(ctx context.Context, keys []string) ([]*Group
 		return []*Group{}, nil
 	}
 	var models []GroupModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -851,8 +914,7 @@ func (r *GroupRepository) BatchUpdate(ctx context.Context, items []persistence.B
 		return []*Group{}, nil
 	}
 	out := make([]*Group, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &GroupRepository{db: tx}
+	run := func(txRepo *GroupRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -861,6 +923,17 @@ func (r *GroupRepository) BatchUpdate(ctx context.Context, items []persistence.B
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&GroupRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&GroupRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -882,8 +955,8 @@ func (r *GroupRepository) BatchDelete(ctx context.Context, keys []string) error 
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -895,11 +968,49 @@ func (r *GroupRepository) BatchDelete(ctx context.Context, keys []string) error 
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
 // compile-time check.
 var _ persistence.BatchRepository[*Group, string] = (*GroupRepository)(nil)
+
+// LoadGroupAggregateGorm eager-loads the Group aggregate root identified by id together
+// with its owned containment members, in one tx-bound query (the F031 graph-load
+// primitive, D-2). It resolves the tx-or-db from ctx so it participates in an
+// enclosing Atomically. Returns persistence.ErrNotFound when no such root exists.
+func LoadGroupAggregateGorm(ctx context.Context, db *gorm.DB, id string) (*Group, error) {
+	q := db.WithContext(ctx)
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			q = tx.WithContext(ctx)
+		}
+	}
+	q = q.Preload("Memberships")
+	var m GroupModel
+	q = q.Where("id = ?", id)
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("load Group aggregate: %w", err)
+	}
+	root := fromModel_Group(&m)
+	for _, mm := range m.Memberships {
+		root.Memberships = append(root.Memberships, fromModel_Membership(mm))
+	}
+	return root, nil
+}
 
 // MembershipModel is the GORM model for Membership.
 type MembershipModel struct {
@@ -970,10 +1081,19 @@ func NewMembershipRepository(db *gorm.DB) *MembershipRepository {
 	return &MembershipRepository{db: db}
 }
 
+func (r *MembershipRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *MembershipRepository) Get(ctx context.Context, key string) (*Membership, error) {
 	var m MembershipModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -988,7 +1108,7 @@ func (r *MembershipRepository) Get(ctx context.Context, key string) (*Membership
 
 func (r *MembershipRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Membership, string, error) {
 	var models []MembershipModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -1044,7 +1164,7 @@ func (r *MembershipRepository) Create(ctx context.Context, entity *Membership) (
 	if ToModelMembershipOnCreate != nil {
 		ToModelMembershipOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -1062,7 +1182,7 @@ func (r *MembershipRepository) Update(ctx context.Context, key string, entity *M
 		ToModelMembershipOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -1107,7 +1227,7 @@ func (r *MembershipRepository) Update(ctx context.Context, key string, entity *M
 
 func (r *MembershipRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -1130,7 +1250,7 @@ func (r *MembershipRepository) BatchGet(ctx context.Context, keys []string) ([]*
 		return []*Membership{}, nil
 	}
 	var models []MembershipModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -1158,8 +1278,7 @@ func (r *MembershipRepository) BatchUpdate(ctx context.Context, items []persiste
 		return []*Membership{}, nil
 	}
 	out := make([]*Membership, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &MembershipRepository{db: tx}
+	run := func(txRepo *MembershipRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -1168,6 +1287,17 @@ func (r *MembershipRepository) BatchUpdate(ctx context.Context, items []persiste
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&MembershipRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&MembershipRepository{db: tx})
 	})
 	if err != nil {
 		return nil, err
@@ -1189,8 +1319,8 @@ func (r *MembershipRepository) BatchDelete(ctx context.Context, keys []string) e
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -1202,6 +1332,14 @@ func (r *MembershipRepository) BatchDelete(ctx context.Context, keys []string) e
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 
@@ -1279,10 +1417,19 @@ func NewApiKeyRepository(db *gorm.DB, enc secret.Encryptor) *ApiKeyRepository {
 	return &ApiKeyRepository{db: db, enc: enc}
 }
 
+func (r *ApiKeyRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
 func (r *ApiKeyRepository) Get(ctx context.Context, key string) (*ApiKey, error) {
 	var m ApiKeyModel
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -1297,7 +1444,7 @@ func (r *ApiKeyRepository) Get(ctx context.Context, key string) (*ApiKey, error)
 
 func (r *ApiKeyRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*ApiKey, string, error) {
 	var models []ApiKeyModel
-	q := r.db.WithContext(ctx)
+	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -1366,7 +1513,7 @@ func (r *ApiKeyRepository) Create(ctx context.Context, entity *ApiKey) (*ApiKey,
 	if ToModelApiKeyOnCreate != nil {
 		ToModelApiKeyOnCreate(entity, m)
 	}
-	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
+	if err := r.conn(ctx).Create(m).Error; err != nil {
 		// Map driver constraint violations to clean sentinels so callers see
 		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
 		if ce := persistence.ConstraintError(err); ce != nil {
@@ -1397,7 +1544,7 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 		ToModelApiKeyOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Model(m).Where("id = ?", key)
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -1447,7 +1594,7 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 
 func (r *ApiKeyRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("id = ?", key)
+	q := r.conn(ctx).Where("id = ?", key)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -1472,7 +1619,7 @@ func (r *ApiKeyRepository) LookupByKeyValueHash(ctx context.Context, hash string
 		return nil, persistence.ErrNotFound
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	q := r.db.WithContext(ctx).Where("key_value_hash = ?", hash)
+	q := r.conn(ctx).Where("key_value_hash = ?", hash)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
 	}
@@ -1491,7 +1638,7 @@ func (r *ApiKeyRepository) BatchGet(ctx context.Context, keys []string) ([]*ApiK
 		return []*ApiKey{}, nil
 	}
 	var models []ApiKeyModel
-	q := r.db.WithContext(ctx).Where("id IN ?", keys)
+	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
 	if tenantID != "" {
 		q = q.Where("account_id = ?", tenantID)
@@ -1519,8 +1666,7 @@ func (r *ApiKeyRepository) BatchUpdate(ctx context.Context, items []persistence.
 		return []*ApiKey{}, nil
 	}
 	out := make([]*ApiKey, 0, len(items))
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		txRepo := &ApiKeyRepository{db: tx, enc: r.enc}
+	run := func(txRepo *ApiKeyRepository) error {
 		for _, it := range items {
 			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
 			if err != nil {
@@ -1529,6 +1675,17 @@ func (r *ApiKeyRepository) BatchUpdate(ctx context.Context, items []persistence.
 			out = append(out, updated)
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&ApiKeyRepository{db: tx, enc: r.enc}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&ApiKeyRepository{db: tx, enc: r.enc})
 	})
 	if err != nil {
 		return nil, err
@@ -1550,8 +1707,8 @@ func (r *ApiKeyRepository) BatchDelete(ctx context.Context, keys []string) error
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		q := tx.WithContext(ctx).Where("id IN ?", uniq)
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
 		if tenantID != "" {
 			q = q.Where("account_id = ?", tenantID)
 		}
@@ -1563,6 +1720,14 @@ func (r *ApiKeyRepository) BatchDelete(ctx context.Context, keys []string) error
 			return persistence.ErrNotFound
 		}
 		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
 	})
 }
 

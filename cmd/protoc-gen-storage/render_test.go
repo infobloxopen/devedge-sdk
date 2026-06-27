@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
@@ -973,6 +974,98 @@ func TestRenderStorageFile_txConnResolverOnSurface(t *testing.T) {
 	}
 	// The surface adapter gets its own conn resolver.
 	mustContain(t, out, "func (r *CouponSummaryRepository) conn(ctx context.Context) *gorm.DB {")
+}
+
+// fleetAggregateMessages mirrors the testdata/fleet proto shape: Fleet is an
+// aggregate ROOT with a has_many Vehicles (FK fleet_id); Vehicle is its MEMBER
+// with a scalar fleet_id and a belongs_to Fleet (FK fleet_id) — the inverse of
+// Fleet's has_many. It is the canonical F031 containment fixture for the GORM
+// generator render tests.
+func fleetAggregateMessages() []messageInfo {
+	fleet := messageInfo{
+		MessageName:   "Fleet",
+		AggregateRoot: true,
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "vehicles", GoFieldName: "Vehicles", RelatedGoType: "Vehicle", SnakeName: "vehicles",
+				IsRepeated: true, HasMany: &fieldv1.HasMany{ForeignKey: "fleet_id"}},
+		},
+	}
+	vehicle := messageInfo{
+		MessageName: "Vehicle",
+		MemberRoot:  "Fleet",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "fleet_id", GoFieldName: "FleetId", GoType: "string", SnakeName: "fleet_id"},
+			{Name: "fleet", GoFieldName: "Fleet", RelatedGoType: "Fleet", SnakeName: "fleet",
+				IsMessage: true, BelongsTo: &fieldv1.BelongsTo{ForeignKey: "fleet_id"}},
+		},
+	}
+	return []messageInfo{fleet, vehicle}
+}
+
+// F031 (GORM Phase 2): the aggregate root's containment has_many carries
+// OnDelete:CASCADE so deleting the root row deletes its owned members at the DB
+// level, while the member's belongs_to INVERSE stays uncascaded (the root's
+// has_many owns the FK constraint).
+func TestRenderStorageFile_aggregateCascadeOnContainmentHasMany(t *testing.T) {
+	out := renderStorageFile("fleetv1", fleetAggregateMessages(), nil)
+	// Root has_many → cascade (raw, pre-gofmt single-space tags).
+	mustContain(t, out, "Vehicles []*VehicleModel `gorm:\"foreignKey:FleetId;constraint:OnDelete:CASCADE\"`")
+	// Member belongs_to inverse → NO cascade (plain foreignKey only).
+	mustContain(t, out, "Fleet *FleetModel `gorm:\"foreignKey:FleetId\"`")
+	// Exactly one cascade in the whole file (only the root's has_many).
+	if n := strings.Count(out, "constraint:OnDelete:CASCADE"); n != 1 {
+		t.Errorf("expected exactly one cascade tag (the root has_many), got %d\n--- output ---\n%s", n, out)
+	}
+}
+
+// A plain (non-aggregate) has_many / belongs_to must NOT get the cascade tag:
+// cascade is gated on DDD containment markers, so it is purely additive.
+func TestRenderStorageFile_noCascadeWithoutContainmentMarkers(t *testing.T) {
+	msgs := fleetAggregateMessages()
+	// Strip the DDD markers — same edges, no aggregate/member declaration.
+	msgs[0].AggregateRoot = false
+	msgs[1].MemberRoot = ""
+	out := renderStorageFile("fleetv1", msgs, nil)
+	mustNotContain(t, out, "constraint:OnDelete:CASCADE")
+	mustNotContain(t, out, "LoadFleetAggregateGorm")
+}
+
+// F031: a cross-aggregate references link is never a containment edge, so it
+// never cascades (and emits no association at all).
+func TestRenderStorageFile_referencesNeverCascades(t *testing.T) {
+	msg := messageInfo{
+		MessageName: "Order",
+		PbPkgName:   "orderv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "customer_id", GoFieldName: "CustomerId", GoType: "string", SnakeName: "customer_id"},
+			{Name: "customer", GoFieldName: "Customer", RelatedGoType: "Customer", SnakeName: "customer",
+				IsMessage: true, References: &dddv1.References{ForeignKey: "customer_id"}},
+		},
+	}
+	out := renderStorageFile("orderv1", []messageInfo{msg}, nil)
+	mustNotContain(t, out, "constraint:OnDelete:CASCADE")
+}
+
+// F031 (GORM Phase 2): an aggregate root with containment members gets a
+// Load<Root>AggregateGorm graph-load primitive that Preloads each member edge,
+// tenant-scopes (the root has account_id), maps NotFound, and explicitly projects
+// each preloaded member onto the root (fromModel_<Root> ignores members).
+func TestRenderStorageFile_loadAggregateEmitted(t *testing.T) {
+	out := renderStorageFile("fleetv1", fleetAggregateMessages(), nil)
+	mustContain(t, out, "func LoadFleetAggregateGorm(ctx context.Context, db *gorm.DB, id string) (*Fleet, error) {")
+	mustContain(t, out, `q = q.Preload("Vehicles")`)
+	mustContain(t, out, "if tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {")
+	mustContain(t, out, "return nil, persistence.ErrNotFound")
+	// Explicit member projection (the load primitive must append members, since
+	// fromModel_Fleet does not).
+	mustContain(t, out, "root.Vehicles = append(root.Vehicles, fromModel_Vehicle(mm))")
+	// The member (Vehicle) is not a root, so it gets no aggregate loader.
+	mustNotContain(t, out, "func LoadVehicleAggregateGorm(")
 }
 
 func mustContain(t *testing.T, s, substr string) {
