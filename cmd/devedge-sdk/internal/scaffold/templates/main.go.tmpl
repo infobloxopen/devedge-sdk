@@ -42,6 +42,7 @@ import (
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/events"
 {{- end}}
+	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
 	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 {{- if .Aggregate}}
@@ -188,10 +189,12 @@ func runRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRete
 }
 {{- else}}
 
-// newRepository opens the database, migrates the generated model, and returns the
-// generated GORM repository. SQLite (pure-Go, no CGo) keeps the scaffold runnable
-// out of the box; swap the dialector for postgres/mysql in production.
-func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], error) {
+// newRepository opens the database, migrates the generated model, and returns
+// both the generated GORM repository and the underlying *gorm.DB (used to
+// register a DB-ping readiness check). SQLite (pure-Go, no CGo) keeps the
+// scaffold runnable out of the box; swap the dialector for postgres/mysql in
+// production.
+func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], *gorm.DB, error) {
 	// Silence GORM's default logger: it writes every SQL statement and an ANSI
 	// "record not found" line for each miss, which floods test/dev output. Use
 	// logger.Default.LogMode(logger.Warn) to surface slow queries/errors only, or
@@ -200,12 +203,12 @@ func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string],
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := db.AutoMigrate(&{{.GoPkg}}.{{.Resource}}Model{}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return {{.GoPkg}}.New{{.Resource}}Repository(db), nil
+	return {{.GoPkg}}.New{{.Resource}}Repository(db), db, nil
 }
 {{- end}}
 
@@ -213,21 +216,6 @@ func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string],
 // addresses. Returns an error (rather than panicking) so tests can assert the
 // fail-closed authz gate. The smoke test passes ":0" for kernel-assigned ports.
 func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.Server, error) {
-	s, err := server.New(server.Config{
-		GRPCAddr:   grpcAddr,
-		HTTPAddr:   httpAddr,
-		Authorizer: authorizer,
-		// Derive the caller's authz.Principal from request metadata (account-id ->
-		// tenant, groups -> group:<name>). Without it the principal is empty and
-		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
-		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
-		// Structured request logging is on by default (one trace-correlated slog
-		// record per RPC; secret-annotated payload fields redacted at Debug).
-		Logger: slog.Default(),
-	})
-	if err != nil {
-		return nil, err
-	}
 {{- if .Aggregate}}
 	db, err := newDB()
 	if err != nil {
@@ -243,12 +231,39 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 	_, _, _ = agg, pub, d
 	_ = runRetention
 	repo := {{.GoPkg}}.New{{.Resource}}Repository(db)
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
 {{- else}}
-	repo, err := newRepository()
+	repo, gormDB, err := newRepository()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB, err := gormDB.DB()
 	if err != nil {
 		return nil, err
 	}
 {{- end}}
+	s, err := server.New(server.Config{
+		GRPCAddr:   grpcAddr,
+		HTTPAddr:   httpAddr,
+		Authorizer: authorizer,
+		// Derive the caller's authz.Principal from request metadata (account-id ->
+		// tenant, groups -> group:<name>). Without it the principal is empty and
+		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
+		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+		// Structured request logging is on by default (one trace-correlated slog
+		// record per RPC; secret-annotated payload fields redacted at Debug).
+		Logger: slog.Default(),
+		// DB-ping readiness check: the server's /readyz and gRPC health status
+		// flip to unready when the database is unreachable. The check uses the
+		// stdlib PingContext interface — no ORM import enters core.
+		ReadinessChecks: []sdkhealth.Check{sdkhealth.NewDBCheck("db", sqlDB)},
+	})
+	if err != nil {
+		return nil, err
+	}
 	// One call: construct the generated default CRUD handler over repo, register it
 	// (gRPC + REST gateway), and contribute the service's authz rules.
 	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {

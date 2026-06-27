@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -20,10 +21,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
 	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -66,12 +70,20 @@ type Config struct {
 	// writes one record per RPC to (trace-correlated, secret-redacted payloads at
 	// Debug). Defaults to slog.Default() when nil.
 	Logger *slog.Logger
+	// ReadinessChecks is the list of readiness checks the server runs on every
+	// /readyz probe and whenever it drives the gRPC health status. An empty slice
+	// means "always ready" (the default). Each check is bounded by a 2s timeout;
+	// a single failure flips /readyz to 503 and the gRPC overall status to
+	// NOT_SERVING. Liveness (/healthz, gRPC health Check on "") is always
+	// process-up only — deps never go in the liveness check.
+	ReadinessChecks []sdkhealth.Check
 }
 
 // Server is the assembled gRPC server (plus optional HTTP gateway).
 type Server struct {
 	cfg        Config
 	grpcSrv    *grpc.Server
+	healthSrv  *health.Server // gRPC health service; always registered
 	gwMux      *runtime.ServeMux // nil when HTTPAddr == ""
 	gatewayFns []func(context.Context, *runtime.ServeMux, *grpc.ClientConn) error
 	grpcLis    net.Listener // set by Serve
@@ -158,6 +170,28 @@ func New(cfg Config) (*Server, error) {
 		grpc.ChainUnaryInterceptor(chain...),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
+
+	// Register the gRPC health service (AC-1). The health.Server is always
+	// present so a gRPC-native probe can be used even when the HTTP gateway is
+	// disabled. It starts SERVING; the readiness aggregator drives it to
+	// NOT_SERVING while any readiness check fails (AC-3).
+	//
+	// Health methods are declared PUBLIC so they bypass the authz interceptor
+	// (AC-4: probes must be reachable unauthenticated, e.g. by the kubelet).
+	// We seed them into the accumulated rule set and also record them as registered
+	// methods so the completeness gate at Serve does not fail-close on them.
+	s.healthSrv = health.NewServer()
+	s.healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(s.grpcSrv, s.healthSrv)
+	healthMethods := []string{
+		grpc_health_v1.Health_Check_FullMethodName,
+		grpc_health_v1.Health_List_FullMethodName,
+		grpc_health_v1.Health_Watch_FullMethodName,
+	}
+	for _, m := range healthMethods {
+		s.rules = append(s.rules, authz.MethodRule{Method: m, Public: true})
+	}
+	s.methods = append(s.methods, healthMethods...)
 
 	if cfg.HTTPAddr != "" {
 		s.gwMux = runtime.NewServeMux(
@@ -291,17 +325,32 @@ func (s *Server) Serve(ctx context.Context) error {
 			return fmt.Errorf("server: listen http %q: %w", s.cfg.HTTPAddr, err)
 		}
 		s.httpLis = httpLis
-		// otelhttp wraps the gateway mux so an incoming HTTP request starts a
-		// server span; the client stats handler on the in-process dial then
-		// propagates W3C context into gRPC, linking the whole trace. No-op until an
-		// adapter installs an SDK + propagator.
-		httpSrv = &http.Server{Handler: otelhttp.NewHandler(s.gwMux, "gateway")}
+
+		// Compose an outer ServeMux so that /healthz and /readyz are registered
+		// BEFORE the gateway mux and are NOT subject to the authz interceptor
+		// (they're HTTP-only, never traverse the gRPC chain — AC-4). The gateway
+		// mux is mounted at "/" so all other traffic still routes normally.
+		//
+		// otelhttp wraps the gateway mux (not the probe routes) so gateway spans
+		// are traced; probes intentionally stay off the trace path (kubelet noise).
+		outerMux := http.NewServeMux()
+		outerMux.HandleFunc("/healthz", s.handleLiveness)
+		outerMux.HandleFunc("/readyz", s.handleReadiness)
+		outerMux.Handle("/", otelhttp.NewHandler(s.gwMux, "gateway"))
+
+		httpSrv = &http.Server{Handler: outerMux}
 		go func() {
 			if err := httpSrv.Serve(httpLis); err != nil && err != http.ErrServerClosed {
 				errCh <- fmt.Errorf("server: http serve: %w", err)
 			}
 		}()
 	}
+
+	// Start the readiness-check background loop that keeps the gRPC health status
+	// in sync with the aggregated readiness result (AC-3). It checks on each
+	// liveness tick but uses a short 5-second poll. This runs regardless of whether
+	// the HTTP gateway is enabled (the gRPC health service is always registered).
+	go s.runReadinessLoop(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -341,6 +390,61 @@ func (s *Server) shutdown(httpSrv *http.Server) {
 	case <-grpcDone:
 	case <-time.After(shutdownTimeout):
 		s.grpcSrv.Stop()
+	}
+}
+
+// handleLiveness serves GET /healthz: returns 200 as long as the process is up.
+// No dependency checks — liveness is process-only (AC-2, AC-4).
+func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleReadiness serves GET /readyz: runs the readiness aggregator and returns
+// 200 if all checks pass, 503 + JSON listing failures otherwise (AC-2).
+func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	failures := sdkhealth.Aggregate(r.Context(), s.cfg.ReadinessChecks)
+	if len(failures) == 0 {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	checkErrs := make(map[string]string, len(failures))
+	for _, f := range failures {
+		checkErrs[f.Name] = f.Err.Error()
+	}
+	body, _ := json.Marshal(map[string]any{
+		"status": "unready",
+		"checks": checkErrs,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write(body)
+}
+
+// runReadinessLoop polls the readiness aggregator on a 5-second ticker and
+// drives the gRPC overall health status (AC-3). It runs until ctx is cancelled.
+func (s *Server) runReadinessLoop(ctx context.Context) {
+	// Run immediately at startup, then on each tick.
+	s.syncHealthStatus(ctx)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.syncHealthStatus(ctx)
+		}
+	}
+}
+
+// syncHealthStatus runs one readiness-aggregation pass and flips the gRPC
+// overall health status accordingly (SERVING ↔ NOT_SERVING).
+func (s *Server) syncHealthStatus(ctx context.Context) {
+	failures := sdkhealth.Aggregate(ctx, s.cfg.ReadinessChecks)
+	if len(failures) == 0 {
+		s.healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	} else {
+		s.healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 	}
 }
 

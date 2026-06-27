@@ -2,7 +2,10 @@ package server_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -10,12 +13,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
 
@@ -83,6 +88,8 @@ func TestAssertMethodsDeclared_MissingRule_ReturnsError(t *testing.T) {
 
 // TestServer_Rules_ReturnsConfiguredRules verifies that the server exposes the
 // rules it was configured with (needed for the boot-time AssertMethodsDeclared call).
+// Note: New automatically adds public rules for the gRPC health service methods
+// (Check, List, Watch), so Rules() returns those plus the configured rules.
 func TestServer_Rules_ReturnsConfiguredRules(t *testing.T) {
 	rules := []authz.MethodRule{
 		{Method: "/svc.v1.Svc/GetFoo", Verb: authz.Get, Resource: "foo"},
@@ -96,12 +103,24 @@ func TestServer_Rules_ReturnsConfiguredRules(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := s.Rules()
-	if len(got) != len(rules) {
-		t.Fatalf("expected %d rules, got %d", len(rules), len(got))
+	// Rules() includes the 3 automatically-added health service public rules
+	// (grpc.health.v1.Health/{Check,List,Watch}), so the total is len(rules)+3.
+	wantTotal := len(rules) + 3
+	if len(got) != wantTotal {
+		t.Fatalf("expected %d rules (configured + 3 health), got %d", wantTotal, len(got))
 	}
-	for i, r := range rules {
-		if got[i].Method != r.Method || got[i].Verb != r.Verb || got[i].Resource != r.Resource {
-			t.Fatalf("rule[%d] mismatch: want %+v, got %+v", i, r, got[i])
+	// Verify the configured rules are present by method name.
+	byMethod := make(map[string]authz.MethodRule, len(got))
+	for _, r := range got {
+		byMethod[r.Method] = r
+	}
+	for _, r := range rules {
+		gr, ok := byMethod[r.Method]
+		if !ok {
+			t.Fatalf("configured rule %s missing from Rules()", r.Method)
+		}
+		if gr.Verb != r.Verb || gr.Resource != r.Resource {
+			t.Fatalf("rule %s mismatch: want %+v, got %+v", r.Method, r, gr)
 		}
 	}
 }
@@ -109,6 +128,7 @@ func TestServer_Rules_ReturnsConfiguredRules(t *testing.T) {
 // TestAddRules_AccumulatesIntoRules verifies AddRules appends to the server's
 // rule set on top of Config.Rules (F029 D-3): Config.Rules seeds it, AddRules
 // (called by the generated Register<Svc>) contributes the rest.
+// Note: New also seeds 3 health service public rules, so the total includes those.
 func TestAddRules_AccumulatesIntoRules(t *testing.T) {
 	s, err := server.New(server.Config{
 		GRPCAddr: ":0",
@@ -122,8 +142,10 @@ func TestAddRules_AccumulatesIntoRules(t *testing.T) {
 		authz.MethodRule{Method: "/svc.v1.Svc/C", Public: true},
 	)
 	got := s.Rules()
-	if len(got) != 3 {
-		t.Fatalf("Rules() = %d, want 3 (1 seed + 2 added)", len(got))
+	// 1 seed + 2 added + 3 health = 6
+	wantTotal := 6
+	if len(got) != wantTotal {
+		t.Fatalf("Rules() = %d, want %d (1 seed + 2 added + 3 health)", len(got), wantTotal)
 	}
 	byMethod := map[string]authz.MethodRule{}
 	for _, r := range got {
@@ -256,5 +278,210 @@ func TestNew_PrincipalFunc_AuthorizesDocumentedGrant(t *testing.T) {
 	defer cancel2()
 	if err := conn.Invoke(denyCtx, probeMethod, &emptypb.Empty{}, &emptypb.Empty{}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied for unauthenticated caller, got %v", err)
+	}
+}
+
+// -- health tests (T3) -------------------------------------------------------
+
+// toggleCheck is a readiness check whose readiness can be toggled in tests.
+type toggleCheck struct {
+	name string
+	fail bool
+}
+
+func (c *toggleCheck) Name() string { return c.name }
+func (c *toggleCheck) Check(_ context.Context) error {
+	if c.fail {
+		return errors.New("not ready")
+	}
+	return nil
+}
+
+// startHealthServer spins up a server with an HTTP gateway and returns the gRPC
+// address, HTTP address, a gRPC client connection, and a cancel func.
+func startHealthServer(t *testing.T, checks []sdkhealth.Check) (grpcAddr, httpAddr string, conn *grpc.ClientConn, cancel func()) {
+	t.Helper()
+	s, err := server.New(server.Config{
+		GRPCAddr:        ":0",
+		HTTPAddr:        ":0",
+		ReadinessChecks: checks,
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	go func() { _ = s.Serve(ctx) }()
+
+	// Poll until the server has bound both listeners (GRPCAddr/HTTPAddr change
+	// from the configured ":0" to the actual bound address once Serve starts).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ga := s.GRPCAddr()
+		ha := s.HTTPAddr()
+		if ga != ":0" && ha != ":0" && ga != "" && ha != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s.GRPCAddr() == ":0" || s.HTTPAddr() == ":0" {
+		ctxCancel()
+		t.Fatal("server did not start within 5s")
+	}
+
+	conn, err = grpc.NewClient(s.GRPCAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		ctxCancel()
+		t.Fatalf("dial: %v", err)
+	}
+	return s.GRPCAddr(), s.HTTPAddr(), conn, func() {
+		_ = conn.Close()
+		ctxCancel()
+	}
+}
+
+// TestHealth_GRPCHealthCheck_ReturnsSERVING verifies AC-1: the gRPC health
+// service returns SERVING for a server with no readiness checks.
+func TestHealth_GRPCHealthCheck_ReturnsSERVING(t *testing.T) {
+	_, _, conn, cancel := startHealthServer(t, nil)
+	defer cancel()
+
+	hc := grpc_health_v1.NewHealthClient(conn)
+	ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+	defer c()
+	resp, err := hc.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: ""})
+	if err != nil {
+		t.Fatalf("Health/Check: %v", err)
+	}
+	if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
+		t.Errorf("status = %v, want SERVING", resp.Status)
+	}
+}
+
+// TestHealth_Healthz_Returns200 verifies AC-2: GET /healthz → 200 when the
+// process is up.
+func TestHealth_Healthz_Returns200(t *testing.T) {
+	_, httpAddr, _, cancel := startHealthServer(t, nil)
+	defer cancel()
+
+	resp, err := http.Get("http://" + httpAddr + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestHealth_Readyz_AllPassReturns200_FailureReturns503 verifies AC-2 and AC-3:
+// /readyz flips between 200 and 503 as the readiness check toggles.
+func TestHealth_Readyz_AllPassReturns200_FailureReturns503(t *testing.T) {
+	check := &toggleCheck{name: "dep"}
+	_, httpAddr, _, cancel := startHealthServer(t, []sdkhealth.Check{check})
+	defer cancel()
+
+	// Initially ready (check.fail == false).
+	resp, err := http.Get("http://" + httpAddr + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("want 200 when ready, got %d", resp.StatusCode)
+	}
+
+	// Toggle to failing.
+	check.fail = true
+	resp, err = http.Get("http://" + httpAddr + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz (failing): %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("want 503 when unready, got %d (body: %s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "unready") {
+		t.Errorf("body missing 'unready': %s", body)
+	}
+
+	// Toggle back to ready.
+	check.fail = false
+	resp, err = http.Get("http://" + httpAddr + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz (recovered): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("want 200 on recovery, got %d", resp.StatusCode)
+	}
+}
+
+// TestHealth_GRPCStatus_FlipsWithReadiness verifies AC-3: the gRPC overall
+// health status flips to NOT_SERVING when any readiness check fails and back
+// to SERVING on recovery. Because the background loop polls every 5s we drive
+// syncHealthStatus indirectly by waiting for the first sync (startup) then
+// toggling and waiting one more poll cycle.
+func TestHealth_GRPCStatus_FlipsWithReadiness(t *testing.T) {
+	check := &toggleCheck{name: "dep"}
+	_, _, conn, cancel := startHealthServer(t, []sdkhealth.Check{check})
+	defer cancel()
+
+	hc := grpc_health_v1.NewHealthClient(conn)
+	waitStatus := func(want grpc_health_v1.HealthCheckResponse_ServingStatus, deadline time.Duration) {
+		t.Helper()
+		ctx, c := context.WithTimeout(context.Background(), deadline)
+		defer c()
+		for {
+			resp, err := hc.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: ""})
+			if err != nil {
+				if ctx.Err() != nil {
+					t.Fatalf("timed out waiting for gRPC health status %v", want)
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			if resp.Status == want {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Initially SERVING (startup sync).
+	waitStatus(grpc_health_v1.HealthCheckResponse_SERVING, 3*time.Second)
+
+	// Toggle check to failing; the background loop should flip to NOT_SERVING
+	// within ~5s (one poll tick) + a little slack.
+	check.fail = true
+	waitStatus(grpc_health_v1.HealthCheckResponse_NOT_SERVING, 8*time.Second)
+
+	// Recover: flip back to SERVING.
+	check.fail = false
+	waitStatus(grpc_health_v1.HealthCheckResponse_SERVING, 8*time.Second)
+}
+
+// TestHealth_Readyz_Unauthenticated verifies AC-4: the /readyz probe is
+// reachable without any auth headers (the authz interceptor only applies to
+// gRPC requests routed through the gateway, not to the outer-mux probe routes).
+func TestHealth_Readyz_Unauthenticated(t *testing.T) {
+	_, httpAddr, _, cancel := startHealthServer(t, nil)
+	defer cancel()
+
+	// Plain request with no auth headers — must not get 401/403.
+	req, err := http.NewRequest(http.MethodGet, "http://"+httpAddr+"/readyz", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /readyz (no auth): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		t.Errorf("probe behind authz: got %d, want 200", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
 }
