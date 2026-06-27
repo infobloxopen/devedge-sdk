@@ -7,6 +7,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/apikey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/group"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/schema"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 )
@@ -55,6 +56,12 @@ func init() {
 	membershipDescAccountID := membershipMixinFields0[0].Descriptor()
 	// membership.AccountIDValidator is a validator for the "account_id" field. It is called by the builders before save.
 	membership.AccountIDValidator = membershipDescAccountID.Validators[0].(func(string) error)
+	outboxFields := schema.Outbox{}.Fields()
+	_ = outboxFields
+	// outboxDescAttempts is the schema descriptor for attempts field.
+	outboxDescAttempts := outboxFields[8].Descriptor()
+	// outbox.DefaultAttempts holds the default value on creation for the attempts field.
+	outbox.DefaultAttempts = outboxDescAttempts.Default.(int)
 	userMixin := schema.User{}.Mixin()
 	userMixinHooks1 := userMixin[1].Hooks()
 	user.Hooks[0] = userMixinHooks1[0]

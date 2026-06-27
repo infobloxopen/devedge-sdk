@@ -16,6 +16,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/apikey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/group"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 )
 
@@ -81,6 +82,7 @@ func checkColumn(t, c string) error {
 			apikey.Table:     apikey.ValidColumn,
 			group.Table:      group.ValidColumn,
 			membership.Table: membership.ValidColumn,
+			outbox.Table:     outbox.ValidColumn,
 			user.Table:       user.ValidColumn,
 		})
 	})

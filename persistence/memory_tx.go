@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"reflect"
 	"slices"
 )
 
@@ -54,8 +55,6 @@ func (r *MemoryRepository[T, K]) restoreForTx(s any) { r.restore(s.(snapshot[T, 
 func (r *MemoryRepository[T, K]) lockOrder() uint64  { return r.id }
 
 // snapshot is a point-in-time copy of the mutable state, restored on rollback.
-// The maps hold value types (T is copied by assignment; K, string, bool are
-// values), so a shallow per-entry copy is a faithful snapshot.
 type snapshot[T any, K comparable] struct {
 	items   map[K]T
 	etags   map[K]string
@@ -63,9 +62,30 @@ type snapshot[T any, K comparable] struct {
 	deleted map[K]bool
 }
 
+// cloneEntity returns a snapshot-safe copy of v. When T is a POINTER type (the
+// common case — aggregates are stored as *Proto / *Struct), a shallow map copy
+// would share the pointed-to struct between the snapshot and the live map, so a
+// rollback could not undo an in-place mutation of a Get-returned entity (the caller
+// does `e, _ := repo.Get(...); e.Field = x; repo.Update(...)` — a single struct
+// mutated in place). cloneEntity copies the pointee so the snapshot is isolated:
+// restoring it on rollback truly reverts the field. A nil pointer or a non-pointer
+// T (value semantics already isolate it) is returned unchanged. This is the same
+// deep-copy MemoryOutboxStore.snapshotForTx already does for *OutboxRecord.
+func cloneEntity[T any](v T) T {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return v
+	}
+	cp := reflect.New(rv.Elem().Type())
+	cp.Elem().Set(rv.Elem())
+	return cp.Interface().(T)
+}
+
 func (r *MemoryRepository[T, K]) snapshotState() snapshot[T, K] {
 	items := make(map[K]T, len(r.items))
-	maps.Copy(items, r.items)
+	for k, v := range r.items {
+		items[k] = cloneEntity(v)
+	}
 	etags := make(map[K]string, len(r.etags))
 	maps.Copy(etags, r.etags)
 	deleted := make(map[K]bool, len(r.deleted))
@@ -146,6 +166,22 @@ func NewMemoryTxRunner(repos ...MemoryRepositoryFor) *MemoryTxRunner {
 		return cmp.Compare(a.lockOrder(), b.lockOrder())
 	})
 	return &MemoryTxRunner{participants: ps}
+}
+
+// WithParticipants returns a NEW runner that coordinates this runner's
+// participants PLUS extra, de-duplicated and re-sorted into the stable lock order.
+// It lets a caller enroll an additional repository in the same atomic unit without
+// reconstructing the original participant list — used by the events dispatcher to
+// enlist its idempotency-marker store in the handler's transaction so the marker
+// commits/rolls back atomically with the handler's aggregate write. The receiver is
+// unchanged.
+func (m *MemoryTxRunner) WithParticipants(extra ...MemoryRepositoryFor) *MemoryTxRunner {
+	combined := make([]MemoryRepositoryFor, 0, len(m.participants)+len(extra))
+	for _, p := range m.participants {
+		combined = append(combined, p)
+	}
+	combined = append(combined, extra...)
+	return NewMemoryTxRunner(combined...)
 }
 
 // Atomically implements [TxRunner].

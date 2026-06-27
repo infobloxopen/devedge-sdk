@@ -127,8 +127,8 @@ Use `etag`/`If-Match` for the common "read-modify-write one resource" case; reac
   caller who forgot to wrap the work fails loudly rather than writing silently. (This
   guards only callers that opt in; it cannot prove a non-tx-aware adapter participated.)
 - **Two aggregates in one `Atomically`.** Not type-prevented. Keep one consistency
-  boundary per transaction; cross-aggregate consistency is eventual (a future feature),
-  not a two-aggregate transaction.
+  boundary per transaction; cross-aggregate consistency is eventual — via the
+  [transactional outbox + domain events](../events/) seam — not a two-aggregate transaction.
 
 ## Aggregates
 

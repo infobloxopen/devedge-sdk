@@ -20,6 +20,8 @@ type Tx struct {
 	Group *GroupClient
 	// Membership is the client for interacting with the Membership builders.
 	Membership *MembershipClient
+	// Outbox is the client for interacting with the Outbox builders.
+	Outbox *OutboxClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 
@@ -157,6 +159,7 @@ func (tx *Tx) init() {
 	tx.ApiKey = NewApiKeyClient(tx.config)
 	tx.Group = NewGroupClient(tx.config)
 	tx.Membership = NewMembershipClient(tx.config)
+	tx.Outbox = NewOutboxClient(tx.config)
 	tx.User = NewUserClient(tx.config)
 }
 

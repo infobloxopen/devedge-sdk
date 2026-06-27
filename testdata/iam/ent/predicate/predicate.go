@@ -18,5 +18,8 @@ type Group func(*sql.Selector)
 // Membership is the predicate function for membership builders.
 type Membership func(*sql.Selector)
 
+// Outbox is the predicate function for outbox builders.
+type Outbox func(*sql.Selector)
+
 // User is the predicate function for user builders.
 type User func(*sql.Selector)

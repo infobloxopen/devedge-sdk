@@ -85,6 +85,32 @@ var (
 			},
 		},
 	}
+	// OutboxesColumns holds the columns for the "outboxes" table.
+	OutboxesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "account_id", Type: field.TypeString, Nullable: true},
+		{Name: "aggregate_type", Type: field.TypeString, Nullable: true},
+		{Name: "aggregate_id", Type: field.TypeString, Nullable: true},
+		{Name: "event_type", Type: field.TypeString, Nullable: true},
+		{Name: "payload", Type: field.TypeBytes, Nullable: true},
+		{Name: "created_time", Type: field.TypeTime, Nullable: true},
+		{Name: "delivered_time", Type: field.TypeTime, Nullable: true},
+		{Name: "attempts", Type: field.TypeInt, Default: 0},
+		{Name: "leased_until", Type: field.TypeTime, Nullable: true},
+	}
+	// OutboxesTable holds the schema information for the "outboxes" table.
+	OutboxesTable = &schema.Table{
+		Name:       "outboxes",
+		Columns:    OutboxesColumns,
+		PrimaryKey: []*schema.Column{OutboxesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "outbox_delivered_time",
+				Unique:  false,
+				Columns: []*schema.Column{OutboxesColumns[7]},
+			},
+		},
+	}
 	// UsersColumns holds the columns for the "users" table.
 	UsersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -112,6 +138,7 @@ var (
 		APIKeysTable,
 		GroupsTable,
 		MembershipsTable,
+		OutboxesTable,
 		UsersTable,
 	}
 )

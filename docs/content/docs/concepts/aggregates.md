@@ -155,7 +155,9 @@ Auth lookups follow the same rule: resolve an API key by its hashed secret via a
 - The boundary gate guards the **registered transport surface**. A handler that reaches into
   the ent client directly bypasses it — the same caveat class as the authz gate. Keep `Save`
   the sole write path for the aggregate.
-- **One root per `Save`.** Cross-aggregate consistency is eventual (a future outbox/event
-  seam), not a two-aggregate transaction. Link across aggregates by `references` (ID only).
+- **One root per `Save`.** Cross-aggregate consistency is eventual — via the
+  [transactional outbox + domain events](../events/) seam (`events.Publisher` /
+  `events.Dispatcher`), not a two-aggregate transaction. Link across aggregates by
+  `references` (ID only); *react* across them with events.
 - **Keep aggregates small.** A high-cardinality `has_many` eager-loaded on every `Load` is
   the main anti-pattern — make such children their own aggregate, referenced by ID.

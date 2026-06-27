@@ -19,6 +19,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/apikey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/group"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 )
 
@@ -35,6 +36,8 @@ type Client struct {
 	Group *GroupClient
 	// Membership is the client for interacting with the Membership builders.
 	Membership *MembershipClient
+	// Outbox is the client for interacting with the Outbox builders.
+	Outbox *OutboxClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 }
@@ -52,6 +55,7 @@ func (c *Client) init() {
 	c.ApiKey = NewApiKeyClient(c.config)
 	c.Group = NewGroupClient(c.config)
 	c.Membership = NewMembershipClient(c.config)
+	c.Outbox = NewOutboxClient(c.config)
 	c.User = NewUserClient(c.config)
 }
 
@@ -149,6 +153,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ApiKey:     NewApiKeyClient(cfg),
 		Group:      NewGroupClient(cfg),
 		Membership: NewMembershipClient(cfg),
+		Outbox:     NewOutboxClient(cfg),
 		User:       NewUserClient(cfg),
 	}, nil
 }
@@ -173,6 +178,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ApiKey:     NewApiKeyClient(cfg),
 		Group:      NewGroupClient(cfg),
 		Membership: NewMembershipClient(cfg),
+		Outbox:     NewOutboxClient(cfg),
 		User:       NewUserClient(cfg),
 	}, nil
 }
@@ -202,21 +208,21 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.Account.Use(hooks...)
-	c.ApiKey.Use(hooks...)
-	c.Group.Use(hooks...)
-	c.Membership.Use(hooks...)
-	c.User.Use(hooks...)
+	for _, n := range []interface{ Use(...Hook) }{
+		c.Account, c.ApiKey, c.Group, c.Membership, c.Outbox, c.User,
+	} {
+		n.Use(hooks...)
+	}
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.Account.Intercept(interceptors...)
-	c.ApiKey.Intercept(interceptors...)
-	c.Group.Intercept(interceptors...)
-	c.Membership.Intercept(interceptors...)
-	c.User.Intercept(interceptors...)
+	for _, n := range []interface{ Intercept(...Interceptor) }{
+		c.Account, c.ApiKey, c.Group, c.Membership, c.Outbox, c.User,
+	} {
+		n.Intercept(interceptors...)
+	}
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -230,6 +236,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Group.mutate(ctx, m)
 	case *MembershipMutation:
 		return c.Membership.mutate(ctx, m)
+	case *OutboxMutation:
+		return c.Outbox.mutate(ctx, m)
 	case *UserMutation:
 		return c.User.mutate(ctx, m)
 	default:
@@ -807,6 +815,139 @@ func (c *MembershipClient) mutate(ctx context.Context, m *MembershipMutation) (V
 	}
 }
 
+// OutboxClient is a client for the Outbox schema.
+type OutboxClient struct {
+	config
+}
+
+// NewOutboxClient returns a client for the Outbox from the given config.
+func NewOutboxClient(c config) *OutboxClient {
+	return &OutboxClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `outbox.Hooks(f(g(h())))`.
+func (c *OutboxClient) Use(hooks ...Hook) {
+	c.hooks.Outbox = append(c.hooks.Outbox, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `outbox.Intercept(f(g(h())))`.
+func (c *OutboxClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Outbox = append(c.inters.Outbox, interceptors...)
+}
+
+// Create returns a builder for creating a Outbox entity.
+func (c *OutboxClient) Create() *OutboxCreate {
+	mutation := newOutboxMutation(c.config, OpCreate)
+	return &OutboxCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Outbox entities.
+func (c *OutboxClient) CreateBulk(builders ...*OutboxCreate) *OutboxCreateBulk {
+	return &OutboxCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *OutboxClient) MapCreateBulk(slice any, setFunc func(*OutboxCreate, int)) *OutboxCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &OutboxCreateBulk{err: fmt.Errorf("calling to OutboxClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*OutboxCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &OutboxCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Outbox.
+func (c *OutboxClient) Update() *OutboxUpdate {
+	mutation := newOutboxMutation(c.config, OpUpdate)
+	return &OutboxUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *OutboxClient) UpdateOne(_m *Outbox) *OutboxUpdateOne {
+	mutation := newOutboxMutation(c.config, OpUpdateOne, withOutbox(_m))
+	return &OutboxUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *OutboxClient) UpdateOneID(id string) *OutboxUpdateOne {
+	mutation := newOutboxMutation(c.config, OpUpdateOne, withOutboxID(id))
+	return &OutboxUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Outbox.
+func (c *OutboxClient) Delete() *OutboxDelete {
+	mutation := newOutboxMutation(c.config, OpDelete)
+	return &OutboxDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *OutboxClient) DeleteOne(_m *Outbox) *OutboxDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *OutboxClient) DeleteOneID(id string) *OutboxDeleteOne {
+	builder := c.Delete().Where(outbox.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &OutboxDeleteOne{builder}
+}
+
+// Query returns a query builder for Outbox.
+func (c *OutboxClient) Query() *OutboxQuery {
+	return &OutboxQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeOutbox},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Outbox entity by its id.
+func (c *OutboxClient) Get(ctx context.Context, id string) (*Outbox, error) {
+	return c.Query().Where(outbox.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *OutboxClient) GetX(ctx context.Context, id string) *Outbox {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *OutboxClient) Hooks() []Hook {
+	return c.hooks.Outbox
+}
+
+// Interceptors returns the client interceptors.
+func (c *OutboxClient) Interceptors() []Interceptor {
+	return c.inters.Outbox
+}
+
+func (c *OutboxClient) mutate(ctx context.Context, m *OutboxMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&OutboxCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&OutboxUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&OutboxUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&OutboxDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Outbox mutation op: %q", m.Op())
+	}
+}
+
 // UserClient is a client for the User schema.
 type UserClient struct {
 	config
@@ -945,9 +1086,9 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Account, ApiKey, Group, Membership, User []ent.Hook
+		Account, ApiKey, Group, Membership, Outbox, User []ent.Hook
 	}
 	inters struct {
-		Account, ApiKey, Group, Membership, User []ent.Interceptor
+		Account, ApiKey, Group, Membership, Outbox, User []ent.Interceptor
 	}
 )
