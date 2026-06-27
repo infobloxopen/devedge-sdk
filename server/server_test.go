@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -283,15 +284,17 @@ func TestNew_PrincipalFunc_AuthorizesDocumentedGrant(t *testing.T) {
 
 // -- health tests (T3) -------------------------------------------------------
 
-// toggleCheck is a readiness check whose readiness can be toggled in tests.
+// toggleCheck is a readiness check whose readiness can be toggled in tests. The
+// fail flag is an atomic because the test goroutine flips it while the server's
+// readiness-loop goroutine reads it via Check (otherwise a data race under -race).
 type toggleCheck struct {
 	name string
-	fail bool
+	fail atomic.Bool
 }
 
 func (c *toggleCheck) Name() string { return c.name }
 func (c *toggleCheck) Check(_ context.Context) error {
-	if c.fail {
+	if c.fail.Load() {
 		return errors.New("not ready")
 	}
 	return nil
@@ -391,7 +394,7 @@ func TestHealth_Readyz_AllPassReturns200_FailureReturns503(t *testing.T) {
 	}
 
 	// Toggle to failing.
-	check.fail = true
+	check.fail.Store(true)
 	resp, err = http.Get("http://" + httpAddr + "/readyz")
 	if err != nil {
 		t.Fatalf("GET /readyz (failing): %v", err)
@@ -406,7 +409,7 @@ func TestHealth_Readyz_AllPassReturns200_FailureReturns503(t *testing.T) {
 	}
 
 	// Toggle back to ready.
-	check.fail = false
+	check.fail.Store(false)
 	resp, err = http.Get("http://" + httpAddr + "/readyz")
 	if err != nil {
 		t.Fatalf("GET /readyz (recovered): %v", err)
@@ -453,11 +456,11 @@ func TestHealth_GRPCStatus_FlipsWithReadiness(t *testing.T) {
 
 	// Toggle check to failing; the background loop should flip to NOT_SERVING
 	// within ~5s (one poll tick) + a little slack.
-	check.fail = true
+	check.fail.Store(true)
 	waitStatus(grpc_health_v1.HealthCheckResponse_NOT_SERVING, 8*time.Second)
 
 	// Recover: flip back to SERVING.
-	check.fail = false
+	check.fail.Store(false)
 	waitStatus(grpc_health_v1.HealthCheckResponse_SERVING, 8*time.Second)
 }
 
