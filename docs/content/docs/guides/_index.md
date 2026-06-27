@@ -12,6 +12,7 @@ Task-focused how-tos for common service-building jobs.
   {{< card link="model-a-resource/" title="Model a Resource" icon="cube" subtitle="Resource shape: field types, framework fields, constraints, relationships, secret fields." >}}
   {{< card link="storage-shapes/" title="Storage Shapes" icon="database" subtitle="GORM vs ent — when to use each." >}}
   {{< card link="security-check/" title="Security Check" icon="shield-check" subtitle="Prove authz, isolation, and no-secret-leak in CI." >}}
+  {{< card link="deploy/" title="Deploy" icon="server" subtitle="Multi-runtime deploy: Kubernetes/k3s (Helm + Flux GitOps) and Docker Compose." >}}
 {{< /cards >}}
 
 ### Production secrets

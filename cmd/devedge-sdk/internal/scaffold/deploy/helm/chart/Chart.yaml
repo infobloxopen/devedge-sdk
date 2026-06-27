@@ -1,0 +1,13 @@
+apiVersion: v2
+name: devedge-service
+description: |
+  Framework-owned Helm chart for a devedge-sdk service. Wires the operational
+  foundation a scaffolded service serves out of the box: liveness (/healthz) and
+  readiness (/readyz) probes, the config.ServerOptions env surface, OTEL_* export,
+  the DSN as a Secret, ingress, resource limits, and a termination grace period
+  paired with the service's graceful shutdown. Developers never author this chart;
+  they supply a thin values overlay. Published by the framework and referenced from
+  a Flux HelmRelease + OCIRepository source.
+type: application
+version: 0.1.0
+appVersion: "0.0.0"
