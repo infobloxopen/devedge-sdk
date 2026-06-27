@@ -5,10 +5,12 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite" // register SQLite driver for enttest
 
 	"github.com/infobloxopen/devedge-sdk/events"
+	"github.com/infobloxopen/devedge-sdk/events/membus"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/secret"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
@@ -131,6 +133,83 @@ func TestAC3_UserSuspendedRevokesKeysEventually(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Fatalf("the user's API keys must be revoked after dispatch, %d survived", len(remaining))
+	}
+}
+
+// TestBusE2E_UserSuspendedRevokesKeysThroughInMemoryBus re-wires the worked example
+// through the FULL Phase-1 event-bus stack on the ent/SQL backend: suspending a user
+// appends UserSuspended to the WRITE-ONLY outbox; a RELAY reads the outbox forward and
+// publishes it to the in-memory BUS (events/membus); a CONSUMER subscribes to the bus and
+// runs the revoke-keys handler in its own ent transaction with the SQL idempotency marker
+// (exactly-once). The relay and consumer run as the two independent goroutines a real
+// service wires — proving the example flows outbox → relay → in-memory-bus → consumer →
+// handler, not through the synchronous Dispatcher façade.
+func TestBusE2E_UserSuspendedRevokesKeysThroughInMemoryBus(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:iam_bus_e2e?mode=memory&cache=shared&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+	ctx := tenantCtx("acme")
+	enc := secret.NewDev([]byte("0123456789abcdef0123456789abcdef"))
+
+	users := iamv1.NewUserEntRepository(client)
+	apiKeys := iamv1.NewApiKeyEntRepository(client, enc)
+	tx := iamv1.NewEntTxRunner(client)
+	store := iamv1.NewEntOutboxStore(client, 0)
+	pub := events.NewOutboxPublisher(store)
+
+	if _, err := users.Create(ctx, &iamv1.User{Id: "u1", Email: "u1@acme.test", DisplayName: "Alice"}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := apiKeys.Create(ctx, &iamv1.ApiKey{Id: "k1", UserId: "u1", KeyValue: "tok1", KeyPrefix: "k1"}); err != nil {
+		t.Fatalf("seed key1: %v", err)
+	}
+	if _, err := apiKeys.Create(ctx, &iamv1.ApiKey{Id: "k2", UserId: "u1", KeyValue: "tok2", KeyPrefix: "k2"}); err != nil {
+		t.Fatalf("seed key2: %v", err)
+	}
+
+	// Produce: suspend the user (user change + outbox event commit atomically).
+	if err := suspendUser(ctx, tx, users, pub, "u1"); err != nil {
+		t.Fatalf("suspendUser: %v", err)
+	}
+
+	// Wire the bus stack: membus + a consumer (ent idempotency store) + a leader-elected
+	// relay reading the ent outbox via the ent cursor sidecar.
+	bus := membus.New()
+	consumer := events.NewConsumer(bus, tx, iamv1.NewEntIdempotencyStore(client))
+	consumer.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandler(client, apiKeys))
+	relay := events.NewRelay(store, iamv1.NewEntOutboxCursorStore(client), bus)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _ = consumer.Run(runCtx) }()
+	go func() { defer wg.Done(); relay.Run(runCtx, time.Millisecond, 10, nil) }()
+
+	// AFTER the event flows through the bus the keys are revoked (eventual consistency).
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		remaining, _, err := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10})
+		if err != nil {
+			t.Fatalf("list keys: %v", err)
+		}
+		if len(remaining) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the user's API keys must be revoked after the event flows through the bus, %d survived", len(remaining))
+		}
+		time.Sleep(3 * time.Millisecond)
+	}
+	cancel()
+	wg.Wait()
+
+	// The relay advanced its ent cursor past the event; the write-only outbox row survives.
+	n, err := client.Outbox.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count outbox: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("write-only: the relay must never delete the outbox row, found %d", n)
 	}
 }
 
