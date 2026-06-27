@@ -2,6 +2,7 @@
 title: Model a Resource
 weight: 2
 aliases:
+  - /docs/guides/model-a-resource/
   - /docs/guides/secret-fields/
 ---
 
@@ -35,7 +36,7 @@ That alone generates a `WidgetModel`, a CRUDL `WidgetRepository`, and the column
 
 Optionally attach `(google.api.resource)` to mark the resource type and its name pattern. The
 generator then emits a `name` value, a `<Name>NamePattern` constant, and `Format<Name>Name` /
-`Parse<Name>Name` helpers (backed by [`persistence/resourcename`](../../reference/persistence/)):
+`Parse<Name>Name` helpers (backed by [`persistence/resourcename`](../../../reference/persistence/)):
 
 ```proto
 message Widget {
@@ -54,7 +55,7 @@ message Widget {
 `name` is `OUTPUT_ONLY` (see below) — it is derived from `id`, never stored or accepted on input. This
 holds on **both** storage backends: GORM omits the column and populates `name` in `fromModel`; ent
 omits the column and recomputes it in the generated `fromEnt<R>` projection (see
-[codegen → Resource names on ent](../../reference/codegen/#resource-names-on-ent-aip-122)) — so a read
+[codegen → Resource names on ent](../../../reference/codegen/#resource-names-on-ent-aip-122)) — so a read
 always carries the resource name with no consumer code.
 
 ## Field types
@@ -91,9 +92,9 @@ storage and lifecycle; you never write the plumbing.
 
 | Field (proto) | Type | What it gives you |
 |---|---|---|
-| `account_id` | `string` | **Tenant scope.** Every query is automatically filtered by `account_id` from `middleware.TenantIDFromContext(ctx)` — see [Tenant Isolation](../../concepts/tenant-isolation/). It also makes `unique` per-tenant (below). |
-| `etag` | `string` `OUTPUT_ONLY` | **AIP-154 concurrency.** Stamped on every write, surfaced on read; a client echoes it as `If-Match` for a 412-guarded conditional update. Auto-stamped and surfaced on **both** backends with no consumer code — ent via the generated `EtagMixin` plus the generated `fromEnt` projection — see [codegen → ETag](../../reference/codegen/). |
-| `delete_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 soft-delete.** Opts the resource into soft-delete (a `DeletedAt` column); `Delete` sets it, `Undelete` clears it, `List` hides soft-deleted rows unless `show_deleted`. Omit the field for hard-delete. A per-tenant `unique` key on a soft-delete resource is **re-creatable** once the holder is soft-deleted — see [codegen → Soft-delete + unique](../../reference/codegen/) (`dialect=mysql` for the MySQL strategy). |
+| `account_id` | `string` | **Tenant scope.** Every query is automatically filtered by `account_id` from `middleware.TenantIDFromContext(ctx)` — see [Tenant Isolation](../../../concepts/tenant-isolation/). It also makes `unique` per-tenant (below). |
+| `etag` | `string` `OUTPUT_ONLY` | **AIP-154 concurrency.** Stamped on every write, surfaced on read; a client echoes it as `If-Match` for a 412-guarded conditional update. Auto-stamped and surfaced on **both** backends with no consumer code — ent via the generated `EtagMixin` plus the generated `fromEnt` projection — see [codegen → ETag](../../../reference/codegen/). |
+| `delete_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 soft-delete.** Opts the resource into soft-delete (a `DeletedAt` column); `Delete` sets it, `Undelete` clears it, `List` hides soft-deleted rows unless `show_deleted`. Omit the field for hard-delete. A per-tenant `unique` key on a soft-delete resource is **re-creatable** once the holder is soft-deleted — see [codegen → Soft-delete + unique](../../../reference/codegen/) (`dialect=mysql` for the MySQL strategy). |
 | `expire_time` | `Timestamp` `OUTPUT_ONLY` | **AIP-148 TTL.** Adds an `expire_time` column and a `PurgeExpired` method to the repository. |
 | `created_at`, `updated_at` | — | Added to every model automatically; you don't declare them. |
 
@@ -141,7 +142,7 @@ message Widget {
 {{< callout type="info" >}}
 **`unique` is per-tenant by default.** In a message with `account_id`, a `unique` field joins
 `account_id` in a composite index (account_id leading) so one tenant's names don't collide with —
-or leak to — another's. The [Annotations concept](../../concepts/annotations/) has the full option
+or leak to — another's. The [Annotations concept](../../../concepts/annotations/) has the full option
 reference and the rationale.
 {{< /callout >}}
 
@@ -184,7 +185,7 @@ The related message must itself be a resource (it needs an `id`). On the GORM ba
 typed associations (`[]*VehicleModel`, `*FleetModel`) you can `Preload`; on the **ent** backend they
 become graph edges — ent's strength for relationship-heavy domains. See
 [Storage Shapes](../storage-shapes/) for when to choose ent, and the
-[Codegen reference](../../reference/codegen/) for the exact generated shape.
+[Codegen reference](../../../reference/codegen/) for the exact generated shape.
 
 ## Secret fields
 
@@ -233,9 +234,9 @@ Both implementations satisfy one interface (`Encrypt` / `Decrypt` / `Hash`):
 - **Dev** — `secret.NewDev(key)` uses AES-256-GCM + HMAC-SHA256, all in-process (the key must be
   ≥ 32 bytes). Ideal for local dev and tests; **never use it in production.**
 - **Production** — `secret.NewVaultTransit(addr, token, keyName)` calls HashiCorp Vault's Transit
-  engine over plain HTTP (no Vault SDK dependency). See [Vault Transit](../vault-transit/).
+  engine over plain HTTP (no Vault SDK dependency). See [Secret Fields → Vault Transit backend](../../secure/secret-fields/#vault-transit-backend-production).
 
-The full `Encryptor` API is in the [secret reference](../../reference/secret/).
+The full `Encryptor` API is in the [secret reference](../../../reference/secret/).
 
 ### Also redacted and leak-checked
 
@@ -244,7 +245,7 @@ The `secret` annotation does more than storage:
 - **Logs** — `middleware/redact` replaces the value with `[REDACTED]` before logging.
 - **Responses** — `seccheck.AssertNoSecretFieldsLeaked(resp...)` walks every response proto and
   fails if a secret field holds anything but `[REDACTED]`. Wire it into your tests — see
-  [Security Check](../security-check/).
+  [Security Check](../../secure/security-check/).
 
 {{< callout type="warning" >}}
 Your handler still receives the raw value on the **request**. Return it to the caller **once**, at
@@ -337,6 +338,6 @@ Want one of these sooner, or have another field kind in mind? It's a small spec 
 
 - [Define a Service](../define-a-service/) — the proto → generate → wire loop around this model.
 - [Storage Shapes](../storage-shapes/) — persist the model with GORM or ent.
-- [Vault Transit](../vault-transit/) — production secret handling with Vault.
-- [Annotations](../../concepts/annotations/) — the complete `(infoblox.field.v1.opts)` reference.
-- [Tenant Isolation](../../concepts/tenant-isolation/) — how `account_id` scoping is enforced.
+- [Secret Fields](../../secure/secret-fields/) — production secret handling with Vault Transit.
+- [Annotations](../../../concepts/annotations/) — the complete `(infoblox.field.v1.opts)` reference.
+- [Tenant Isolation](../../../concepts/tenant-isolation/) — how `account_id` scoping is enforced.

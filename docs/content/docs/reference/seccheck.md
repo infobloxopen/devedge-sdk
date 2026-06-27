@@ -9,7 +9,7 @@ import "github.com/infobloxopen/devedge-sdk/seccheck"
 
 Package `seccheck` turns the SDK's security invariants into Go test assertions. Each `Assert*`
 function returns `[]Finding`; `RunT` maps those to `testing.TB` calls. See the
-[Security check guide](../../guides/security-check/) for end-to-end examples.
+[Security check guide](../../how-to/secure/security-check/) for end-to-end examples.
 
 ## Finding, Severity, RunT
 

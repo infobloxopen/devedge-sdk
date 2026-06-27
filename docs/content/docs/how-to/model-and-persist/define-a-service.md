@@ -1,6 +1,8 @@
 ---
 title: Define a Service
 weight: 1
+aliases:
+  - /docs/guides/define-a-service/
 ---
 
 The full loop: author a proto, run `buf generate`, and get a service scaffold, a repository, and
@@ -8,7 +10,7 @@ an authz rule table. The proto is the single source of truth.
 
 > **Starting a new service?** Don't hand-wire any of this. Run
 > `devedge-sdk new service <name> --resource <Resource> --backend gorm` (see the
-> [Quickstart](../../getting-started/quickstart/#the-one-command-path-recommended)) — it generates
+> [Quickstart](../../../getting-started/quickstart/#the-one-command-path-recommended)) — it generates
 > a building, authz-gated, persisting project with zero hand-edits. This guide explains what that
 > scaffold produces, for when you customize it.
 
@@ -220,10 +222,10 @@ if err := apikeyv1.RegisterAPIKeyServiceWithRepository(srv, repo); err != nil {
 **Custom or non-CRUD logic?** Embed the generated `APIKeyServiceCRUDHandler`, override only the
 methods you change (and add any custom RPCs the generator left `Unimplemented`), then register your
 handler with `RegisterAPIKeyService(srv, h)`. See
-[codegen → protoc-gen-svc](../../reference/codegen.md#protoc-gen-svc) for the override recipe.
+[codegen → protoc-gen-svc](../../../reference/codegen/#protoc-gen-svc) for the override recipe.
 
 The generated rules feed both the authz interceptor and the field-mask validator. See the
-[server reference](../../reference/server.md).
+[server reference](../../../reference/server/).
 
 ## Error handling
 
@@ -252,14 +254,14 @@ func (s *apiKeyServer) GetAPIKey(ctx context.Context, req *apikeyv1.GetAPIKeyReq
 }
 ```
 
-See [middleware → ErrorMapperUnary](../../reference/middleware/#errormapperunary) and
-[persistence → Errors](../../reference/persistence/#errors).
+See [middleware → ErrorMapperUnary](../../../reference/middleware/#errormapperunary) and
+[persistence → Errors](../../../reference/persistence/#errors).
 
 ## 5. Choose how secret fields persist
 
 `key_value` is annotated `secret`, so the generated `APIKeyRepository` needs an `Encryptor`. Its
 constructor is `NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor)`. See
-[Secret fields](../model-a-resource/#secret-fields).
+[Secret fields](../../../how-to/secure/secret-fields/).
 
 ## Governing the public API locally
 
@@ -284,9 +286,9 @@ Or call `apx` directly: `apx lint`, `apx breaking --against HEAD`, `apx release 
   generated Go must be a single directory segment under `gen/` so the sibling generated `ent/` package
   compiles, which is not the `<module>/<api-id>` layout apx derives by default. The command exits 0 —
   do not realign the `go_package` (it breaks the ent build) and do not pass `--strict` (that turns the
-  warning fatal). See [codegen → buf.gen.yaml](../../reference/codegen/#putting-them-in-bufgenyaml).
+  warning fatal). See [codegen → buf.gen.yaml](../../../reference/codegen/#putting-them-in-bufgenyaml).
 
 ## Next
 
 - [Storage shapes](../storage-shapes/) — GORM vs ent.
-- [API Key Manager tutorial](../../tutorial/api-key-manager/) — the same proto, end to end.
+- [API Key Manager tutorial](../../../tutorial/api-key-manager/) — the same proto, end to end.

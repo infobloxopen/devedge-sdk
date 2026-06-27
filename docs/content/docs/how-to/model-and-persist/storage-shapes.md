@@ -1,6 +1,8 @@
 ---
 title: Storage Shapes
 weight: 3
+aliases:
+  - /docs/guides/storage-shapes/
 ---
 
 The SDK is **resource-oriented and AIP-aligned**: the API contract (resources, standard methods,
@@ -35,7 +37,7 @@ hand-written are conventions, not generators.
 | Minimize new concepts for the team? | **yes** | learning curve |
 
 Both enforce **tenant isolation** the same way — every query is scoped by `account_id` from
-`middleware.TenantIDFromContext(ctx)` (see [Tenant Isolation](../../concepts/tenant-isolation/)).
+`middleware.TenantIDFromContext(ctx)` (see [Tenant Isolation](../../../concepts/tenant-isolation/)).
 
 ## Constructor signatures
 
@@ -110,4 +112,4 @@ inherits it for every query.
 - **Migrations** — schema migrations use `infobloxopen/migrate` (the org-standard fork)
   regardless of shape.
 
-See the [persistence reference](../../reference/persistence/) for the full API.
+See the [persistence reference](../../../reference/persistence/) for the full API.

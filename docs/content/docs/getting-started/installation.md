@@ -76,7 +76,7 @@ devedge-sdk new service notes --resource Note --backend gorm   # or --backend en
 This emits the `buf.yaml`/`buf.gen.yaml`/`apx.yaml` wiring, an annotated example proto, the server, and a
 smoke test, then runs the first `buf generate`. See the [Quickstart](../quickstart/) for the full walk-through.
 The manual plugin install below is what the CLI does under the hood — useful when wiring an existing repo
-by hand (see [Define a service](../../guides/define-a-service/)).
+by hand (see [Define a service](../../how-to/model-and-persist/define-a-service/)).
 
 ## Install the codegen plugins
 
@@ -91,7 +91,7 @@ go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@late
 ```
 
 If you expose an HTTP/JSON gateway (the quickstart's `curl` examples and the
-[Define a service](../../guides/define-a-service/) buf template both do), also install the
+[Define a service](../../how-to/model-and-persist/define-a-service/) buf template both do), also install the
 **third-party** grpc-gateway plugin. It is independently versioned, so `@latest` is correct here:
 
 ```bash
@@ -100,7 +100,7 @@ go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@lat
 
 Its `google/api/*.proto` imports (`annotations.proto`, `http.proto`) come from the
 `buf.build/googleapis/googleapis` module — add it to your `buf.yaml` `deps` and run `buf dep update`
-(see [Define a service](../../guides/define-a-service/)).
+(see [Define a service](../../how-to/model-and-persist/define-a-service/)).
 
 | Plugin | Output |
 |---|---|

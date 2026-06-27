@@ -1,6 +1,8 @@
 ---
 title: Resilience — Timeouts, Rate Limiting & Circuit Breakers
-weight: 9
+weight: 3
+aliases:
+  - /docs/guides/resilience/
 ---
 
 The SDK ships three resilience policy interceptors — request timeouts, rate limiting, and a

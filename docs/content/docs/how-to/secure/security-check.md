@@ -1,6 +1,8 @@
 ---
 title: Security Check
-weight: 4
+weight: 1
+aliases:
+  - /docs/guides/security-check/
 ---
 
 `seccheck` turns the SDK's security invariants into ordinary Go test assertions, so they run in
@@ -69,7 +71,7 @@ func TestSecurity_UnknownPrincipalDenied(t *testing.T) {
 ### `AssertCrossAccountIsolation` — tenant isolation (dynamic)
 
 Creates a resource as Principal A and asserts Principal B cannot read it (`codes.NotFound`) or
-list it (count 0). See [Tenant Isolation](../../concepts/tenant-isolation/) for a full example.
+list it (count 0). See [Tenant Isolation](../../../concepts/tenant-isolation/) for a full example.
 
 ```go
 findings := seccheck.AssertCrossAccountIsolation(context.Background(), seccheck.IsolationConfig{

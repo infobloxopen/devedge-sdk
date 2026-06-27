@@ -1,6 +1,8 @@
 ---
 title: Deploy
-weight: 10
+weight: 4
+aliases:
+  - /docs/guides/deploy/
 ---
 
 A scaffolded service ships with a **deploy path for two real runtime targets** — Kubernetes/k3s

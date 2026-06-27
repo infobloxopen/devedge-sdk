@@ -283,5 +283,5 @@ the same engine whether you chose GORM, ent, or sqlc.
 
 A "shape" is how entities/queries are modeled and generated. The SDK ships generators for two
 (GORM via `protoc-gen-storage`, ent via `protoc-gen-ent`) and treats sqlc and hand-written as
-conventions. See [Storage shapes](../../guides/storage-shapes/) for the comparison table and how
+conventions. See [Storage shapes](../../how-to/model-and-persist/storage-shapes/) for the comparison table and how
 to plug a shape in — behind the neutral seam, or directly when you need the shape's full power.

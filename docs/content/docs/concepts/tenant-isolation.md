@@ -123,4 +123,4 @@ The `account-id` metadata key is the same one used for the unknown-principal aut
 tenant and the authz principal share an origin, so a request that is authorized is also scoped.
 {{< /callout >}}
 
-See [Security check](../../guides/security-check/) for the full set of assertions.
+See [Security check](../../how-to/secure/security-check/) for the full set of assertions.

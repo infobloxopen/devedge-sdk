@@ -1,6 +1,8 @@
 ---
 title: Health & Readiness Probes
-weight: 8
+weight: 2
+aliases:
+  - /docs/guides/health/
 ---
 
 A service built with the SDK exposes health and readiness probes out of the box — no extra wiring

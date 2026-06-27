@@ -81,7 +81,7 @@ func (v *VaultTransitEncryptor) Rewrap(ctx context.Context, ciphertext string) (
 Each request sets `X-Vault-Token` and `Content-Type: application/json`; a non-200 response becomes
 an error carrying Vault's status and body.
 
-See the [Vault Transit guide](../../guides/vault-transit/) for engine setup and policy.
+See the [Secret Fields guide](../../how-to/secure/secret-fields/) for engine setup and policy.
 
 ## How storage uses it
 
@@ -94,4 +94,4 @@ c, _ := enc.Encrypt(ctx, entity.KeyValue) // → KeyValueCipher (recoverable)
 ```
 
 The `Repository` constructor takes the `Encryptor` when the message has secret fields. See
-[Secret fields](../../guides/model-a-resource/#secret-fields).
+[Secret fields](../../how-to/model-and-persist/model-a-resource/#secret-fields).

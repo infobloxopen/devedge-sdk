@@ -1,6 +1,8 @@
 ---
 title: Observability
-weight: 6
+weight: 1
+aliases:
+  - /docs/guides/observability/
 ---
 
 A service built with the SDK is observable by default: per-RPC **traces**, **RED metrics**, and

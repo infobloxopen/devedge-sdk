@@ -1,6 +1,8 @@
 ---
 title: "Configuration"
-weight: 20
+weight: 1
+aliases:
+  - /docs/guides/configuration/
 ---
 
 # Configuration
