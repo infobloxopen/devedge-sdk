@@ -57,35 +57,41 @@ func partitionName(t time.Time) string {
 	return fmt.Sprintf("outbox_p%04d_%02d", t.Year(), int(t.Month()))
 }
 
-// EnsureOutboxPartitions creates (idempotently) the PostgreSQL declarative
+// EnsureOutboxPartitions creates (idempotently) the declarative
 // RANGE-on-created_time parent table and one monthly partition for every month in
 // [from, until], so appends in that window land in a real partition. It is the DDL
 // the SQLite-friendly AutoMigrate(&OutboxRow{}) cannot produce (AutoMigrate makes a
-// plain table); call it once at startup on PostgreSQL, then again from the retention
-// task to roll the window forward.
+// plain table); call it once at startup, then again from the retention task to roll
+// the window forward.
 //
-// It is a no-op-safe to call repeatedly: CREATE TABLE IF NOT EXISTS for both the
-// parent and each monthly child. monthly partitions span [month, next month).
+// It is no-op-safe to call repeatedly: on PostgreSQL it uses CREATE TABLE IF NOT
+// EXISTS for both the parent and each monthly child; on MySQL it CREATEs the
+// partitioned parent if absent and ADD PARTITIONs only the months not already
+// present. Monthly partitions span [month, next month).
 //
-// Only PostgreSQL is supported here (P1); MySQL RANGE partitioning is P2. On a non-
-// PG dialect this returns an error so a caller does not silently get an unpartitioned
-// table believing it is partitioned.
+// PostgreSQL and MySQL (P2) are supported. On any other dialect this returns an
+// error so a caller does not silently get an unpartitioned table believing it is
+// partitioned.
 func EnsureOutboxPartitions(ctx context.Context, db *gorm.DB, from, until time.Time) error {
-	if name := db.Dialector.Name(); name != "postgres" {
-		return fmt.Errorf("gormtx: EnsureOutboxPartitions supports only postgres (P1), got %q", name)
-	}
 	if until.Before(from) {
 		from, until = until, from
 	}
-	if err := db.WithContext(ctx).Exec(outboxPartitionParentDDL).Error; err != nil {
-		return fmt.Errorf("create partitioned outbox parent: %w", err)
-	}
-	for m := monthStart(from); !m.After(monthStart(until)); m = addMonth(m) {
-		if err := ensureMonthlyPartition(ctx, db, m); err != nil {
-			return err
+	switch db.Dialector.Name() {
+	case "postgres":
+		if err := db.WithContext(ctx).Exec(outboxPartitionParentDDL).Error; err != nil {
+			return fmt.Errorf("create partitioned outbox parent: %w", err)
 		}
+		for m := monthStart(from); !m.After(monthStart(until)); m = addMonth(m) {
+			if err := ensureMonthlyPartition(ctx, db, m); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "mysql":
+		return ensureMySQLOutboxPartitions(ctx, db, from, until)
+	default:
+		return fmt.Errorf("gormtx: EnsureOutboxPartitions supports postgres and mysql, got %q", db.Dialector.Name())
 	}
-	return nil
 }
 
 // ensureMonthlyPartition attaches one monthly child partition covering
@@ -117,8 +123,11 @@ func ensureMonthlyPartition(ctx context.Context, db *gorm.DB, month time.Time) e
 // partitioning) it models the same contract as a windowed delete of rows older than
 // t — acceptable for the dev/test backend only, as the spec notes.
 func (s *GormOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Time) (int, error) {
-	if s.db.Dialector.Name() == "postgres" {
+	switch s.db.Dialector.Name() {
+	case "postgres":
 		return s.dropPGPartitionsBefore(ctx, t)
+	case "mysql":
+		return s.dropMySQLPartitionsBefore(ctx, t)
 	}
 	// Dev/test backend: no partitions, so "drop a partition" degrades to forgetting
 	// rows older than t. This is the only delete path and it is NOT on the dispatch
@@ -202,11 +211,14 @@ func RunRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRete
 	now := time.Now().UTC()
 	// Roll the window forward: make sure this month and next month have partitions so
 	// appends never hit a missing-partition error at a month boundary. Only meaningful
-	// on PostgreSQL; EnsureOutboxPartitions errors on other dialects, which we tolerate
-	// for the dev backend (it has no partitions to ensure).
-	if db != nil && db.Dialector.Name() == "postgres" {
-		if eerr := EnsureOutboxPartitions(ctx, db, now, addMonth(now)); eerr != nil {
-			return 0, fmt.Errorf("ensure forward partitions: %w", eerr)
+	// on the partitioning dialects (PostgreSQL, MySQL); EnsureOutboxPartitions errors
+	// on other dialects, which we tolerate for the dev backend (it has no partitions to
+	// ensure).
+	if db != nil {
+		if name := db.Dialector.Name(); name == "postgres" || name == "mysql" {
+			if eerr := EnsureOutboxPartitions(ctx, db, now, addMonth(now)); eerr != nil {
+				return 0, fmt.Errorf("ensure forward partitions: %w", eerr)
+			}
 		}
 	}
 	cutoff := now.Add(-window)

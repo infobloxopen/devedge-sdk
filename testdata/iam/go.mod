@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	entgo.io/ent v0.14.6
+	github.com/go-sql-driver/mysql v1.10.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
@@ -11,10 +12,12 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2
 	github.com/testcontainers/testcontainers-go v0.43.0
+	github.com/testcontainers/testcontainers-go/modules/mysql v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
+	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.2
 	modernc.org/sqlite v1.53.0
@@ -23,6 +26,7 @@ require (
 require (
 	ariga.io/atlas v0.36.2-0.20250730182955-2c6300d0a3e1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect

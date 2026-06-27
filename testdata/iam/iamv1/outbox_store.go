@@ -38,9 +38,12 @@ type EntOutboxStore struct {
 	leaseTTL time.Duration
 	now      func() time.Time
 	// rawDB, when set, is the underlying *sql.DB used ONLY for partition-drop retention
-	// DDL on PostgreSQL (ent does not expose declarative partitioning). It is never
-	// touched on the dispatch path. Inject it with WithEntOutboxRawDB on PG.
+	// DDL on a partitioned SQL backend (ent does not expose declarative partitioning).
+	// It is never touched on the dispatch path. Inject it with WithEntOutboxRawDB.
 	rawDB *sql.DB
+	// mysql selects the MySQL partition-drop DDL (ALTER TABLE ... DROP PARTITION) over
+	// the default PostgreSQL DDL when rawDB is set. Set it with WithEntOutboxMySQL.
+	mysql bool
 }
 
 // EntOutboxOption configures an EntOutboxStore.
@@ -51,6 +54,13 @@ type EntOutboxOption func(*EntOutboxStore)
 // partitioned PG deployment; the sqlite dev backend does not require it.
 func WithEntOutboxRawDB(db *sql.DB) EntOutboxOption {
 	return func(s *EntOutboxStore) { s.rawDB = db }
+}
+
+// WithEntOutboxMySQL selects the MySQL partition-drop DDL for DropPartitionsBefore
+// (ALTER TABLE ... DROP PARTITION) instead of the default PostgreSQL DDL. Combine it
+// with WithEntOutboxRawDB on a partitioned MySQL deployment.
+func WithEntOutboxMySQL() EntOutboxOption {
+	return func(s *EntOutboxStore) { s.mysql = true }
 }
 
 // NewEntOutboxStore returns an ent-backed OutboxStore over client. A non-positive
@@ -184,6 +194,9 @@ func (s *EntOutboxStore) Release(ctx context.Context, id string) error {
 // windowed delete of aged rows through the ent client — acceptable for dev/test only.
 func (s *EntOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Time) (int, error) {
 	if s.rawDB != nil {
+		if s.mysql {
+			return dropEntMySQLPartitionsBefore(ctx, s.rawDB, t)
+		}
 		return dropEntPGPartitionsBefore(ctx, s.rawDB, t)
 	}
 	// Dev/test backend: no partitions, so "drop a partition" degrades to forgetting

@@ -58,6 +58,9 @@ func TestMain(m *testing.M) {
 		_ = pgContainer.Terminate(ctx)
 		cancel()
 	}
+	// F033 P2: also reap the shared MySQL container (mysqltest_test.go) for the same
+	// Ryuk-off-local-workflow reason.
+	terminateMySQL()
 	os.Exit(code)
 }
 

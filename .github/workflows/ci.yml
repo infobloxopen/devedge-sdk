@@ -46,7 +46,11 @@ jobs:
       - name: Integration tests (fleet fixture — ent/gorm aggregate, CAS, cascade on Postgres)
         run: cd testdata/fleet && go test -race ./...
 
-      - name: Integration tests (iam fixture — outbox/events exactly-once on Postgres)
+      # The iam fixture also carries the F033 Phase-2 MySQL validation (TestMySQL_*):
+      # the append-only partitioned outbox + drop-partition retention proven on real
+      # MySQL 8 via testcontainers (the second engine the F033 directive names). They
+      # SKIP cleanly without Docker but RUN on ubuntu-latest.
+      - name: Integration tests (iam fixture — outbox/events exactly-once on Postgres + MySQL)
         run: cd testdata/iam && go test -race ./...
 
       # Guard against the PG tests silently SKIPPING in CI (e.g. if Docker stopped
@@ -68,6 +72,23 @@ jobs:
               exit 1
             fi
           done
+
+      # Same guard for the F033 MySQL validation (iam only). The drop-partition +
+      # exactly-once proof on real MySQL must RUN here, not skip.
+      - name: Assert MySQL tests actually ran (not skipped)
+        run: |
+          set -euo pipefail
+          echo "== iam: TestMySQL_ must run, not skip =="
+          out="$(cd testdata/iam && go test -run '^TestMySQL_' -v ./... 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -q -- '--- SKIP: TestMySQL_'; then
+            echo "::error::MySQL validation tests SKIPPED in iam — Docker/testcontainers unavailable on the runner. Phase-2 MySQL validation did not run."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q -- '--- PASS: TestMySQL_'; then
+            echo "::error::No TestMySQL_ test PASSED in iam — expected the MySQL validation suite to run."
+            exit 1
+          fi
 
   security-check:
     name: Security Check
