@@ -23,6 +23,12 @@ const memOutboxOrderBase = 1 << 32
 // the duration of fn, so a committed Publish keeps its row and a rolled-back one
 // discards it (F032 AC-1) — exactly as the ent store's Append-through-*ent.Tx does
 // for the SQL backend.
+//
+// F033: the store is APPEND-ONLY. Rows are never deleted or delivered-marked on the
+// dispatch path; claim eligibility is attempts-based (a row drops out of claims once
+// its Attempts reaches the dispatcher's maxAttempts, the poison cutoff), and the
+// only path that removes data is [MemoryOutboxStore.DropPartitionsBefore] (the
+// dev-backend model of partition-drop retention: forget rows older than t).
 type MemoryOutboxStore struct {
 	mu       sync.Mutex
 	rows     []*OutboxRecord      // append order; the dispatcher claims from the head
@@ -32,9 +38,9 @@ type MemoryOutboxStore struct {
 }
 
 // NewMemoryOutboxStore returns an in-memory OutboxStore. leaseTTL is how long a
-// claimed-but-undelivered row stays hidden from a competing claim before it may be
-// re-leased (the claimed-flag/lease strategy of F032 D-3); a non-positive value
-// uses a sane default.
+// claimed row stays hidden from a competing claim before it may be re-leased (the
+// claimed-flag/lease strategy of F032 D-3); a non-positive value uses a sane
+// default.
 func NewMemoryOutboxStore(leaseTTL time.Duration) *MemoryOutboxStore {
 	if leaseTTL <= 0 {
 		leaseTTL = 30 * time.Second
@@ -110,13 +116,22 @@ func (s *MemoryOutboxStore) Append(ctx context.Context, rec *OutboxRecord) error
 	return ErrNoTransaction
 }
 
-// ClaimUndelivered implements [OutboxStore]: lease up to limit undelivered,
-// unleased rows to the caller, stamping a fresh lease and bumping Attempts. A claim
-// is its own short critical section (not part of an aggregate tx), so it locks
-// directly.
-func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, limit int) ([]*OutboxRecord, error) {
+// ClaimUndelivered implements [OutboxStore]: lease up to limit rows still eligible
+// for dispatch — Attempts < maxAttempts and lease lapsed — to the caller, stamping a
+// fresh lease and bumping Attempts. A claim is its own short critical section (not
+// part of an aggregate tx), so it locks directly.
+//
+// F033: eligibility is attempts-based, not delivered-time-based. A row that has been
+// attempted maxAttempts times is poison and is no longer returned (the poison
+// cutoff); a successfully delivered row keeps being eligible until the cutoff but its
+// re-delivery is a harmless no-op (the handler markers dedup it), and it is
+// eventually aged out by DropPartitionsBefore.
+func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*OutboxRecord, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = DefaultMaxOutboxAttempts
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,8 +141,8 @@ func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, limit int) ([]
 		if len(out) >= limit {
 			break
 		}
-		if r.DeliveredTime != nil {
-			continue // terminal
+		if r.Attempts >= maxAttempts {
+			continue // poison: past the cutoff, no longer claimed
 		}
 		if exp, leased := s.leased[r.ID]; leased && now.Before(exp) {
 			continue // still leased to another claim
@@ -140,26 +155,15 @@ func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, limit int) ([]
 	return out, nil
 }
 
-// MarkDelivered implements [OutboxStore]: stamp DeliveredTime on the row so future
-// claims skip it, and drop its lease.
+// MarkDelivered implements [OutboxStore]: a NO-OP under the F033 append-only model.
+// Delivery truth is the idempotency marker recorded in the handler's transaction,
+// not a row write; the store never mutates delivery state and never deletes a row.
 func (s *MemoryOutboxStore) MarkDelivered(ctx context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range s.rows {
-		if r.ID == id {
-			if r.DeliveredTime == nil {
-				now := time.Now()
-				r.DeliveredTime = &now
-			}
-			delete(s.leased, id)
-			return nil
-		}
-	}
-	return ErrNotFound
+	return nil
 }
 
 // Release implements [OutboxStore]: drop the lease on id so a re-claim is immediate.
-// A no-op for an unknown or already-delivered id.
+// A no-op for an unknown id. It does NOT delete the row (append-only).
 func (s *MemoryOutboxStore) Release(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,22 +171,45 @@ func (s *MemoryOutboxStore) Release(ctx context.Context, id string) error {
 	return nil
 }
 
-// Pending returns the ids of rows not yet delivered, in append order. It is a test
-// and introspection helper (e.g. asserting AC-1: a rolled-back Publish left no row).
+// DropPartitionsBefore implements [OutboxRetention] for the dev backend: it forgets
+// every row whose CreatedTime is strictly older than t (the in-memory model of an
+// SQL partition drop) and returns how many rows it removed. This is the ONLY path
+// that removes data from the append-only store; the dispatch loop never deletes.
+func (s *MemoryOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.rows[:0:0]
+	dropped := 0
+	for _, r := range s.rows {
+		if r.CreatedTime.Before(t) {
+			delete(s.leased, r.ID)
+			dropped++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	s.rows = kept
+	return dropped, nil
+}
+
+// Pending returns the ids of rows still eligible for claim (Attempts below the
+// default cutoff), in append order. Under the F033 append-only model the store does
+// not track delivery (the idempotency marker is the delivery truth), so Pending
+// reflects claim-eligibility, not delivered-state; it is a test/introspection helper.
 func (s *MemoryOutboxStore) Pending() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.rows))
 	for _, r := range s.rows {
-		if r.DeliveredTime == nil {
+		if r.Attempts < DefaultMaxOutboxAttempts {
 			out = append(out, r.ID)
 		}
 	}
 	return out
 }
 
-// All returns a copy of every stored row in append order (delivered or not), for
-// tests/introspection.
+// All returns a copy of every stored row in append order, for tests/introspection.
+// Under the append-only model the row count only grows until a DropPartitionsBefore.
 func (s *MemoryOutboxStore) All() []*OutboxRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,5 +224,6 @@ func (s *MemoryOutboxStore) All() []*OutboxRecord {
 // compile-time checks.
 var (
 	_ OutboxStore         = (*MemoryOutboxStore)(nil)
+	_ OutboxRetention     = (*MemoryOutboxStore)(nil)
 	_ MemoryRepositoryFor = (*MemoryOutboxStore)(nil)
 )

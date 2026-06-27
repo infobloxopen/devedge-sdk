@@ -173,8 +173,11 @@ func TestIntegration_AggregateSavePublishesEventAtomically(t *testing.T) {
 	if delivered != 1 || got != "i1" {
 		t.Fatalf("the event must reach the handler: delivered=%d payload=%q", delivered, got)
 	}
-	if pending := store.Pending(); len(pending) != 0 {
-		t.Fatalf("a delivered event must no longer be pending, got %v", pending)
+	// F033 (append-only): delivery does NOT delete or row-mark the event — the
+	// idempotency marker is the delivery truth, so the row survives until a partition
+	// drop. The handler ran (got=="i1"); the row count only ever grows.
+	if all := store.All(); len(all) != 1 {
+		t.Fatalf("append-only: the delivered event row must survive (count only grows), got %d", len(all))
 	}
 }
 

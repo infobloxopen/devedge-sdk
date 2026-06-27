@@ -115,25 +115,36 @@ var _ IdempotencyStore = (*MemoryIdempotencyStore)(nil)
 
 // Dispatcher delivers committed outbox events to registered handlers at-least-once
 // (F032 G-3). The dev default is an in-process poller (F032 D-3): it claims
-// undelivered rows from the [persistence.OutboxStore] (a claimed-flag/lease claim,
-// NOT SELECT ... FOR UPDATE SKIP LOCKED — ent sql/lock is off in this repo), runs
-// each registered handler for the event's type in its own [persistence.TxRunner]
-// transaction, and marks the event delivered only once EVERY handler succeeded.
+// eligible rows from the [persistence.OutboxStore] (a claimed-flag/lease claim,
+// NOT SELECT ... FOR UPDATE SKIP LOCKED — ent sql/lock is off in this repo) and
+// runs each registered handler for the event's type in its own
+// [persistence.TxRunner] transaction.
+//
+// F033 (append-only): delivery truth is the per-(event, handler) idempotency
+// marker, NOT a row write. The dispatcher does NOT mark rows delivered and NEVER
+// deletes a row — the outbox table is a pure append-only log, drained by retention
+// dropping whole partitions ([persistence.OutboxRetention]). A delivered event
+// stops being re-delivered because every handler's marker is committed (so a
+// re-claim is a no-op); a poison event stops being re-claimed once Attempts reaches
+// maxAttempts (the poison cutoff, enforced by ClaimUndelivered).
 //
 // Delivery semantics:
-//   - At-least-once: a handler error (or crash) leaves the event undelivered, so a
+//   - At-least-once: a handler error (or crash) leaves the event un-applied, so a
 //     later claim re-delivers it. Handlers MUST be idempotent.
 //   - Idempotency: each (event id, handler) pair is recorded in the
 //     [IdempotencyStore] once its tx commits; a redelivery skips an already-applied
 //     pair, so a duplicate delivery is a no-op (AC-2).
+//   - Poison cutoff: once a row has been attempted maxAttempts times it is no longer
+//     claimed, so a permanently failing event stops looping (F033 AC-3).
 //   - Per-event ordering only: events for one aggregate claim in append order, but
 //     no global order is promised (F032 non-goal).
 type Dispatcher struct {
-	store    persistence.OutboxStore
-	tx       persistence.TxRunner
-	idem     IdempotencyStore
-	mu       sync.RWMutex
-	handlers map[string][]registeredHandler
+	store       persistence.OutboxStore
+	tx          persistence.TxRunner
+	idem        IdempotencyStore
+	maxAttempts int
+	mu          sync.RWMutex
+	handlers    map[string][]registeredHandler
 }
 
 type registeredHandler struct {
@@ -141,11 +152,26 @@ type registeredHandler struct {
 	fn   Handler
 }
 
+// DispatcherOption configures a Dispatcher.
+type DispatcherOption func(*Dispatcher)
+
+// WithMaxAttempts sets the poison cutoff: a row attempted this many times is no
+// longer claimed (F033). A non-positive value keeps the default
+// ([persistence.DefaultMaxOutboxAttempts]).
+func WithMaxAttempts(n int) DispatcherOption {
+	return func(d *Dispatcher) {
+		if n > 0 {
+			d.maxAttempts = n
+		}
+	}
+}
+
 // NewDispatcher returns a Dispatcher that claims from store, runs handlers in tx,
 // and dedups via idem. tx is the [persistence.TxRunner] for the aggregates the
 // handlers write (each handler runs inside it). idem may be nil to use a fresh
-// in-memory [MemoryIdempotencyStore].
-func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem IdempotencyStore) *Dispatcher {
+// in-memory [MemoryIdempotencyStore]. The poison cutoff defaults to
+// [persistence.DefaultMaxOutboxAttempts]; override it with [WithMaxAttempts].
+func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem IdempotencyStore, opts ...DispatcherOption) *Dispatcher {
 	if idem == nil {
 		idem = NewMemoryIdempotencyStore()
 	}
@@ -159,12 +185,17 @@ func NewDispatcher(store persistence.OutboxStore, tx persistence.TxRunner, idem 
 			tx = mtx.WithParticipants(mem.TxParticipant())
 		}
 	}
-	return &Dispatcher{
-		store:    store,
-		tx:       tx,
-		idem:     idem,
-		handlers: make(map[string][]registeredHandler),
+	d := &Dispatcher{
+		store:       store,
+		tx:          tx,
+		idem:        idem,
+		maxAttempts: persistence.DefaultMaxOutboxAttempts,
+		handlers:    make(map[string][]registeredHandler),
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 // Subscribe registers fn as a handler for events of eventType (F032 G-4). name
@@ -269,13 +300,20 @@ func (d *Dispatcher) deliver(ctx context.Context, evt Event) error {
 	return nil
 }
 
-// RunOnce claims up to limit undelivered events and delivers each. It returns the
-// number of events successfully delivered (all their handlers applied). An event
-// whose handler errors is left undelivered for a later RunOnce (at-least-once
-// retry); RunOnce does not fail the whole batch for one bad event. A poller calls
-// RunOnce on a tick; tests call it directly to drive delivery deterministically.
+// RunOnce claims up to limit eligible events (Attempts < maxAttempts, lease lapsed)
+// and delivers each. It returns the number of events successfully delivered (all
+// their handlers applied). An event whose handler errors is left for a later RunOnce
+// (at-least-once retry); RunOnce does not fail the whole batch for one bad event. A
+// poller calls RunOnce on a tick; tests call it directly to drive delivery
+// deterministically.
+//
+// F033: there is NO MarkDelivered row write here. The outbox is append-only —
+// delivery is recorded solely by each handler's idempotency marker (committed in the
+// handler's own tx). A successfully delivered row is simply not re-delivered (its
+// markers make a re-claim a no-op) and is eventually aged out by a partition drop;
+// the dispatch path never DELETEs or mutates a row's delivery state.
 func (d *Dispatcher) RunOnce(ctx context.Context, limit int) (delivered int, err error) {
-	claimed, err := d.store.ClaimUndelivered(ctx, limit)
+	claimed, err := d.store.ClaimUndelivered(ctx, d.maxAttempts, limit)
 	if err != nil {
 		return 0, fmt.Errorf("claim undelivered: %w", err)
 	}
@@ -283,21 +321,18 @@ func (d *Dispatcher) RunOnce(ctx context.Context, limit int) (delivered int, err
 		evt := eventFromRecord(rec)
 		if derr := d.deliver(ctx, evt); derr != nil {
 			// Release the lease so the retry is prompt rather than lease-delayed; the
-			// row stays undelivered and will be re-claimed. Surface the first error so a
-			// caller can log it, but keep processing the batch (one bad event must not
-			// stall the others — at-least-once).
+			// row stays for re-claim (until it crosses the maxAttempts poison cutoff).
+			// Surface the first error so a caller can log it, but keep processing the
+			// batch (one bad event must not stall the others — at-least-once).
 			_ = d.store.Release(ctx, rec.ID)
 			if err == nil {
 				err = derr
 			}
 			continue
 		}
-		if merr := d.store.MarkDelivered(ctx, rec.ID); merr != nil {
-			if err == nil {
-				err = fmt.Errorf("mark delivered %s: %w", rec.ID, merr)
-			}
-			continue
-		}
+		// Delivered: every handler's marker is committed. No row write — the
+		// idempotency marker is the delivery truth (append-only). A future claim of
+		// this row finds every marker already recorded and is a no-op.
 		delivered++
 	}
 	return delivered, err
