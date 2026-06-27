@@ -53,6 +53,34 @@ func TestAssertAggregateBoundaries(t *testing.T) {
 			t.Fatalf("a non-aggregate service must be unaffected, got %v", err)
 		}
 	})
+
+	// AIP-137 batch write (the round-2 fail-open hole): a member that registers a
+	// BatchCreate/BatchUpdate/BatchDelete must fail the gate just like a standard
+	// write — the generated svc records batch writes in WriteMethods so the gate's
+	// intersection catches them. BatchGet (a read) is addressable and must NOT be in
+	// WriteMethods, so it never trips the gate.
+	t.Run("member batch write registered → fails", func(t *testing.T) {
+		const (
+			batchCreate = "/order.v1.ItemService/BatchCreateItems"
+			batchGet    = "/order.v1.ItemService/BatchGetItems"
+		)
+		methods := []string{batchCreate, batchGet, getItem, listItems}
+		members := []MemberBinding{{
+			Resource:     "Item",
+			Root:         "Order",
+			WriteMethods: []string{batchCreate}, // batch READ intentionally absent
+		}}
+		err := AssertAggregateBoundaries(methods, members)
+		if err == nil {
+			t.Fatal("a registered member BATCH write must fail the boundary gate")
+		}
+		if !strings.Contains(err.Error(), batchCreate) {
+			t.Fatalf("error should name the offending batch write: %v", err)
+		}
+		if strings.Contains(err.Error(), batchGet) {
+			t.Fatalf("BatchGet is a read and must not be reported as a violation: %v", err)
+		}
+	})
 }
 
 // TestServeRunsAggregateGate verifies the gate is wired into the Server's
