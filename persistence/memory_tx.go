@@ -62,23 +62,101 @@ type snapshot[T any, K comparable] struct {
 	deleted map[K]bool
 }
 
-// cloneEntity returns a snapshot-safe copy of v. When T is a POINTER type (the
-// common case — aggregates are stored as *Proto / *Struct), a shallow map copy
-// would share the pointed-to struct between the snapshot and the live map, so a
-// rollback could not undo an in-place mutation of a Get-returned entity (the caller
-// does `e, _ := repo.Get(...); e.Field = x; repo.Update(...)` — a single struct
-// mutated in place). cloneEntity copies the pointee so the snapshot is isolated:
-// restoring it on rollback truly reverts the field. A nil pointer or a non-pointer
-// T (value semantics already isolate it) is returned unchanged. This is the same
-// deep-copy MemoryOutboxStore.snapshotForTx already does for *OutboxRecord.
+// cloneEntity returns a snapshot-safe DEEP copy of v. Aggregates are stored as
+// *Proto / *Struct whose fields routinely include nested slices, maps, and pointers
+// (e.g. an order root with `Items []*item`). A shallow copy would share that nested
+// data between the snapshot and the live map, so a rollback could not undo an
+// in-place mutation reached THROUGH a Get-returned entity (the caller does
+// `e, _ := repo.Get(...); e.Items[0].SKU = x` or `e.Tags = append(e.Tags, ...)`
+// — mutating nested state in place). cloneEntity recursively copies the reachable
+// exported value so the snapshot is isolated: restoring it on rollback truly reverts
+// every level, not just the top.
+//
+// Unexported fields (e.g. a generated proto message's internal state/sizeCache/
+// unknownFields) are copied by value at the struct level but not deep-copied — they
+// are runtime bookkeeping a handler never mutates in place, so a shared reference
+// there is harmless (and reflection cannot deep-copy them without unsafe). A value
+// type (or nil pointer) is returned unchanged: value semantics already isolate the
+// top level, and its nested references are still shared only as far as a value-typed
+// T would share them, which is the pre-existing, non-pointer contract.
 func cloneEntity[T any](v T) T {
 	rv := reflect.ValueOf(v)
-	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+	if !rv.IsValid() {
 		return v
 	}
-	cp := reflect.New(rv.Elem().Type())
-	cp.Elem().Set(rv.Elem())
-	return cp.Interface().(T)
+	if rv.Kind() != reflect.Pointer && rv.Kind() != reflect.Slice && rv.Kind() != reflect.Map {
+		// Top-level value semantics already isolate v from the live map; deep-copying a
+		// value-typed T would be a behavior change (it was always shared at nested
+		// levels). Keep the historical non-pointer contract.
+		return v
+	}
+	return deepCopyValue(rv, map[uintptr]reflect.Value{}).Interface().(T)
+}
+
+// deepCopyValue returns a recursively isolated copy of rv: pointers, slices, maps,
+// arrays, and structs are reconstructed so no nested reference is shared with the
+// source. Unexported (un-settable) struct fields are left as the value-copy made by
+// the enclosing Set — they are not deep-copied (reflection cannot set them) but are
+// not mutated in place by handlers either. Scalars and interfaces fall through as a
+// plain value copy.
+//
+// seen maps an already-copied pointer's address to its copy so a cyclic or
+// shared-pointer graph (a DAG, or a struct that points back at itself) is copied
+// once and re-aliased rather than recursed forever — turning a would-be infinite
+// recursion into a bounded, structure-preserving copy.
+func deepCopyValue(rv reflect.Value, seen map[uintptr]reflect.Value) reflect.Value {
+	switch rv.Kind() {
+	case reflect.Pointer:
+		if rv.IsNil() {
+			return rv
+		}
+		addr := rv.Pointer()
+		if cp, ok := seen[addr]; ok {
+			return cp // already copying/copied this pointer — re-alias (breaks cycles)
+		}
+		cp := reflect.New(rv.Elem().Type())
+		seen[addr] = cp // record BEFORE recursing so a back-reference resolves
+		cp.Elem().Set(deepCopyValue(rv.Elem(), seen))
+		return cp
+	case reflect.Slice:
+		if rv.IsNil() {
+			return rv
+		}
+		cp := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Cap())
+		for i := 0; i < rv.Len(); i++ {
+			cp.Index(i).Set(deepCopyValue(rv.Index(i), seen))
+		}
+		return cp
+	case reflect.Map:
+		if rv.IsNil() {
+			return rv
+		}
+		cp := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			cp.SetMapIndex(deepCopyValue(iter.Key(), seen), deepCopyValue(iter.Value(), seen))
+		}
+		return cp
+	case reflect.Array:
+		cp := reflect.New(rv.Type()).Elem()
+		for i := 0; i < rv.Len(); i++ {
+			cp.Index(i).Set(deepCopyValue(rv.Index(i), seen))
+		}
+		return cp
+	case reflect.Struct:
+		cp := reflect.New(rv.Type()).Elem()
+		cp.Set(rv) // value-copy every field, including unexported ones
+		for i := 0; i < rv.NumField(); i++ {
+			f := cp.Field(i)
+			if !f.CanSet() {
+				continue // unexported: keep the value-copy made above
+			}
+			f.Set(deepCopyValue(rv.Field(i), seen))
+		}
+		return cp
+	default:
+		return rv
+	}
 }
 
 func (r *MemoryRepository[T, K]) snapshotState() snapshot[T, K] {

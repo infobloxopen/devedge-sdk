@@ -39,11 +39,12 @@ func (s serviceInfo) hasStdMethods() bool {
 }
 
 // hasWriteMethods reports whether the service has at least one write-capable
-// standard method (Create/Update/Delete/Undelete). Used to decide whether a
-// member service needs the status/codes imports for its Unimplemented redirects.
+// method a member would redirect (a standard Create/Update/Delete/Undelete or an
+// AIP-137 batch write). Used to decide whether a member service needs the
+// status/codes imports for its Unimplemented redirects.
 func (s serviceInfo) hasWriteMethods() bool {
 	for _, m := range s.Methods {
-		if m.Std.isWrite() {
+		if m.isMemberSuppressedWrite() {
 			return true
 		}
 	}
@@ -71,6 +72,33 @@ type methodInfo struct {
 	ListHasFilter      bool
 	ListHasOrderBy     bool
 	ListHasShowDeleted bool
+}
+
+// isBatchWrite reports whether the method is an AIP-137 batch WRITE
+// (BatchCreate/BatchUpdate/BatchDelete) by name. classifyMethod does not assign a
+// stdMethod to batch RPCs, so a member service's batch writes would otherwise NOT
+// be recorded in its boundary-gate WriteMethods nor redirected to Unimplemented — a
+// fail-OPEN hole letting a hand-written member handler mutate the member outside its
+// aggregate root. BatchGet is a read and is intentionally excluded (reads ≠ write
+// authority, mirroring Get/List).
+func (m methodInfo) isBatchWrite() bool {
+	for _, p := range []string{"BatchCreate", "BatchUpdate", "BatchDelete"} {
+		if strings.HasPrefix(m.Name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMemberSuppressedWrite reports whether, for a DDD aggregate MEMBER service, this
+// method is a write that must be redirected to Unimplemented and recorded for the
+// boundary gate. It covers both the classified standard writes
+// (Create/Update/Delete/Undelete) and the name-detected AIP-137 batch writes
+// (Batch{Create,Update,Delete}) that classifyMethod leaves as stdNone — so a member
+// cannot independently mutate via a batch RPC either (matching the MemberBinding
+// contract, which promises Batch* coverage).
+func (m methodInfo) isMemberSuppressedWrite() bool {
+	return m.Std.isWrite() || m.isBatchWrite()
 }
 
 // renderSvcFile generates the .svc.go content for the given package and services.
@@ -160,7 +188,7 @@ func renderRegister(b *strings.Builder, svc serviceInfo) {
 		fmt.Fprintf(b, "\t\tRoot:     %q,\n", svc.MemberRoot)
 		b.WriteString("\t\tWriteMethods: []string{\n")
 		for _, m := range svc.Methods {
-			if m.Std.isWrite() {
+			if m.isMemberSuppressedWrite() {
 				fmt.Fprintf(b, "\t\t\t%s_%s_FullMethodName,\n", svc.ServiceName, m.Name)
 			}
 		}
@@ -194,11 +222,12 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 
 	for _, m := range svc.Methods {
 		// F031 DDD member write-redirection (G-4): a member resource is addressable
-		// for reads but written THROUGH its root, so its write-capable standard
-		// methods are emitted as gRPC Unimplemented instead of delegating to the
-		// repo. Get/List fall through to the normal cases below. The boundary gate
+		// for reads but written THROUGH its root, so its write-capable methods —
+		// the standard Create/Update/Delete/Undelete AND the AIP-137 batch writes —
+		// are emitted as gRPC Unimplemented instead of delegating to the repo.
+		// Get/List/BatchGet fall through to the normal cases below. The boundary gate
 		// at Serve additionally fails closed if such a write method is registered.
-		if svc.isMember() && m.Std.isWrite() {
+		if svc.isMember() && m.isMemberSuppressedWrite() {
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
 				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
 			fmt.Fprintf(b, "\t// %s is a member of aggregate %s: write through the root, not here.\n", svc.Resource, svc.MemberRoot)

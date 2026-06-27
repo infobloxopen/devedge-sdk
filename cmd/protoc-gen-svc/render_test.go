@@ -235,6 +235,64 @@ func TestRenderSvcFile_memberWriteRedirection(t *testing.T) {
 	mustContain(t, out, "ItemService_UpdateItem_FullMethodName,")
 }
 
+// memberServiceWithBatch is a DDD member service (Item owned by Order) that ALSO
+// exposes AIP-137 batch methods. classifyMethod does not assign a stdMethod to
+// batch RPCs, so without explicit batch-write handling a member's BatchCreate/
+// BatchUpdate/BatchDelete would be neither redirected to Unimplemented nor recorded
+// in the boundary-gate WriteMethods — a fail-open hole. BatchGet is a read and must
+// stay addressable.
+func memberServiceWithBatch() serviceInfo {
+	return serviceInfo{
+		ServiceName: "ItemService",
+		Resource:    "Item",
+		MemberRoot:  "Order",
+		Methods: []methodInfo{
+			{Name: "GetItem", InputGoIdent: "GetItemRequest", OutputGoIdent: "Item", Std: stdGet},
+			{Name: "ListItems", InputGoIdent: "ListItemsRequest", OutputGoIdent: "ListItemsResponse", Std: stdList, ListItemsField: "Items"},
+			// Batch RPCs: classifier leaves Std == stdNone for these.
+			{Name: "BatchCreateItems", InputGoIdent: "BatchCreateItemsRequest", OutputGoIdent: "BatchCreateItemsResponse", Std: stdNone},
+			{Name: "BatchUpdateItems", InputGoIdent: "BatchUpdateItemsRequest", OutputGoIdent: "BatchUpdateItemsResponse", Std: stdNone},
+			{Name: "BatchDeleteItems", InputGoIdent: "BatchDeleteItemsRequest", OutputGoIdent: "BatchDeleteItemsResponse", Std: stdNone},
+			{Name: "BatchGetItems", InputGoIdent: "BatchGetItemsRequest", OutputGoIdent: "BatchGetItemsResponse", Std: stdNone},
+		},
+	}
+}
+
+// TestRenderSvcFile_memberBatchWriteRedirection guards the F031 boundary-gate
+// fail-open hole for a member's AIP-137 batch writes: a member's BatchCreate/
+// BatchUpdate/BatchDelete must be redirected to Unimplemented AND recorded in the
+// member binding's WriteMethods (so the boot-time boundary gate fails closed if any
+// is registered). BatchGet stays addressable.
+func TestRenderSvcFile_memberBatchWriteRedirection(t *testing.T) {
+	out := renderSvcFile("orderv1", "x;orderv1", []serviceInfo{memberServiceWithBatch()})
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated output is not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+	// Batch writes redirected to Unimplemented (not delegated to a repo).
+	mustContain(t, out, "func (h *ItemServiceCRUDHandler) BatchCreateItems(")
+	mustContain(t, out, "func (h *ItemServiceCRUDHandler) BatchUpdateItems(")
+	mustContain(t, out, "func (h *ItemServiceCRUDHandler) BatchDeleteItems(")
+	// Batch writes recorded in the boundary-gate WriteMethods.
+	mustContain(t, out, "ItemService_BatchCreateItems_FullMethodName,")
+	mustContain(t, out, "ItemService_BatchUpdateItems_FullMethodName,")
+	mustContain(t, out, "ItemService_BatchDeleteItems_FullMethodName,")
+	// BatchGet is a READ — never redirected to Unimplemented as a write...
+	mustNotContain(t, out, "func (h *ItemServiceCRUDHandler) BatchGetItems(")
+	// ...and never recorded in the member binding's WriteMethods (it is still in
+	// RecordMethods like every RPC, so we scope the check to the WriteMethods block).
+	bindingStart := strings.Index(out, "RecordMemberBinding")
+	if bindingStart < 0 {
+		t.Fatal("expected a RecordMemberBinding for the member service")
+	}
+	binding := out[bindingStart:]
+	if end := strings.Index(binding, "})"); end >= 0 {
+		binding = binding[:end]
+	}
+	if strings.Contains(binding, "BatchGetItems") {
+		t.Errorf("BatchGet (a read) must not be in the member binding WriteMethods:\n%s", binding)
+	}
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
