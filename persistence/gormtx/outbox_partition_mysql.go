@@ -20,6 +20,7 @@ package gormtx
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -90,17 +91,12 @@ func ensureMySQLOutboxPartitions(ctx context.Context, db *gorm.DB, from, until t
 		return err
 	}
 	if !exists {
-		var defs string
-		first := true
+		var defs []string
 		for m := monthStart(from); !m.After(monthStart(until)); m = addMonth(m) {
-			if !first {
-				defs += ",\n"
-			}
-			defs += fmt.Sprintf("\tPARTITION %s VALUES LESS THAN (%d)",
-				mysqlPartitionName(m), mysqlPartitionUpperDays(m))
-			first = false
+			defs = append(defs, fmt.Sprintf("\tPARTITION %s VALUES LESS THAN (%d)",
+				mysqlPartitionName(m), mysqlPartitionUpperDays(m)))
 		}
-		ddl := fmt.Sprintf(mysqlOutboxParentDDLFmt, defs)
+		ddl := fmt.Sprintf(mysqlOutboxParentDDLFmt, strings.Join(defs, ",\n"))
 		if err := db.WithContext(ctx).Exec(ddl).Error; err != nil {
 			return fmt.Errorf("create partitioned outbox parent (mysql): %w", err)
 		}

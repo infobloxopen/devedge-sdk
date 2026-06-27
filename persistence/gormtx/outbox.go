@@ -160,11 +160,12 @@ func (s *GormOutboxStore) Append(ctx context.Context, rec *persistence.OutboxRec
 // and stamping a fresh lease, and return them. Runs on the base db (the dispatcher
 // is not in an aggregate tx).
 //
-// F033: eligibility is attempts-based, NOT delivered_time-based — the append-only
-// table never marks a row delivered. A row past maxAttempts is poison and skipped
-// (the poison cutoff); a delivered row stays eligible until the cutoff but its
-// re-delivery is a no-op (the handler idempotency markers dedup it) and it is
-// eventually aged out by a partition drop.
+// F033 churn-avoidance: a delivered row (delivered_time IS NOT NULL) is EXCLUDED, so
+// a successfully delivered event is never re-leased or re-attempted — the happy path
+// issues zero per-poll UPDATEs and a delivered event never drifts into the poison
+// cutoff. A row past maxAttempts without ever delivering is poison and skipped (the
+// poison cutoff). The handler idempotency markers remain the exactly-once guard for a
+// rare in-flight double-claim; aged rows are removed by a partition drop.
 func (s *GormOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*persistence.OutboxRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -175,7 +176,7 @@ func (s *GormOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, lim
 	now := s.now()
 	var rows []OutboxRow
 	err := s.db.WithContext(ctx).
-		Where("attempts < ? AND (leased_until IS NULL OR leased_until < ?)", maxAttempts, now).
+		Where("delivered_time IS NULL AND attempts < ? AND (leased_until IS NULL OR leased_until < ?)", maxAttempts, now).
 		Order("created_time ASC").
 		Limit(limit).
 		Find(&rows).Error
@@ -203,11 +204,25 @@ func (s *GormOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, lim
 	return out, nil
 }
 
-// MarkDelivered implements persistence.OutboxStore: a NO-OP under the F033
-// append-only model. Delivery truth is the idempotency marker recorded in the
-// handler's tx, not a row write; the store never mutates delivery state and never
-// deletes a row.
+// MarkDelivered implements persistence.OutboxStore: stamp delivered_time ONCE (and
+// clear the lease) so the row is excluded from every future ClaimUndelivered — the
+// single terminal mark that keeps the append-only outbox free of per-poll re-lease
+// churn (F033). The WHERE delivered_time IS NULL makes a re-mark a no-op; the row is
+// never DELETEd (retention is a partition drop). A row that no longer exists is a
+// no-op. It runs on the base db (the dispatcher is not in an aggregate tx).
 func (s *GormOutboxStore) MarkDelivered(ctx context.Context, id string) error {
+	res := s.db.WithContext(ctx).Model(&OutboxRow{}).
+		Where("id = ? AND delivered_time IS NULL", id).
+		Updates(map[string]any{
+			"delivered_time": s.now(),
+			"leased_until":   nil,
+		})
+	if res.Error != nil {
+		if errors.Is(res.Error, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return fmt.Errorf("mark delivered %s: %w", id, res.Error)
+	}
 	return nil
 }
 

@@ -120,22 +120,30 @@ var _ IdempotencyStore = (*MemoryIdempotencyStore)(nil)
 // runs each registered handler for the event's type in its own
 // [persistence.TxRunner] transaction.
 //
-// F033 (append-only): delivery truth is the per-(event, handler) idempotency
-// marker, NOT a row write. The dispatcher does NOT mark rows delivered and NEVER
-// deletes a row — the outbox table is a pure append-only log, drained by retention
-// dropping whole partitions ([persistence.OutboxRetention]). A delivered event
-// stops being re-delivered because every handler's marker is committed (so a
-// re-claim is a no-op); a poison event stops being re-claimed once Attempts reaches
-// maxAttempts (the poison cutoff, enforced by ClaimUndelivered).
+// F033 (append-only, churn-free): the outbox table is never DELETEd from on the
+// dispatch path — retention drains it by dropping whole partitions
+// ([persistence.OutboxRetention]). On success the dispatcher makes ONE terminal
+// delivered-mark per event ([persistence.OutboxStore.MarkDelivered]) that excludes
+// the row from every future claim, so a delivered event is never re-leased,
+// re-attempted, or aged into the poison cutoff — the happy path is one bounded UPDATE
+// per event, not a per-poll re-lease. The per-(event, handler) idempotency marker is
+// the exactly-once correctness guard for a rare in-flight double-claim (a lease that
+// lapsed before the delivered-mark committed); a poison event that never delivers
+// stops being claimed once Attempts reaches maxAttempts (the poison cutoff, enforced
+// by ClaimUndelivered).
 //
 // Delivery semantics:
-//   - At-least-once: a handler error (or crash) leaves the event un-applied, so a
-//     later claim re-delivers it. Handlers MUST be idempotent.
+//   - At-least-once: a handler error (or crash) leaves the event un-applied and
+//     un-marked, so a later claim re-delivers it. Handlers MUST be idempotent.
 //   - Idempotency: each (event id, handler) pair is recorded in the
 //     [IdempotencyStore] once its tx commits; a redelivery skips an already-applied
-//     pair, so a duplicate delivery is a no-op (AC-2).
-//   - Poison cutoff: once a row has been attempted maxAttempts times it is no longer
-//     claimed, so a permanently failing event stops looping (F033 AC-3).
+//     pair, so a duplicate delivery is a no-op (AC-2). This guards the window between
+//     a lapsed lease and the delivered-mark.
+//   - Churn-free happy path: a delivered row is marked once and then excluded from
+//     claims — no per-poll re-lease UPDATE of an already-delivered event (F033).
+//   - Poison cutoff: an event that never delivers stops being claimed once it has
+//     been attempted maxAttempts times, so a permanently failing event stops looping
+//     (F033 AC-3) — a delivered event never reaches the cutoff.
 //   - Per-event ordering only: events for one aggregate claim in append order, but
 //     no global order is promised (F032 non-goal).
 type Dispatcher struct {
@@ -307,11 +315,13 @@ func (d *Dispatcher) deliver(ctx context.Context, evt Event) error {
 // poller calls RunOnce on a tick; tests call it directly to drive delivery
 // deterministically.
 //
-// F033: there is NO MarkDelivered row write here. The outbox is append-only —
-// delivery is recorded solely by each handler's idempotency marker (committed in the
-// handler's own tx). A successfully delivered row is simply not re-delivered (its
-// markers make a re-claim a no-op) and is eventually aged out by a partition drop;
-// the dispatch path never DELETEs or mutates a row's delivery state.
+// F033 (append-only, churn-free): on success the row gets a SINGLE terminal
+// delivered-mark (MarkDelivered) — one bounded UPDATE per event — which excludes it
+// from every future claim, so a delivered event is never re-leased, re-attempted, or
+// aged into the poison cutoff (no per-poll write churn). The row is NEVER DELETEd;
+// retention drops whole partitions. The per-(event, handler) idempotency marker
+// remains the exactly-once correctness guard for a rare in-flight double-claim (a
+// lease that lapsed before MarkDelivered committed).
 func (d *Dispatcher) RunOnce(ctx context.Context, limit int) (delivered int, err error) {
 	claimed, err := d.store.ClaimUndelivered(ctx, d.maxAttempts, limit)
 	if err != nil {
@@ -330,9 +340,14 @@ func (d *Dispatcher) RunOnce(ctx context.Context, limit int) (delivered int, err
 			}
 			continue
 		}
-		// Delivered: every handler's marker is committed. No row write — the
-		// idempotency marker is the delivery truth (append-only). A future claim of
-		// this row finds every marker already recorded and is a no-op.
+		// Delivered: every handler's marker is committed. Stamp the row delivered ONCE
+		// so it is never re-claimed — the churn-free happy path (one UPDATE per event,
+		// never a DELETE). A failure to mark is non-fatal: the worst case is a single
+		// idempotent redelivery on a later poll (the markers make it a no-op), so it
+		// must not fail the batch; surface it as the batch error if none is set yet.
+		if merr := d.store.MarkDelivered(ctx, rec.ID); merr != nil && err == nil {
+			err = fmt.Errorf("mark delivered %s: %w", rec.ID, merr)
+		}
 		delivered++
 	}
 	return delivered, err

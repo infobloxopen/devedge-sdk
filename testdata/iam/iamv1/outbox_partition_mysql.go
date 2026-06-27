@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -85,17 +86,12 @@ func ensureEntMySQLOutboxPartitions(ctx context.Context, db *sql.DB, from, until
 		return err
 	}
 	if !exists {
-		var defs string
-		first := true
+		var defs []string
 		for m := entMonthStart(from); !m.After(entMonthStart(until)); m = entAddMonth(m) {
-			if !first {
-				defs += ",\n"
-			}
-			defs += fmt.Sprintf("\tPARTITION %s VALUES LESS THAN (%d)",
-				entMySQLPartitionName(m), entMySQLPartitionUpperDays(m))
-			first = false
+			defs = append(defs, fmt.Sprintf("\tPARTITION %s VALUES LESS THAN (%d)",
+				entMySQLPartitionName(m), entMySQLPartitionUpperDays(m)))
 		}
-		ddl := fmt.Sprintf(mysqlEntOutboxParentDDLFmt, defs)
+		ddl := fmt.Sprintf(mysqlEntOutboxParentDDLFmt, strings.Join(defs, ",\n"))
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("create partitioned outbox parent (mysql): %w", err)
 		}

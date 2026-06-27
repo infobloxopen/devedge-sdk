@@ -83,6 +83,18 @@ func outboxPartitionCount(t *testing.T, db *sql.DB) int {
 	return n
 }
 
+// pgOutboxAttempts returns the attempts count of the (single) outbox row for the
+// given aggregate_id — used to assert a delivered row is never re-written (its
+// attempts must not advance on a later poll).
+func pgOutboxAttempts(t *testing.T, db *sql.DB, aggregateID string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT attempts FROM outboxes WHERE aggregate_id = $1`, aggregateID).Scan(&n); err != nil {
+		t.Fatalf("read attempts for %s: %v", aggregateID, err)
+	}
+	return n
+}
+
 // appendOutboxAt appends one outbox row stamped at created so it lands in the
 // partition for that month. It goes through the store inside a tx (the only legal
 // Append path), exactly as a real Publish would.
@@ -169,11 +181,12 @@ func TestPG_F033_DropPartitionRetention(t *testing.T) {
 	}
 }
 
-// TestPG_F033_AppendOnlyDispatchDelivers is the AC-1 + AC-3 proof on the partitioned
-// PG table: the dispatch path NEVER deletes or row-marks a row (append-only — the row
-// count only grows), delivery still works (ClaimUndelivered(maxAttempts,limit) +
-// dispatch + exactly-once via the idempotency marker), and a poison event stops after
-// maxAttempts.
+// TestPG_F033_AppendOnlyDispatchDelivers is the AC-1 + AC-3 + churn-avoidance proof on
+// the partitioned PG table: the dispatch path NEVER deletes a row (append-only — the
+// row count only grows), a delivered row is NEVER re-claimed on a later poll (the
+// churn-free happy path — no per-poll re-lease), delivery still works
+// (ClaimUndelivered(maxAttempts,limit) + dispatch + exactly-once via the idempotency
+// marker), and a poison event stops after maxAttempts.
 func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 	now := time.Now().UTC()
 	client, rawDB := openIAMEntPGPartitioned(t, now, now)
@@ -181,9 +194,9 @@ func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 
 	users := iamv1.NewUserEntRepository(client)
 	tx := iamv1.NewEntTxRunner(client)
-	// A 1ns lease so an already-delivered append-only row is immediately re-claimable —
-	// this is what forces the redelivery-as-no-op path (the marker, not a row write, is
-	// the delivery truth).
+	// A 1ns lease so a NON-delivered row would be immediately re-claimable — this is
+	// what makes the no-re-claim assertion below meaningful: the ONLY thing keeping a
+	// delivered row out of the claim set is its terminal delivered-mark, not the lease.
 	store := iamv1.NewEntOutboxStore(client, time.Nanosecond, iamv1.WithEntOutboxRawDB(rawDB))
 	pub := events.NewOutboxPublisher(store)
 	idem := iamv1.NewEntIdempotencyStore(client)
@@ -215,21 +228,32 @@ func TestPG_F033_AppendOnlyDispatchDelivers(t *testing.T) {
 		t.Fatalf("handler must apply once, applied=%d", applied)
 	}
 
-	// AC-1 (append-only): the row was NOT deleted or row-marked by delivery — the
-	// count is unchanged (only grows).
+	// AC-1 (append-only): the row was NOT deleted by delivery — the count is unchanged
+	// (the delivered-mark is an in-place UPDATE, never an insert/delete).
 	if n := entOutboxCount(t, client); n != rowsAfterPublish {
 		t.Fatalf("append-only: dispatch must never delete a row, count went %d -> %d", rowsAfterPublish, n)
 	}
+	// The delivered row carries a single terminal delivered_time and its attempts are
+	// at exactly 1 (one claim) — record the watermark to prove no per-poll re-write.
+	attemptsAtDelivery := pgOutboxAttempts(t, rawDB, "u1")
 
-	// Exactly-once: a second RunOnce re-claims the append-only row but the recorded
-	// idempotency marker makes the handler a no-op (the marker is the delivery truth).
+	// Churn-free happy path: re-running the dispatcher must NOT re-claim the delivered
+	// row (delivered rows are excluded from the claim), so the handler is not re-invoked
+	// and attempts do NOT advance — no per-poll re-lease UPDATE churn on a delivered event.
 	for i := 0; i < 3; i++ {
-		if _, err := d.RunOnce(ctx, 10); err != nil {
+		delivered, err := d.RunOnce(ctx, 10)
+		if err != nil {
 			t.Fatalf("re-run %d: %v", i, err)
+		}
+		if delivered != 0 {
+			t.Fatalf("re-run %d re-claimed a DELIVERED event (per-poll churn), delivered=%d", i, delivered)
 		}
 	}
 	if applied != 1 {
-		t.Fatalf("exactly-once: the handler must apply exactly once across redelivery, applied=%d", applied)
+		t.Fatalf("exactly-once: the handler must apply exactly once, applied=%d", applied)
+	}
+	if a := pgOutboxAttempts(t, rawDB, "u1"); a != attemptsAtDelivery {
+		t.Fatalf("churn-free: a delivered event must not be re-written, attempts went %d -> %d", attemptsAtDelivery, a)
 	}
 	markers, err := client.IdemMarker.Query().Count(ctx)
 	if err != nil {

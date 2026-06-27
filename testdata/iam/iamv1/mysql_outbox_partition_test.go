@@ -43,6 +43,17 @@ func mysqlGormPartitionCount(t *testing.T, db *gorm.DB) int {
 	return n
 }
 
+// mysqlOutboxAttempts returns the attempts count of the (single) ent "outboxes" row
+// for aggregate_id — used to assert a delivered row is never re-written on a later poll.
+func mysqlOutboxAttempts(t *testing.T, db *sql.DB, aggregateID string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT attempts FROM outboxes WHERE aggregate_id = ?`, aggregateID).Scan(&n); err != nil {
+		t.Fatalf("read attempts for %s: %v", aggregateID, err)
+	}
+	return n
+}
+
 // mysqlEntPartitionCount counts the named partitions of the ent "outboxes" table.
 func mysqlEntPartitionCount(t *testing.T, db *sql.DB) int {
 	t.Helper()
@@ -230,8 +241,9 @@ func TestMySQL_F033_Ent_AppendOnlyDispatchDelivers(t *testing.T) {
 
 	users := iamv1.NewUserEntRepository(client)
 	tx := iamv1.NewEntTxRunner(client)
-	// A 1ns lease so an already-delivered append-only row is immediately re-claimable —
-	// this forces the redelivery-as-no-op path (the marker, not a row write, is truth).
+	// A 1ns lease so a NON-delivered row would be immediately re-claimable — this makes
+	// the no-re-claim assertion below meaningful: the ONLY thing keeping a delivered row
+	// out of the claim set is its terminal delivered-mark, not the lease.
 	store := iamv1.NewEntOutboxStore(client, time.Nanosecond, iamv1.WithEntOutboxRawDB(rawDB), iamv1.WithEntOutboxMySQL())
 	pub := events.NewOutboxPublisher(store)
 	idem := iamv1.NewEntIdempotencyStore(client)
@@ -262,20 +274,30 @@ func TestMySQL_F033_Ent_AppendOnlyDispatchDelivers(t *testing.T) {
 		t.Fatalf("handler must apply once, applied=%d", applied)
 	}
 
-	// AC-1 (append-only): delivery did not delete or row-mark — count unchanged.
+	// AC-1 (append-only): delivery did not delete a row — count unchanged (the
+	// delivered-mark is an in-place UPDATE, never an insert/delete).
 	if n := entOutboxCount(t, client); n != rowsAfterPublish {
 		t.Fatalf("append-only: dispatch must never delete a row, count went %d -> %d", rowsAfterPublish, n)
 	}
+	attemptsAtDelivery := mysqlOutboxAttempts(t, rawDB, "u1")
 
-	// Exactly-once: re-runs re-claim the append-only row but the marker makes the
-	// handler a no-op.
+	// Churn-free happy path: re-running the dispatcher must NOT re-claim the delivered
+	// row (delivered rows are excluded from the claim), so the handler is not re-invoked
+	// and attempts do NOT advance — no per-poll re-lease UPDATE churn on a delivered event.
 	for i := 0; i < 3; i++ {
-		if _, err := d.RunOnce(ctx, 10); err != nil {
+		delivered, err := d.RunOnce(ctx, 10)
+		if err != nil {
 			t.Fatalf("re-run %d: %v", i, err)
+		}
+		if delivered != 0 {
+			t.Fatalf("re-run %d re-claimed a DELIVERED event (per-poll churn), delivered=%d", i, delivered)
 		}
 	}
 	if applied != 1 {
-		t.Fatalf("exactly-once: the handler must apply exactly once across redelivery, applied=%d", applied)
+		t.Fatalf("exactly-once: the handler must apply exactly once, applied=%d", applied)
+	}
+	if a := mysqlOutboxAttempts(t, rawDB, "u1"); a != attemptsAtDelivery {
+		t.Fatalf("churn-free: a delivered event must not be re-written, attempts went %d -> %d", attemptsAtDelivery, a)
 	}
 	markers, err := client.IdemMarker.Query().Count(ctx)
 	if err != nil {

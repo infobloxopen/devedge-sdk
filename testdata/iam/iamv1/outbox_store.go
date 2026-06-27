@@ -121,10 +121,12 @@ func (s *EntOutboxStore) Append(ctx context.Context, rec *persistence.OutboxReco
 // and stamping a fresh lease, and return them. Runs on the base client (the
 // dispatcher is not in an aggregate tx).
 //
-// F033: eligibility is attempts-based, NOT delivered_time-based. A row past
-// maxAttempts is poison and skipped (the poison cutoff); a delivered row stays
-// eligible until the cutoff but its re-delivery is a no-op (the handler idempotency
-// markers dedup it) and it is eventually aged out by a partition drop.
+// F033 churn-avoidance: a delivered row (delivered_time set) is EXCLUDED, so a
+// successfully delivered event is never re-leased or re-attempted — the happy path
+// issues zero per-poll UPDATEs and a delivered event never drifts into the poison
+// cutoff. A row past maxAttempts without ever delivering is poison and skipped (the
+// poison cutoff). The handler idempotency markers remain the exactly-once guard for a
+// rare in-flight double-claim; aged rows are removed by a partition drop.
 func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*persistence.OutboxRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -135,6 +137,7 @@ func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limi
 	now := s.now()
 	rows, err := s.client.Outbox.Query().
 		Where(
+			entoutbox.DeliveredTimeIsNil(),
 			entoutbox.AttemptsLT(maxAttempts),
 			entoutbox.Or(
 				entoutbox.LeasedUntilIsNil(),
@@ -161,11 +164,23 @@ func (s *EntOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limi
 	return out, nil
 }
 
-// MarkDelivered implements persistence.OutboxStore: a NO-OP under the F033
-// append-only model. Delivery truth is the idempotency marker recorded in the
-// handler's tx, not a row write; the store never mutates delivery state and never
-// deletes a row.
+// MarkDelivered implements persistence.OutboxStore: stamp delivered_time ONCE (and
+// clear the lease) so the row is excluded from every future ClaimUndelivered — the
+// single terminal mark that keeps the append-only outbox free of per-poll re-lease
+// churn (F033). It guards on delivered_time IS NULL so a re-mark is a no-op, never
+// DELETEs the row (retention is a partition drop), and treats an unknown id as a
+// no-op. It runs on the base client (the dispatcher is not in an aggregate tx).
 func (s *EntOutboxStore) MarkDelivered(ctx context.Context, id string) error {
+	if _, err := s.client.Outbox.Update().
+		Where(entoutbox.ID(id), entoutbox.DeliveredTimeIsNil()).
+		SetDeliveredTime(s.now()).
+		ClearLeasedUntil().
+		Save(ctx); err != nil {
+		if ent.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("mark delivered %s: %w", id, err)
+	}
 	return nil
 }
 

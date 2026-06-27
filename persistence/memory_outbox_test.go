@@ -44,6 +44,52 @@ func TestMemoryOutbox_AppendOnly_ClaimNeverDeletes(t *testing.T) {
 	}
 }
 
+// TestMemoryOutbox_DeliveredNotReclaimed is the F033 churn-avoidance assertion: once
+// a row is MarkDelivered it is NEVER re-claimed or re-written on a later poll — its
+// attempts do not advance and it never drifts into the poison cutoff. This is the
+// make-or-break property: delivery must not move per-row DELETE churn into per-poll
+// re-lease churn. The store uses a ~1ns lease so a non-delivered row WOULD be
+// re-claimable immediately; the only thing keeping the delivered row out is the mark.
+func TestMemoryOutbox_DeliveredNotReclaimed(t *testing.T) {
+	store := persistence.NewMemoryOutboxStore(time.Nanosecond) // tiny lease → re-claimable but for the mark
+	tx := persistence.NewMemoryTxRunner(store)
+	ctx := context.Background()
+	appendTx(t, tx, store, &persistence.OutboxRecord{ID: "a", EventType: "X"})
+
+	// One claim (as the dispatcher does) then mark delivered.
+	if _, err := store.ClaimUndelivered(ctx, 5, 10); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if err := store.MarkDelivered(ctx, "a"); err != nil {
+		t.Fatalf("mark delivered: %v", err)
+	}
+	attemptsAtDelivery := store.All()[0].Attempts
+
+	// Poll many more times: a delivered row must never be re-claimed or re-written.
+	for i := range 10 {
+		claimed, err := store.ClaimUndelivered(ctx, 5, 10)
+		if err != nil {
+			t.Fatalf("poll %d: %v", i, err)
+		}
+		if len(claimed) != 0 {
+			t.Fatalf("poll %d re-claimed a DELIVERED event (churn) — claimed=%d", i, len(claimed))
+		}
+	}
+	final := store.All()[0]
+	if final.Attempts != attemptsAtDelivery {
+		t.Fatalf("a delivered event must not be re-written: attempts went %d -> %d (per-poll re-lease churn)", attemptsAtDelivery, final.Attempts)
+	}
+	if final.Attempts >= persistence.DefaultMaxOutboxAttempts {
+		t.Fatalf("a delivered event must NEVER reach the poison cutoff (attempts=%d)", final.Attempts)
+	}
+	if final.DeliveredTime == nil {
+		t.Fatal("a delivered row must carry its terminal delivered-mark")
+	}
+	if len(store.All()) != 1 {
+		t.Fatalf("append-only: the delivered row must remain (never deleted), rows=%d", len(store.All()))
+	}
+}
+
 // TestMemoryOutbox_PoisonCutoff proves a row stops being claimed once it reaches
 // maxAttempts (the poison cutoff) and is parked, not deleted.
 func TestMemoryOutbox_PoisonCutoff(t *testing.T) {

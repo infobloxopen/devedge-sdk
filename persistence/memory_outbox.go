@@ -24,11 +24,15 @@ const memOutboxOrderBase = 1 << 32
 // discards it (F032 AC-1) — exactly as the ent store's Append-through-*ent.Tx does
 // for the SQL backend.
 //
-// F033: the store is APPEND-ONLY. Rows are never deleted or delivered-marked on the
-// dispatch path; claim eligibility is attempts-based (a row drops out of claims once
-// its Attempts reaches the dispatcher's maxAttempts, the poison cutoff), and the
-// only path that removes data is [MemoryOutboxStore.DropPartitionsBefore] (the
-// dev-backend model of partition-drop retention: forget rows older than t).
+// F033: the store is APPEND-ONLY — rows are never deleted on the dispatch path. The
+// only mutation the dispatch path makes is a single terminal delivered-mark
+// ([MemoryOutboxStore.MarkDelivered] sets the row's DeliveredTime once every handler
+// applied); a delivered row is then excluded from claims, so it is never re-leased or
+// re-attempted (no per-poll churn) and never drifts into the poison cutoff. A row
+// drops out of claims once its Attempts reaches maxAttempts (the poison cutoff) even
+// if never delivered. The only path that removes data is
+// [MemoryOutboxStore.DropPartitionsBefore] (the dev-backend model of partition-drop
+// retention: forget rows older than t).
 type MemoryOutboxStore struct {
 	mu       sync.Mutex
 	rows     []*OutboxRecord      // append order; the dispatcher claims from the head
@@ -121,11 +125,11 @@ func (s *MemoryOutboxStore) Append(ctx context.Context, rec *OutboxRecord) error
 // fresh lease and bumping Attempts. A claim is its own short critical section (not
 // part of an aggregate tx), so it locks directly.
 //
-// F033: eligibility is attempts-based, not delivered-time-based. A row that has been
-// attempted maxAttempts times is poison and is no longer returned (the poison
-// cutoff); a successfully delivered row keeps being eligible until the cutoff but its
-// re-delivery is a harmless no-op (the handler markers dedup it), and it is
-// eventually aged out by DropPartitionsBefore.
+// F033: a delivered row (DeliveredTime set) is EXCLUDED — a successfully delivered
+// event is never re-claimed or re-attempted, so the happy path does zero per-poll
+// writes and a delivered event never drifts into the poison cutoff. A row attempted
+// maxAttempts times without ever delivering is poison and is no longer returned (the
+// poison cutoff). Both are eventually aged out by DropPartitionsBefore.
 func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*OutboxRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -141,6 +145,9 @@ func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, l
 		if len(out) >= limit {
 			break
 		}
+		if r.DeliveredTime != nil {
+			continue // already delivered: never re-claimed (no churn)
+		}
 		if r.Attempts >= maxAttempts {
 			continue // poison: past the cutoff, no longer claimed
 		}
@@ -155,10 +162,23 @@ func (s *MemoryOutboxStore) ClaimUndelivered(ctx context.Context, maxAttempts, l
 	return out, nil
 }
 
-// MarkDelivered implements [OutboxStore]: a NO-OP under the F033 append-only model.
-// Delivery truth is the idempotency marker recorded in the handler's transaction,
-// not a row write; the store never mutates delivery state and never deletes a row.
+// MarkDelivered implements [OutboxStore]: stamp the row's DeliveredTime ONCE so it is
+// excluded from every future claim (F033 churn-avoidance — no per-poll re-lease of a
+// delivered event). It never deletes the row; a second mark of an already-delivered
+// row is a no-op, and an unknown id is ignored.
 func (s *MemoryOutboxStore) MarkDelivered(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.rows {
+		if r.ID == id {
+			if r.DeliveredTime == nil {
+				t := time.Now()
+				r.DeliveredTime = &t
+			}
+			delete(s.leased, id) // delivered rows need no lease
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -192,16 +212,15 @@ func (s *MemoryOutboxStore) DropPartitionsBefore(ctx context.Context, t time.Tim
 	return dropped, nil
 }
 
-// Pending returns the ids of rows still eligible for claim (Attempts below the
-// default cutoff), in append order. Under the F033 append-only model the store does
-// not track delivery (the idempotency marker is the delivery truth), so Pending
-// reflects claim-eligibility, not delivered-state; it is a test/introspection helper.
+// Pending returns the ids of rows still eligible for claim (not yet delivered and
+// Attempts below the default cutoff), in append order. It is a test/introspection
+// helper that mirrors ClaimUndelivered's eligibility filter.
 func (s *MemoryOutboxStore) Pending() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.rows))
 	for _, r := range s.rows {
-		if r.Attempts < DefaultMaxOutboxAttempts {
+		if r.DeliveredTime == nil && r.Attempts < DefaultMaxOutboxAttempts {
 			out = append(out, r.ID)
 		}
 	}

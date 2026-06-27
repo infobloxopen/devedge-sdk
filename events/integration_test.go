@@ -173,9 +173,9 @@ func TestIntegration_AggregateSavePublishesEventAtomically(t *testing.T) {
 	if delivered != 1 || got != "i1" {
 		t.Fatalf("the event must reach the handler: delivered=%d payload=%q", delivered, got)
 	}
-	// F033 (append-only): delivery does NOT delete or row-mark the event — the
-	// idempotency marker is the delivery truth, so the row survives until a partition
-	// drop. The handler ran (got=="i1"); the row count only ever grows.
+	// F033 (append-only): delivery NEVER deletes the event row — it gets a single
+	// terminal delivered-mark and then survives until a partition drop. The handler ran
+	// (got=="i1"); the row count only ever grows (no per-row DELETE on the dispatch path).
 	if all := store.All(); len(all) != 1 {
 		t.Fatalf("append-only: the delivered event row must survive (count only grows), got %d", len(all))
 	}

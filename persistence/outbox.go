@@ -23,12 +23,18 @@ const DefaultMaxOutboxAttempts = 5
 // AggregateType/AggregateID record which aggregate emitted it (events reference
 // aggregates by ID only, F031).
 //
-// F033 append-only invariant: the store NEVER DELETEs or delivered-marks a row on
-// the dispatch path. CreatedTime is immutable and is the RANGE partition key;
-// retention is whole-partition drops ([OutboxRetention]), never per-row deletes.
-// Delivery truth is the idempotency marker recorded in the handler's own tx (see
-// events.IdempotencyStore), NOT a row write — so the outbox table is a pure
-// append-only log.
+// F033 append-only invariant: the store NEVER DELETEs a row. CreatedTime is
+// immutable and is the RANGE partition key; retention is whole-partition drops
+// ([OutboxRetention]), never per-row deletes. The ONLY mutation the dispatch path
+// makes is a single terminal delivered-mark (set DeliveredTime once, when every
+// handler has applied) — one bounded UPDATE per event, never repeated, never a
+// DELETE. That mark is what excludes a delivered event from every future claim, so
+// a delivered row is never re-leased, never re-attempted, and never aged into the
+// poison cutoff: the table is append-with-one-terminal-mark, drained by dropping
+// whole partitions. (The exactly-once side-effect guarantee is still the idempotency
+// marker recorded in the handler's own tx — the delivered-mark is the churn-avoiding
+// claim filter, the idempotency marker is the correctness guard; see
+// events.IdempotencyStore.)
 type OutboxRecord struct {
 	ID            string
 	AccountID     string
@@ -39,14 +45,17 @@ type OutboxRecord struct {
 	// CreatedTime is immutable and is the partition key (F033): RANGE partitions on
 	// created_time make retention an O(1) DROP PARTITION rather than a per-row DELETE.
 	CreatedTime time.Time
-	// Deprecated: F033 made the outbox append-only — delivery truth is the
-	// idempotency marker recorded in the handler's transaction, not a row write.
-	// DeliveredTime is retained only for backward field-compatibility and is no
-	// longer written or read on the dispatch path; do not depend on it.
+	// DeliveredTime is set ONCE, by [OutboxStore.MarkDelivered], when every handler
+	// for the event has applied. It is the claim filter that makes the outbox
+	// churn-free: a row with DeliveredTime set is excluded from [ClaimUndelivered], so
+	// a delivered event is never re-leased or re-attempted (no per-poll write churn)
+	// and never crosses the poison cutoff. It is written at most once and never
+	// cleared; the row is removed only by a partition drop. nil = not yet delivered.
 	DeliveredTime *time.Time
 	// Attempts is the dispatch counter: each claim increments it. A row is terminal
 	// (poison, no longer re-claimed) once Attempts reaches the dispatcher's
-	// maxAttempts. This is what ClaimUndelivered filters on (NOT delivered_time).
+	// maxAttempts. ClaimUndelivered filters on BOTH attempts < maxAttempts AND
+	// delivered_time IS NULL.
 	Attempts int
 }
 
@@ -62,11 +71,13 @@ type OutboxRecord struct {
 // share one commit. A store that wrote on a separate connection would reintroduce
 // the dual-write it exists to prevent.
 //
-// F033: the table is APPEND-ONLY. No method on this interface DELETEs a row, and
-// MarkDelivered no longer writes delivery state (it is a no-op) — delivery truth is
-// the idempotency marker, not a row write. Retention is a separate seam
-// ([OutboxRetention]) that drops whole partitions, and an integrator who tails the
-// WAL/binlog instead of polling implements [OutboxCDCConsumer].
+// F033: the table is APPEND-ONLY — no method on this interface DELETEs a row. The
+// only mutation on the dispatch path is a single terminal delivered-mark
+// (MarkDelivered, set once per event) that excludes the row from future claims, so a
+// delivered event is never re-leased, re-attempted, or aged into the poison cutoff —
+// there is no per-poll write churn (F033 churn-avoidance intent). Retention is a
+// separate seam ([OutboxRetention]) that drops whole partitions, and an integrator
+// who tails the WAL/binlog instead of polling implements [OutboxCDCConsumer].
 type OutboxStore interface {
 	// Append durably records rec inside the ctx transaction. It is the operation a
 	// [Publish] call makes from inside [TxRunner.Atomically]; the row becomes visible
@@ -75,26 +86,36 @@ type OutboxStore interface {
 	Append(ctx context.Context, rec *OutboxRecord) error
 
 	// ClaimUndelivered atomically leases up to limit rows that are still eligible for
-	// dispatch — those with Attempts < maxAttempts whose lease has lapsed — to the
-	// calling dispatcher: it increments Attempts and stamps a fresh lease, then returns
-	// them so the dispatcher can deliver them to handlers.
+	// dispatch — those that are NOT yet delivered (delivered_time IS NULL) AND have
+	// Attempts < maxAttempts AND whose lease has lapsed — to the calling dispatcher: it
+	// increments Attempts and stamps a fresh lease, then returns them so the dispatcher
+	// can deliver them to handlers.
 	//
-	// F033: eligibility is attempts-based, NOT delivered_time-based. The append-only
-	// table never marks a row delivered; instead a delivered event simply stops being
-	// re-delivered because its handlers' idempotency markers make redelivery a no-op,
-	// and a poison event stops being re-claimed once Attempts reaches maxAttempts (the
-	// poison cutoff). A non-positive maxAttempts uses [DefaultMaxOutboxAttempts].
+	// F033 churn-avoidance: a delivered row (delivered_time set by MarkDelivered once
+	// every handler applied) is EXCLUDED from the claim, so a successfully delivered
+	// event is never re-leased and never re-attempted — there is no per-poll write
+	// churn on the happy path, and a delivered event never drifts into the poison
+	// cutoff. A poison event (Attempts reaches maxAttempts before it ever delivers)
+	// stops being re-claimed too. A non-positive maxAttempts uses
+	// [DefaultMaxOutboxAttempts]. The handler idempotency markers remain the
+	// exactly-once correctness guard for the rare in-flight double-claim (lease lapse
+	// before the delivered-mark commits).
 	//
 	// The lease is what makes the default poller safe without SELECT ... FOR UPDATE
 	// SKIP LOCKED (which ent's sql/lock is not enabled for here, F032 D-3): a leased
 	// row is hidden from a concurrent claim until its lease lapses.
 	ClaimUndelivered(ctx context.Context, maxAttempts, limit int) ([]*OutboxRecord, error)
 
-	// MarkDelivered is retained for source compatibility but is a NO-OP under the F033
-	// append-only model: delivery truth is the idempotency marker recorded in the
-	// handler's own transaction, not a row write. The dispatcher no longer calls it on
-	// the critical path; an implementation MUST NOT DELETE or mutate delivery state
-	// here. It returns nil.
+	// MarkDelivered records that every handler for the event has applied, by stamping
+	// delivered_time ONCE. That single terminal mark is what excludes the row from all
+	// future ClaimUndelivered calls (F033 churn-avoidance): it is at most ONE bounded
+	// UPDATE per event over the row's whole life, never repeated and never a DELETE —
+	// the row is removed only by a partition drop. The dispatcher calls it after a
+	// successful deliver(). The exactly-once side-effect guarantee is still the
+	// idempotency marker in the handler's tx; this mark is the claim filter that keeps
+	// the append-only outbox free of per-poll re-lease churn. An implementation MUST
+	// NOT DELETE the row. A second MarkDelivered of an already-delivered row is a
+	// harmless no-op.
 	MarkDelivered(ctx context.Context, id string) error
 
 	// Release drops the lease on a claimed row so it can be re-claimed immediately

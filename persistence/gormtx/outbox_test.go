@@ -93,10 +93,11 @@ func TestGormOutbox_AppendRollsBackWithTx(t *testing.T) {
 	}
 }
 
-// TestGormOutbox_LeaseLifecycle exercises Claim → Release under the F033 append-only
-// model (MarkDelivered is a no-op; delivery truth is the idempotency marker, so the
-// store never marks a row terminal). A claimed row is hidden by its lease; a released
-// row is immediately re-claimable; attempts increment on every claim.
+// TestGormOutbox_LeaseLifecycle exercises Claim → MarkDelivered / Release under the
+// F033 append-only churn-free model. A claimed row is hidden by its lease; a released
+// row is immediately re-claimable (attempts increment on every claim); a row that is
+// MarkDelivered drops out of all future claims (the single terminal mark — no per-poll
+// re-lease churn) and is never deleted.
 func TestGormOutbox_LeaseLifecycle(t *testing.T) {
 	db := openOutboxDB(t, "gorm_outbox_lease")
 	clock := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
@@ -138,25 +139,41 @@ func TestGormOutbox_LeaseLifecycle(t *testing.T) {
 		t.Fatalf("leased rows must be hidden from a competing claim, got %d", len(again))
 	}
 
-	// MarkDelivered is a NO-OP under the append-only model: it must NOT make e1
-	// terminal (no row-state write). Release e2 to drop its lease for a prompt re-claim.
+	// MarkDelivered stamps e1's terminal delivered-mark, excluding it from all future
+	// claims (the churn-free happy path). Release e2 to drop its lease for a prompt
+	// re-claim. Advance the clock past the lease so e2's lapsed lease lets it re-claim.
 	if err := store.MarkDelivered(context.Background(), "e1"); err != nil {
-		t.Fatalf("mark delivered (no-op): %v", err)
+		t.Fatalf("mark delivered: %v", err)
 	}
 	if err := store.Release(context.Background(), "e2"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 
-	// e1 stays leased (MarkDelivered did nothing); only e2 (released) re-claims.
+	// e1 is delivered (never re-claimed — churn-free); only e2 (released) re-claims.
 	third, err := store.ClaimUndelivered(context.Background(), 5, 10)
 	if err != nil {
 		t.Fatalf("third claim: %v", err)
 	}
 	if len(third) != 1 || third[0].ID != "e2" {
-		t.Fatalf("after Release(e2), claim must return only e2 (e1 still leased, MarkDelivered is a no-op), got %+v", third)
+		t.Fatalf("after MarkDelivered(e1)+Release(e2), claim must return only e2 (e1 delivered, never re-claimed), got %+v", third)
 	}
 	if third[0].Attempts != 2 {
 		t.Fatalf("re-claimed e2 must have attempts=2, got %d", third[0].Attempts)
+	}
+
+	// Churn-free: even after e2's lease lapses, e1 stays out of the claim set forever —
+	// a delivered event is never re-leased/re-attempted. Advance well past the lease.
+	clock.t = clock.t.Add(10 * time.Minute)
+	for i := range 5 {
+		batch, cerr := store.ClaimUndelivered(context.Background(), 5, 10)
+		if cerr != nil {
+			t.Fatalf("churn poll %d: %v", i, cerr)
+		}
+		for _, r := range batch {
+			if r.ID == "e1" {
+				t.Fatalf("a delivered event (e1) was re-claimed on poll %d — per-poll churn", i)
+			}
+		}
 	}
 
 	// AC-1 (append-only): MarkDelivered and the claims above NEVER deleted a row. The
