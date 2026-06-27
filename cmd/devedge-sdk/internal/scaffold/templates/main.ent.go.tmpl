@@ -14,6 +14,22 @@
 // wiring are generated. To add custom (non-CRUD) logic, embed
 // {{.GoPkg}}.{{.ServiceType}}CRUDHandler, override the methods you change, and
 // register it with {{.GoPkg}}.Register{{.ServiceType}}(s, h).
+{{- if .Aggregate}}
+//
+// {{.Resource}} is a DDD aggregate ROOT (it owns {{.Member}} members). This file
+// additionally wires the aggregate + transactional-outbox machinery out of the box:
+//   - the generated {{.GoPkg}}.NewEntTxRunner makes a root+members Save one transaction;
+//   - a persistence.AggregateRepository loads/saves the whole {{.Resource}} cluster
+//     atomically over the generated Load{{.Resource}}Aggregate graph-load primitive;
+//   - an events.Publisher + events.Dispatcher form a transactional outbox so a
+//     change to {{.Resource}} can react onto another aggregate by eventual consistency.
+//
+// The outbox here uses the SDK's engine-free dev stores (persistence.MemoryOutboxStore
+// + an in-memory idempotency store) so the scaffold compiles and runs out of the
+// box. For a durable, SQL-backed ent outbox, add an Outbox + IdemMarker ent schema
+// and an ent OutboxStore that appends through the ctx *ent.Tx — see the worked
+// example in the SDK's testdata/iam (outbox_store.go + idempotency_store.go).
+{{- end}}
 package main
 
 import (
@@ -26,6 +42,9 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
+{{- if .Aggregate}}
+	"github.com/infobloxopen/devedge-sdk/events"
+{{- end}}
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 
@@ -53,6 +72,115 @@ func registerSQLite3() error {
 	return nil
 }
 
+{{- if .Aggregate}}
+
+// newClient opens the ent client and runs the schema migration. SQLite (no CGo)
+// keeps the scaffold runnable out of the box; point ent.Open at postgres/mysql in
+// production.
+func newClient() (*entclient.Client, error) {
+	if err := registerSQLite3(); err != nil {
+		return nil, err
+	}
+	client, err := entclient.Open("sqlite3", "file::memory:?cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, err
+	}
+	if err := client.Schema.Create(context.Background()); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+// newAggregate wires the SDK's backend-neutral persistence.AggregateRepository
+// over the generated ent repositories: Load uses the generated graph-load
+// primitive Load{{.Resource}}Aggregate, and Save tracks {{.Member}} (member)
+// mutations against the stored cluster — adds/updates/removes through the generated
+// {{.Member}}EntRepository — all inside ONE NewEntTxRunner transaction, bumping the
+// {{.Resource}} (root) etag on any member change.
+//
+// The service's standard CRUD still runs over the flat {{.Resource}} repository;
+// this aggregate repository is the seam for a custom handler that mutates the whole
+// {{.Resource}} cluster atomically (embed the generated CRUDHandler and override the
+// methods that need it).
+func newAggregate(client *entclient.Client) *persistence.GenericAggregateRepository[*{{.GoPkg}}.{{.Resource}}, string] {
+	roots := {{.GoPkg}}.New{{.Resource}}EntRepository(client)
+	members := {{.GoPkg}}.New{{.Member}}EntRepository(client)
+	return persistence.NewGenericAggregateRepository(persistence.AggregateSpec[*{{.GoPkg}}.{{.Resource}}, string]{
+		Tx:       {{.GoPkg}}.NewEntTxRunner(client),
+		RootRepo: roots,
+		KeyOf:    func(r *{{.GoPkg}}.{{.Resource}}) string { return r.GetId() },
+		EtagOf:   func(r *{{.GoPkg}}.{{.Resource}}) string { return r.GetEtag() },
+		LoadMembers: func(ctx context.Context, root *{{.GoPkg}}.{{.Resource}}) (*{{.GoPkg}}.{{.Resource}}, error) {
+			return {{.GoPkg}}.Load{{.Resource}}Aggregate(ctx, client, root.GetId())
+		},
+		SaveMembers: func(ctx context.Context, root *{{.GoPkg}}.{{.Resource}}) (bool, error) {
+			// Member-mutation tracking: diff the incoming members against what is
+			// stored (loaded fresh inside the tx) and apply adds/updates/removes.
+			stored, err := {{.GoPkg}}.Load{{.Resource}}Aggregate(ctx, client, root.GetId())
+			if err != nil {
+				return false, err
+			}
+			storedByID := map[string]*{{.GoPkg}}.{{.Member}}{}
+			for _, mbr := range stored.Get{{.MemberField}}() {
+				storedByID[mbr.GetId()] = mbr
+			}
+			changed := false
+			wantIDs := map[string]struct{}{}
+			for _, mbr := range root.Get{{.MemberField}}() {
+				wantIDs[mbr.GetId()] = struct{}{}
+				mbr.{{.MemberFKGoField}} = root.GetId()
+				if mbr.AccountId == "" {
+					mbr.AccountId = root.GetAccountId()
+				}
+				if _, ok := storedByID[mbr.GetId()]; !ok {
+					if _, cerr := members.Create(ctx, mbr); cerr != nil {
+						return false, cerr
+					}
+					changed = true
+				} else {
+					if _, uerr := members.Update(ctx, mbr.GetId(), mbr); uerr != nil {
+						return false, uerr
+					}
+					changed = true
+				}
+			}
+			for id := range storedByID {
+				if _, keep := wantIDs[id]; !keep {
+					if derr := members.Delete(ctx, id); derr != nil {
+						return false, derr
+					}
+					changed = true
+				}
+			}
+			return changed, nil
+		},
+	})
+}
+
+// newOutbox wires the F032 transactional-outbox seam. A Publisher records a domain
+// event in the SAME transaction as the aggregate change that emitted it (call
+// pub.Publish inside the runner's Atomically), and a Dispatcher delivers committed
+// events at-least-once to the handlers you Subscribe — each running in its OWN
+// transaction (eventual consistency across aggregates). Wire your cross-aggregate
+// reactions with d.Subscribe(...) and run d.Poll(ctx, ...) from a background
+// goroutine.
+//
+// This uses the SDK's engine-free DEV stores so the scaffold runs out of the box:
+// an in-memory outbox, an in-memory TxRunner for the dispatch side, and the
+// auto-enrolled in-memory idempotency store. For durability, replace store + tx
+// with a SQL-backed ent OutboxStore (appending through the ctx *ent.Tx) and the
+// generated NewEntTxRunner — see testdata/iam in the SDK for the worked example.
+func newOutbox() (events.Publisher, *events.Dispatcher) {
+	store := persistence.NewMemoryOutboxStore(0)
+	tx := persistence.NewMemoryTxRunner()
+	pub := events.NewOutboxPublisher(store)
+	d := events.NewDispatcher(store, tx, nil) // nil => auto in-memory idempotency
+	// Example: react to your aggregate's events here.
+	//   d.Subscribe("{{.ResourceSnake}}.changed", "my-reaction", func(ctx context.Context, evt events.Event) error { ... })
+	return pub, d
+}
+{{- else}}
+
 // newRepository opens the ent client, runs the schema migration, and returns the
 // GENERATED ent repository adapter (no hand-written wiring).
 func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], error) {
@@ -68,6 +196,7 @@ func newRepository() (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string],
 	}
 	return {{.GoPkg}}.New{{.Resource}}EntRepository(client), nil
 }
+{{- end}}
 
 // newServer builds a fully wired server with the given authorizer and listen
 // addresses. Returns an error (rather than panicking) so tests can assert the
@@ -85,10 +214,26 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 	if err != nil {
 		return nil, err
 	}
+{{- if .Aggregate}}
+	client, err := newClient()
+	if err != nil {
+		return nil, err
+	}
+	// Aggregate + outbox machinery wired out of the box. The flat CRUD handler is
+	// registered below; agg/pub/d are ready for a custom handler that mutates the
+	// {{.Resource}} cluster atomically and reacts across aggregates via the outbox.
+	// They are assigned to _ here so the scaffold compiles and runs before you add
+	// your own handler + dispatch loop.
+	agg := newAggregate(client)
+	pub, d := newOutbox()
+	_, _, _ = agg, pub, d
+	repo := {{.GoPkg}}.New{{.Resource}}EntRepository(client)
+{{- else}}
 	repo, err := newRepository()
 	if err != nil {
 		return nil, err
 	}
+{{- end}}
 	// One call: construct the generated default CRUD handler over repo, register it
 	// (gRPC + REST gateway), and contribute the service's authz rules.
 	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {

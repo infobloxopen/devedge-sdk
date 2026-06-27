@@ -154,6 +154,140 @@ func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 	makeTarget(t, target, pluginBin, "test")  // includes the generated smoke test (AC-007 ent)
 }
 
+// TestScaffold_GORM_Aggregate_BuildsAndPasses is the F034 (scaffold aggregate +
+// outbox) end-to-end gate on GORM: scaffold an AGGREGATE service (--aggregate),
+// then drive the generated project's REAL `make generate && make build && make
+// test` (plus `go vet`). An aggregate scaffold wires, OUT OF THE BOX, more than
+// Tier-1 CRUD: a gormtx.GormTxRunner, a persistence.AggregateRepository over the
+// generated LoadOrderAggregateGorm graph-load primitive, and a transactional
+// outbox (events.Publisher + events.Dispatcher over the reusable gormtx outbox +
+// idempotency stores, plus a RunRetention hook) — all of which must compile and
+// the smoke test still pass with ZERO hand-edits.
+//
+// Like the non-aggregate gorm gate it exercises HEAD (local SDK replace + plugins).
+// Requires apx + buf + go + make + network. Skipped under -short.
+func TestScaffold_GORM_Aggregate_BuildsAndPasses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping scaffold aggregate integration test in -short mode")
+	}
+	requireTools(t, "apx", "buf", "go", "make")
+
+	sdkDir := sdkModuleDir(t)
+	pluginBin := buildSDKPlugins(t, sdkDir)
+	target := filepath.Join(t.TempDir(), "orders")
+
+	var out bytes.Buffer
+	if _, err := scaffold.Generate(context.Background(), scaffold.Options{
+		Service:    "orders",
+		Resource:   "Order",
+		Backend:    scaffold.BackendGORM,
+		Dir:        target,
+		Aggregate:  true,
+		NoGenerate: true,
+	}, &out); err != nil {
+		t.Fatalf("Generate: %v\n%s", err, out.String())
+	}
+
+	// The aggregate proto declares the root + an owned member and vendors the
+	// SDK-owned ddd annotation the aggregate/member options live in.
+	proto := readFile(t, filepath.Join(target, "proto/orders/v1/orders.proto"))
+	for _, want := range []string{
+		"option (infoblox.ddd.v1.aggregate) = {root: true};",
+		"option (infoblox.ddd.v1.member) = {root: \"Order\"};",
+		"message OrderItem {",
+	} {
+		if !strings.Contains(proto, want) {
+			t.Fatalf("aggregate proto missing %q:\n%s", want, proto)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "proto/infoblox/ddd/v1/ddd.proto")); err != nil {
+		t.Fatalf("aggregate scaffold must vendor the ddd annotation mirror: %v", err)
+	}
+
+	// The generated main wires the aggregate + outbox machinery (gated on aggregate).
+	mainGo := readFile(t, filepath.Join(target, "server/main.go"))
+	for _, want := range []string{
+		"gormtx.NewGormTxRunner(db)",
+		"persistence.NewGenericAggregateRepository",
+		"LoadOrderAggregateGorm",
+		"events.NewOutboxPublisher",
+		"events.NewDispatcher",
+		"gormtx.RunRetention",
+	} {
+		if !strings.Contains(mainGo, want) {
+			t.Fatalf("aggregate main.go missing wiring %q:\n%s", want, mainGo)
+		}
+	}
+
+	injectLocalReplace(t, target, sdkDir)
+	generate(t, target, pluginBin)
+
+	// The generated graph-load primitive is only emitted for a root WITH members;
+	// assert it landed (so the aggregate wiring in main compiles against it).
+	if _, err := os.Stat(filepath.Join(target, "gen/ordersv1/orders.storage.go")); err != nil {
+		t.Fatalf("expected generated storage file: %v", err)
+	}
+
+	makeTarget(t, target, pluginBin, "build") // compiles the aggregate + outbox wiring
+	run(t, target, nil, "go", "vet", "./...") // no `vet` make target; check directly
+	makeTarget(t, target, pluginBin, "test")  // smoke test still green (AC-007)
+}
+
+// TestScaffold_ENT_Aggregate_BuildsAndPasses is the ent twin of the gorm aggregate
+// gate: an ent aggregate scaffold wires the generated NewEntTxRunner +
+// AggregateRepository over the generated LoadOrderAggregate primitive, plus a
+// transactional outbox on the SDK's engine-free dev stores (the durable SQL-backed
+// ent outbox store is a documented follow-up — see testdata/iam). It must compile
+// and pass via the real two-step ent `make generate` → `make build && make test`.
+// Requires apx + buf + go + make + network. Skipped under -short.
+func TestScaffold_ENT_Aggregate_BuildsAndPasses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping scaffold aggregate integration test in -short mode")
+	}
+	requireTools(t, "apx", "buf", "go", "make")
+
+	sdkDir := sdkModuleDir(t)
+	pluginBin := buildSDKPlugins(t, sdkDir)
+	target := filepath.Join(t.TempDir(), "orders")
+
+	var out bytes.Buffer
+	if _, err := scaffold.Generate(context.Background(), scaffold.Options{
+		Service:    "orders",
+		Resource:   "Order",
+		Backend:    scaffold.BackendEnt,
+		Dir:        target,
+		Aggregate:  true,
+		NoGenerate: true,
+	}, &out); err != nil {
+		t.Fatalf("Generate: %v\n%s", err, out.String())
+	}
+
+	// ent aggregate main wires the generated NewEntTxRunner + AggregateRepository +
+	// the (dev-store) outbox. It must stay gorm-free.
+	mainGo := readFile(t, filepath.Join(target, "server/main.go"))
+	for _, want := range []string{
+		"ordersv1.NewEntTxRunner(client)",
+		"persistence.NewGenericAggregateRepository",
+		"LoadOrderAggregate(ctx, client",
+		"events.NewOutboxPublisher",
+		"events.NewDispatcher",
+	} {
+		if !strings.Contains(mainGo, want) {
+			t.Fatalf("ent aggregate main.go missing wiring %q:\n%s", want, mainGo)
+		}
+	}
+	if strings.Contains(mainGo, "gorm") {
+		t.Errorf("ent aggregate main.go must be gorm-free:\n%s", mainGo)
+	}
+
+	injectLocalReplace(t, target, sdkDir)
+	generateEnt(t, target, pluginBin)
+
+	makeTarget(t, target, pluginBin, "build")
+	run(t, target, nil, "go", "vet", "./...")
+	makeTarget(t, target, pluginBin, "test")
+}
+
 // TestScaffold_GORM_AuthzGateRegression is AC-002 (T-303): delete one authz rule
 // from the example proto, regenerate (via the real `make generate`), and the server
 // must FAIL to boot with the completeness-gate error.

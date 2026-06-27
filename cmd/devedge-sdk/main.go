@@ -53,6 +53,7 @@ func newNewServiceCmd() *cobra.Command {
 		dir        string
 		noGenerate bool
 		force      bool
+		aggregate  bool
 	)
 	c := &cobra.Command{
 		Use:   "service <name>",
@@ -77,7 +78,7 @@ path so the generated go.mod + imports are correct, e.g.
 
   # External users: set your own module path:
   devedge-sdk new service orders --resource Order --backend gorm --module github.com/you/orders`,
-		Args:    cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			target := dir
@@ -93,6 +94,7 @@ path so the generated go.mod + imports are correct, e.g.
 				Dir:        target,
 				NoGenerate: noGenerate,
 				Force:      force,
+				Aggregate:  aggregate,
 			}
 			m, err := scaffold.Generate(cmd.Context(), opts, cmd.OutOrStdout())
 			if err != nil {
@@ -129,5 +131,6 @@ path so the generated go.mod + imports are correct, e.g.
 	c.Flags().StringVar(&dir, "dir", "", "target directory (defaults to the service name)")
 	c.Flags().BoolVar(&noGenerate, "no-generate", false, "skip the first buf generate + go mod tidy")
 	c.Flags().BoolVar(&force, "force", false, "scaffold into a non-empty directory")
+	c.Flags().BoolVar(&aggregate, "aggregate", false, "scaffold the resource as a DDD aggregate root (owns a member resource) and wire the TxRunner + AggregateRepository + transactional-outbox Publisher/Dispatcher in main")
 	return c
 }
