@@ -63,6 +63,16 @@ var (
 			},
 		},
 	}
+	// IdemMarkersColumns holds the columns for the "idem_markers" table.
+	IdemMarkersColumns = []*schema.Column{
+		{Name: "key", Type: field.TypeString},
+	}
+	// IdemMarkersTable holds the schema information for the "idem_markers" table.
+	IdemMarkersTable = &schema.Table{
+		Name:       "idem_markers",
+		Columns:    IdemMarkersColumns,
+		PrimaryKey: []*schema.Column{IdemMarkersColumns[0]},
+	}
 	// MembershipsColumns holds the columns for the "memberships" table.
 	MembershipsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -137,6 +147,7 @@ var (
 		AccountsTable,
 		APIKeysTable,
 		GroupsTable,
+		IdemMarkersTable,
 		MembershipsTable,
 		OutboxesTable,
 		UsersTable,
