@@ -84,6 +84,23 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			PbPkgName:    string(f.GoPackageName),
 			PbImportPath: string(f.GoImportPath),
 		}
+		// F031 DDD: read the SDK-owned infoblox.ddd.v1 message options (mirror
+		// protoc-gen-ent main.go). (aggregate) marks an aggregate ROOT; (member)
+		// marks a resource OWNED by a named root. A member→root containment drives
+		// OnDelete: CASCADE on the owning GORM edge, and a root with containment
+		// members gets a Load<Root>Aggregate graph-load primitive (Phase 2).
+		if mopts := m.Desc.Options(); mopts != nil {
+			if proto.HasExtension(mopts, dddv1.E_Aggregate) {
+				if ag, ok := proto.GetExtension(mopts, dddv1.E_Aggregate).(*dddv1.Aggregate); ok && ag != nil {
+					msg.AggregateRoot = ag.GetRoot()
+				}
+			}
+			if proto.HasExtension(mopts, dddv1.E_Member) {
+				if mb, ok := proto.GetExtension(mopts, dddv1.E_Member).(*dddv1.Member); ok && mb != nil {
+					msg.MemberRoot = mb.GetRoot()
+				}
+			}
+		}
 		// Extract (google.api.resource) pattern from message options.
 		if mopts := m.Desc.Options(); mopts != nil {
 			if proto.HasExtension(mopts, apiannotations.E_Resource) {

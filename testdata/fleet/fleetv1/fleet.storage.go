@@ -36,7 +36,7 @@ type FleetModel struct {
 	ID          string          `gorm:"primaryKey;type:varchar(36)"`
 	AccountId   string          `gorm:"column:account_id;uniqueIndex:ux_fleet_account_display_name,priority:1,option:WHERE deleted_at IS NULL"`
 	DisplayName string          `gorm:"column:display_name;uniqueIndex:ux_fleet_account_display_name,priority:2"`
-	Vehicles    []*VehicleModel `gorm:"foreignKey:FleetId"`
+	Vehicles    []*VehicleModel `gorm:"foreignKey:FleetId;constraint:OnDelete:CASCADE"`
 	ETag        string          `gorm:"column:etag"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -380,6 +380,36 @@ func (r *FleetRepository) BatchDelete(ctx context.Context, keys []string) error 
 
 // compile-time check.
 var _ persistence.BatchRepository[*Fleet, string] = (*FleetRepository)(nil)
+
+// LoadFleetAggregateGorm eager-loads the Fleet aggregate root identified by id together
+// with its owned containment members, in one tx-bound query (the F031 graph-load
+// primitive, D-2). It resolves the tx-or-db from ctx so it participates in an
+// enclosing Atomically. Returns persistence.ErrNotFound when no such root exists.
+func LoadFleetAggregateGorm(ctx context.Context, db *gorm.DB, id string) (*Fleet, error) {
+	q := db.WithContext(ctx)
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			q = tx.WithContext(ctx)
+		}
+	}
+	q = q.Preload("Vehicles")
+	var m FleetModel
+	q = q.Where("id = ?", id)
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("load Fleet aggregate: %w", err)
+	}
+	root := fromModel_Fleet(&m)
+	for _, mm := range m.Vehicles {
+		root.Vehicles = append(root.Vehicles, fromModel_Vehicle(mm))
+	}
+	return root, nil
+}
 
 // VehicleModel is the GORM model for Vehicle.
 type VehicleModel struct {

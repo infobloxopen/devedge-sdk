@@ -45,22 +45,38 @@ type AggregateSpec[Root any, ID comparable] struct {
 	SaveMembers func(ctx context.Context, root Root) (changed bool, err error)
 }
 
-// MemoryAggregateRepository is the in-memory [AggregateRepository]. It composes a
-// root [Repository] (for the root row + its etag), a member-mutation SaveMembers
-// closure, and a graph-assembly LoadMembers closure via [AggregateSpec], and runs
-// Save inside the spec's [TxRunner] so root + members commit or roll back as one.
-type MemoryAggregateRepository[Root any, ID comparable] struct {
+// GenericAggregateRepository is the backend-neutral (ent/GORM/memory)
+// [AggregateRepository]. It composes a root [Repository] (for the root row + its
+// etag), a member-mutation SaveMembers closure, and a graph-assembly LoadMembers
+// closure via [AggregateSpec], and runs Save inside the spec's [TxRunner] so root
+// + members commit or roll back as one. The backend is supplied entirely through
+// the spec's closures + [TxRunner], so the SAME implementation serves the
+// in-memory, ent, and GORM backends — only the wiring (which TxRunner, which
+// Repository, which Load/SaveMembers closures) differs.
+type GenericAggregateRepository[Root any, ID comparable] struct {
 	spec AggregateSpec[Root, ID]
 }
 
-// NewMemoryAggregateRepository returns a MemoryAggregateRepository over spec.
-func NewMemoryAggregateRepository[Root any, ID comparable](spec AggregateSpec[Root, ID]) *MemoryAggregateRepository[Root, ID] {
-	return &MemoryAggregateRepository[Root, ID]{spec: spec}
+// NewGenericAggregateRepository returns a GenericAggregateRepository over spec.
+func NewGenericAggregateRepository[Root any, ID comparable](spec AggregateSpec[Root, ID]) *GenericAggregateRepository[Root, ID] {
+	return &GenericAggregateRepository[Root, ID]{spec: spec}
+}
+
+// MemoryAggregateRepository is a back-compat alias for [GenericAggregateRepository]
+// (the type was renamed when the GORM backend began reusing it — it was never
+// memory-specific). Prefer GenericAggregateRepository in new code.
+type MemoryAggregateRepository[Root any, ID comparable] = GenericAggregateRepository[Root, ID]
+
+// NewMemoryAggregateRepository is a back-compat shim for
+// [NewGenericAggregateRepository] (a generic function cannot be a var alias).
+// Prefer NewGenericAggregateRepository in new code.
+func NewMemoryAggregateRepository[Root any, ID comparable](spec AggregateSpec[Root, ID]) *GenericAggregateRepository[Root, ID] {
+	return NewGenericAggregateRepository(spec)
 }
 
 // Load implements [AggregateRepository]: fetch the root row, then eager-load its
 // owned members.
-func (r *MemoryAggregateRepository[Root, ID]) Load(ctx context.Context, id ID) (Root, error) {
+func (r *GenericAggregateRepository[Root, ID]) Load(ctx context.Context, id ID) (Root, error) {
 	root, err := r.spec.RootRepo.Get(ctx, id)
 	if err != nil {
 		var zero Root
@@ -73,7 +89,7 @@ func (r *MemoryAggregateRepository[Root, ID]) Load(ctx context.Context, id ID) (
 // hook (D-7), then in one transaction RE-VALIDATE the optimistic-concurrency
 // precondition, apply member mutations and, on any member change, bump the root
 // etag EXACTLY once (D-5). A stale root etag surfaces as [ErrPreconditionFailed].
-func (r *MemoryAggregateRepository[Root, ID]) Save(ctx context.Context, root Root) (Root, error) {
+func (r *GenericAggregateRepository[Root, ID]) Save(ctx context.Context, root Root) (Root, error) {
 	// Domain invariant hook (pre-persist), by convention.
 	if err := ValidateAggregate(ctx, root); err != nil {
 		var zero Root
@@ -129,7 +145,7 @@ func (r *MemoryAggregateRepository[Root, ID]) Save(ctx context.Context, root Roo
 // when provided (a backend keeping the etag out-of-band, e.g. the memory repo's
 // etag map — which MUST be read tx-aware) else from EtagOf(RootRepo.Get) (a
 // backend that projects the etag into the root struct, e.g. ent).
-func (r *MemoryAggregateRepository[Root, ID]) checkPrecondition(ctx context.Context, root Root) error {
+func (r *GenericAggregateRepository[Root, ID]) checkPrecondition(ctx context.Context, root Root) error {
 	if r.spec.EtagOf == nil {
 		return nil
 	}
@@ -155,4 +171,4 @@ func (r *MemoryAggregateRepository[Root, ID]) checkPrecondition(ctx context.Cont
 }
 
 // compile-time check.
-var _ AggregateRepository[struct{}, string] = (*MemoryAggregateRepository[struct{}, string])(nil)
+var _ AggregateRepository[struct{}, string] = (*GenericAggregateRepository[struct{}, string])(nil)

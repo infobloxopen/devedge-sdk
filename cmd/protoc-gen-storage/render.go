@@ -128,6 +128,14 @@ type messageInfo struct {
 	// AIP-154 ETag: set when the message has a string `etag` field. The storage
 	// layer stamps a fresh token on every write and surfaces it on read.
 	HasETag bool
+	// F031 DDD aggregate markers (infoblox.ddd.v1). AggregateRoot is true when the
+	// message is an aggregate root (it owns members via containment edges);
+	// MemberRoot names the owning root when the message is a member. A member→root
+	// containment edge generates OnDelete: CASCADE (the root owns its members), and
+	// an aggregate root with containment members gets a Load<Root>Aggregate
+	// graph-load primitive. Mirrors protoc-gen-ent's entMessageInfo.
+	AggregateRoot bool
+	MemberRoot    string // owning aggregate root message name; "" when not a member
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -196,6 +204,127 @@ func msgForeignKeyFields(msg messageInfo) map[string]bool {
 		}
 	}
 	return fks
+}
+
+// relTargetType returns the GORM-side related message Go type name a
+// relationship field points at (e.g. "Vehicle" for a has_many Vehicle). It
+// strips the "Model" suffix assocModelType adds, so it can be compared against
+// sibling messageInfo.MessageName for containment gating.
+func relTargetType(f fieldInfo) string {
+	return strings.TrimSuffix(assocModelType(f), "Model")
+}
+
+// belongsToHasInverse reports whether child's belongs_to field bt is the inverse
+// of a sibling parent's has_many that points back at child (mirrors
+// protoc-gen-ent's belongsToInverseRef). When true the belongs_to is an inverse
+// edge whose paired has_many on the parent owns the FK constraint, so the
+// belongs_to side must NOT carry the cascade tag. parentType is bt's related
+// message Go type; siblings is the full message set in the proto file.
+func belongsToHasInverse(child messageInfo, bt fieldInfo, parentType string, siblings []messageInfo) bool {
+	if bt.BelongsTo == nil {
+		return false
+	}
+	fk := bt.BelongsTo.GetForeignKey()
+	for _, sib := range siblings {
+		if sib.MessageName != parentType {
+			continue
+		}
+		for _, pf := range sib.Fields {
+			if pf.HasMany == nil {
+				continue
+			}
+			if relTargetType(pf) != child.MessageName {
+				continue
+			}
+			if fk != "" && pf.HasMany.GetForeignKey() != "" && pf.HasMany.GetForeignKey() != fk {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// isContainmentEdge reports whether the relationship field f on msg is a DDD
+// CONTAINMENT edge — an edge between an aggregate member and its owning root, in
+// either direction (mirrors protoc-gen-ent.isContainmentEdge):
+//
+//   - msg is a member and f (a belongs_to/has_one) points at msg's declared root,
+//   - msg is the root (or has a member sibling) and f (a has_many/has_one) points
+//     at a sibling message whose member_of root is msg.
+//
+// Containment edges get OnDelete: CASCADE (the root owns its members). A
+// cross-aggregate `references` link (no association) is never a containment edge,
+// and a plain has_many/belongs_to with no ddd.v1 member declaration stays
+// uncascaded — so cascade is purely additive over the F030 GORM model.
+func isContainmentEdge(msg messageInfo, f fieldInfo, target string, siblings []messageInfo) bool {
+	if f.References != nil {
+		return false
+	}
+	// Member side: this message is a member and the belongs_to/has_one points at
+	// its declared owning root.
+	if msg.MemberRoot != "" && (f.BelongsTo != nil || f.HasOne != nil) && target == msg.MemberRoot {
+		return true
+	}
+	// Root side: this message owns at least one member and the has_many/has_one
+	// points at a sibling member whose member_of root is this message.
+	if f.HasMany != nil || f.HasOne != nil {
+		for _, sib := range siblings {
+			if sib.MessageName == target && sib.MemberRoot == msg.MessageName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// emitsCascadeOnEdge reports whether the ;constraint:OnDelete:CASCADE tag is
+// actually EMITTED on the GORM association rendered for field f (mirrors
+// protoc-gen-ent.emitsCascadeOnEdge). The constraint is attached to the
+// FK-owning side — a root's has_many/has_one association, or a STANDALONE
+// belongs_to (one with no paired has_many on the parent) — never to a belongs_to
+// INVERSE, whose paired has_many on the root already carries the cascade.
+func emitsCascadeOnEdge(msg messageInfo, f fieldInfo, siblings []messageInfo) bool {
+	target := relTargetType(f)
+	if !isContainmentEdge(msg, f, target, siblings) {
+		return false
+	}
+	switch {
+	case f.HasOne != nil, f.HasMany != nil:
+		return true
+	case f.BelongsTo != nil:
+		return !belongsToHasInverse(msg, f, target, siblings)
+	}
+	return false
+}
+
+// aggregateMember describes one owned containment edge of an aggregate root, for
+// the Load<Root>Aggregate graph-load primitive (mirrors protoc-gen-ent).
+type aggregateMember struct {
+	GoField    string // GORM/proto Go field name on the root model (e.g. "Vehicles") — Preload + e.<Field>
+	MemberType string // member proto/model Go type (e.g. "Vehicle") — fromModel_<MemberType>
+}
+
+// containmentMembers returns the owned containment members of an aggregate root —
+// its repeated has_many associations that point at a member message. references
+// and plain (non-member) relationships are excluded. Returns nil for a non-root
+// message (mirrors protoc-gen-ent.containmentMembers).
+func containmentMembers(msg messageInfo, siblings []messageInfo) []aggregateMember {
+	var out []aggregateMember
+	for _, f := range msg.Fields {
+		if f.References != nil || f.HasMany == nil {
+			continue
+		}
+		target := relTargetType(f)
+		if !isContainmentEdge(msg, f, target, siblings) {
+			continue
+		}
+		out = append(out, aggregateMember{
+			GoField:    goFieldName(f),
+			MemberType: target,
+		})
+	}
+	return out
 }
 
 // toStorageFields projects a message's fields onto the engine-neutral
@@ -360,13 +489,17 @@ func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByNam
 
 	for _, msg := range messages {
 		owner := ownerByName[msg.modelType()]
-		renderMessage(&b, msg, owner, withSecrets)
+		renderMessage(&b, msg, owner, messages, withSecrets)
 	}
 
 	return b.String()
 }
 
-func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withSecrets bool) {
+// renderMessage emits the GORM model, projection helpers and repository for one
+// message. siblings is the full set of messages in the proto file, used for F031
+// containment gating (which has_many/belongs_to edges cascade, and which root
+// gets a Load<Root>Aggregate primitive).
+func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, siblings []messageInfo, withSecrets bool) {
 	// model is the GORM model TYPE name (the owner's name). For an owner /
 	// single-surface resource this equals msg.MessageName; for a surface it is
 	// the owner's name — the struct, table, and query builder the surface reuses.
@@ -434,8 +567,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 					// has_many: a slice of the related GORM model. GORM resolves the
 					// association from the concrete element type; foreignKey names the
 					// Go field on the related model that holds this resource's key.
+					// F031: a CONTAINMENT has_many (an aggregate root → its owned
+					// members) carries OnDelete:CASCADE so deleting the root row deletes
+					// its members; a plain (non-member) has_many stays uncascaded.
 					gfn := goFieldName(f)
-					fmt.Fprintf(b, "\t%s []*%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasMany.GetForeignKey()))
+					fmt.Fprintf(b, "\t%s []*%s `gorm:\"%s\"`\n", gfn, assocModelType(f), assocTag("foreignKey:"+snakeToCamel(f.HasMany.GetForeignKey()), emitsCascadeOnEdge(owner, f, siblings)))
 					continue
 				}
 				if f.ManyToMany != nil {
@@ -448,16 +584,21 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 			}
 			if f.IsMessage {
 				if f.HasOne != nil {
+					// F031: a containment has_one (root → owned member) cascades.
 					gfn := goFieldName(f)
-					fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(f.HasOne.GetForeignKey()))
+					fmt.Fprintf(b, "\t%s *%s `gorm:\"%s\"`\n", gfn, assocModelType(f), assocTag("foreignKey:"+snakeToCamel(f.HasOne.GetForeignKey()), emitsCascadeOnEdge(owner, f, siblings)))
 					continue
 				}
 				if f.BelongsTo != nil {
 					// belongs_to: the FK lives on THIS table. Emit a concrete pointer
-					// association keyed by the FK's Go field name.
+					// association keyed by the FK's Go field name. F031: a STANDALONE
+					// containment belongs_to (no paired has_many on the parent) owns the
+					// FK and cascades; the INVERSE belongs_to (e.g. Vehicle.Fleet, paired
+					// with Fleet.Vehicles) stays uncascaded — the root's has_many carries
+					// the cascade.
 					gfn := goFieldName(f)
 					fk := f.BelongsTo.GetForeignKey()
-					fmt.Fprintf(b, "\t%s *%s `gorm:\"foreignKey:%s\"`\n", gfn, assocModelType(f), snakeToCamel(fk))
+					fmt.Fprintf(b, "\t%s *%s `gorm:\"%s\"`\n", gfn, assocModelType(f), assocTag("foreignKey:"+snakeToCamel(fk), emitsCascadeOnEdge(owner, f, siblings)))
 					// Emit the FK column field only when the proto does not already
 					// expose it as a scalar field — otherwise the field is duplicated
 					// and the generated package fails to compile.
@@ -1226,6 +1367,67 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 	// Compile-time interface check.
 	fmt.Fprintf(b, "// compile-time check.\n")
 	fmt.Fprintf(b, "var _ persistence.BatchRepository[%s, string] = (*%sRepository)(nil)\n\n", pbType, msg.MessageName)
+
+	// F031 aggregate graph-load primitive (the GORM analogue of protoc-gen-ent's
+	// renderLoadAggregate, D-2). For an aggregate ROOT that owns members via
+	// containment edges, emit Load<Root>Aggregate: eager-load the root with each
+	// containment association Preloaded in one tx-bound query and project the
+	// members onto the root's repeated proto field(s), so service code never
+	// touches the GORM client to assemble a cluster. A surface projects another
+	// model and has no root of its own, so it is skipped.
+	if members := containmentMembers(msg, siblings); msg.AggregateRoot && !msg.isSurface() && len(members) > 0 {
+		renderLoadAggregate(b, msg, model, msgHasTenantField(owner), members)
+	}
+}
+
+// renderLoadAggregate emits Load<Root>AggregateGorm(ctx, db, id): a tx-aware,
+// eager-loading graph read of the aggregate cluster (the GORM twin of the ent
+// LoadFleetAggregate). It resolves the tx-or-db from ctx (so it participates in
+// an enclosing Atomically), scopes by tenant when the root is tenant-scoped
+// (like Get), Preloads each containment association, fetches the root by id
+// (gorm.ErrRecordNotFound → persistence.ErrNotFound), projects the root via
+// fromModel_<Root> AND — because fromModel_<Root> ignores the members slice —
+// explicitly appends each preloaded member via fromModel_<Member>.
+//
+// The name carries a Gorm suffix (mirroring the Ent-suffixed ent backend
+// symbols such as fromEnt<R> / New<R>EntRepository) so the GORM and ent
+// aggregate loaders coexist in a dual-backend package: protoc-gen-ent emits the
+// plain Load<Root>Aggregate(ctx, *ent.Client, id), so a plain name here would
+// collide. A GORM-only service still gets a clearly-named loader.
+func renderLoadAggregate(b *strings.Builder, msg messageInfo, model string, hasTenant bool, members []aggregateMember) {
+	res := msg.MessageName
+	fmt.Fprintf(b, "// Load%sAggregateGorm eager-loads the %s aggregate root identified by id together\n", res, res)
+	b.WriteString("// with its owned containment members, in one tx-bound query (the F031 graph-load\n")
+	b.WriteString("// primitive, D-2). It resolves the tx-or-db from ctx so it participates in an\n")
+	b.WriteString("// enclosing Atomically. Returns persistence.ErrNotFound when no such root exists.\n")
+	fmt.Fprintf(b, "func Load%sAggregateGorm(ctx context.Context, db *gorm.DB, id string) (*%s, error) {\n", res, res)
+	// tx-or-db resolver (mirrors the per-repository conn(ctx)).
+	b.WriteString("\tq := db.WithContext(ctx)\n")
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif tx, ok := h.(*gorm.DB); ok {\n\t\t\tq = tx.WithContext(ctx)\n\t\t}\n\t}\n")
+	for _, m := range members {
+		fmt.Fprintf(b, "\tq = q.Preload(%q)\n", m.GoField)
+	}
+	fmt.Fprintf(b, "\tvar m %sModel\n", model)
+	b.WriteString("\tq = q.Where(\"id = ?\", id)\n")
+	if hasTenant {
+		// Tenant scoping mirrors Get: only the calling tenant's root is loadable.
+		b.WriteString("\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n")
+		b.WriteString("\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+	}
+	b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
+	b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n")
+	fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"load %s aggregate: %%w\", err)\n", res)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\troot := fromModel_%s(&m)\n", res)
+	// fromModel_<Root> projects only scalar columns; project the preloaded members
+	// explicitly onto the root's repeated proto field(s).
+	for _, m := range members {
+		fmt.Fprintf(b, "\tfor _, mm := range m.%s {\n", m.GoField)
+		fmt.Fprintf(b, "\t\troot.%s = append(root.%s, fromModel_%s(mm))\n", m.GoField, m.GoField, m.MemberType)
+		b.WriteString("\t}\n")
+	}
+	b.WriteString("\treturn root, nil\n}\n\n")
 }
 
 // assocModelType returns the GORM model type name a relationship field points at
@@ -1238,6 +1440,17 @@ func assocModelType(f fieldInfo) string {
 		t = strings.TrimPrefix(strings.TrimPrefix(f.GoType, "[]"), "*")
 	}
 	return t + "Model"
+}
+
+// assocTag builds the GORM struct-tag body for a relationship field: the base
+// association tag (e.g. "foreignKey:FleetId") plus, when cascade is true, the
+// F031 OnDelete:CASCADE constraint so deleting an aggregate root row deletes its
+// owned members at the DB level. GORM applies the constraint during AutoMigrate.
+func assocTag(base string, cascade bool) string {
+	if cascade {
+		return base + ";constraint:OnDelete:CASCADE"
+	}
+	return base
 }
 
 // snakeToCamel converts a snake_case string to CamelCase (e.g. "user_id" → "UserId").
