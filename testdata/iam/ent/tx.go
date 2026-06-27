@@ -18,6 +18,8 @@ type Tx struct {
 	ApiKey *ApiKeyClient
 	// Group is the client for interacting with the Group builders.
 	Group *GroupClient
+	// IdemMarker is the client for interacting with the IdemMarker builders.
+	IdemMarker *IdemMarkerClient
 	// Membership is the client for interacting with the Membership builders.
 	Membership *MembershipClient
 	// Outbox is the client for interacting with the Outbox builders.
@@ -158,6 +160,7 @@ func (tx *Tx) init() {
 	tx.Account = NewAccountClient(tx.config)
 	tx.ApiKey = NewApiKeyClient(tx.config)
 	tx.Group = NewGroupClient(tx.config)
+	tx.IdemMarker = NewIdemMarkerClient(tx.config)
 	tx.Membership = NewMembershipClient(tx.config)
 	tx.Outbox = NewOutboxClient(tx.config)
 	tx.User = NewUserClient(tx.config)

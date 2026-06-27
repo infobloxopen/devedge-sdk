@@ -24,6 +24,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
 	"github.com/infobloxopen/devedge-sdk/secret"
 	entiam "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
+	entoutbox "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/iamv1"
 )
 
@@ -227,6 +228,110 @@ func TestPG_Gorm_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
 	// marker INSERT conflicts rolls its tx back AFTER the body ran, so effects may be
 	// 1 or 2; the single committed marker (asserted above) is what proves the effect
 	// applied exactly once. effects must be at least 1 (someone delivered).
+	if effects < 1 {
+		t.Fatalf("at least one dispatcher must have delivered the event, got %d", effects)
+	}
+}
+
+// TestPG_Ent_ExactlyOnceUnderConcurrentDispatch is the headline ent-path proof on
+// real Postgres and the gap-closer this work delivers: two dispatchers race to
+// deliver the SAME event concurrently on the ENT backend, now wired to the
+// SQL-backed EntIdempotencyStore instead of the in-memory MemoryIdempotencyStore.
+// The marker INSERT runs INSIDE the handler's *ent.Tx, so on Postgres exactly one
+// delivery commits its effect (revoking the key + the marker) and the other
+// collides on the marker's UNIQUE primary key — a real engine-level conflict,
+// surfaced as events.ErrAlreadyApplied — and rolls its whole tx back. This is the
+// race SQLite cannot genuinely exhibit (it serializes writers); here the marker
+// and the effect are one atomic unit on the production engine, so the orphan-marker
+// window the in-memory store left on the ent path is closed.
+func TestPG_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
+	client := openIAMEntPG(t)
+	ctx := tenantCtx("acme")
+	enc := secret.NewDev([]byte("0123456789abcdef0123456789abcdef"))
+
+	users := iamv1.NewUserEntRepository(client)
+	apiKeys := iamv1.NewApiKeyEntRepository(client, enc)
+	tx := iamv1.NewEntTxRunner(client)
+	store := iamv1.NewEntOutboxStore(client, 0)
+	pub := events.NewOutboxPublisher(store)
+
+	if _, err := users.Create(ctx, &iamv1.User{Id: "u1", Email: "u1@acme.test", DisplayName: "Alice"}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := apiKeys.Create(ctx, &iamv1.ApiKey{Id: "k1", UserId: "u1", KeyValue: "tok1", KeyPrefix: "k1"}); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+	if err := suspendUser(ctx, tx, users, pub, "u1"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	var mu sync.Mutex
+	committedEffects := 0
+	revoke := revokeKeysHandler(client, apiKeys)
+	idem := iamv1.NewEntIdempotencyStore(client)
+	mkDispatcher := func() *events.Dispatcher {
+		d := events.NewDispatcher(store, tx, idem)
+		d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
+			if err := revoke(hctx, evt); err != nil {
+				return err
+			}
+			mu.Lock()
+			committedEffects++
+			mu.Unlock()
+			return nil
+		})
+		return d
+	}
+
+	// Make the row claimable by both racers (clear the lease + delivered) so they
+	// genuinely contend for the same delivery.
+	if _, err := client.Outbox.Update().
+		ClearDeliveredTime().
+		ClearLeasedUntil().
+		Save(ctx); err != nil {
+		t.Fatalf("reset lease: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// A racer that hits the marker conflict / a busy row is acceptable
+			// (at-least-once: the row stays for retry); exactly-once is asserted on the
+			// live key count and the committed-marker count below.
+			_, _ = mkDispatcher().RunOnce(ctx, 10)
+		}()
+	}
+	wg.Wait()
+
+	// Exactly-once: the key is revoked and stays revoked...
+	if remaining, _, _ := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10}); len(remaining) != 0 {
+		t.Fatalf("the key must be revoked exactly once and stay revoked, %d present", len(remaining))
+	}
+	// ...and a surviving undelivered row would be re-delivered later; drive a
+	// convergence pass so the row is terminal before asserting on the marker count.
+	if undelivered, _ := client.Outbox.Query().Where(entoutbox.DeliveredTimeIsNil()).Count(ctx); undelivered != 0 {
+		if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
+			t.Fatalf("convergence pass: %v", err)
+		}
+	}
+	// The handler effect committed exactly once: the committed idempotency marker is
+	// unique per (event, handler), so a single marker row in the table is the
+	// engine-level proof that exactly one delivery committed (F032 AC-2).
+	markers, err := client.IdemMarker.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count idempotency markers: %v", err)
+	}
+	if markers != 1 {
+		t.Fatalf("exactly-once: exactly one idempotency marker must commit across the two racers, found %d", markers)
+	}
+	mu.Lock()
+	effects := committedEffects
+	mu.Unlock()
+	// A loser whose marker INSERT conflicts rolls its tx back AFTER the body ran, so
+	// effects may be 1 or 2; the single committed marker (above) is what proves the
+	// effect applied exactly once. effects must be at least 1 (someone delivered).
 	if effects < 1 {
 		t.Fatalf("at least one dispatcher must have delivered the event, got %d", effects)
 	}

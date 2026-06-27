@@ -3,6 +3,7 @@ package iamv1_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite" // register SQLite driver for enttest
@@ -109,7 +110,10 @@ func TestAC3_UserSuspendedRevokesKeysEventually(t *testing.T) {
 	}
 
 	// Dispatch: the registered handler revokes the keys in its OWN aggregate tx.
-	d := events.NewDispatcher(store, tx, events.NewMemoryIdempotencyStore())
+	// The idempotency store is the SQL-backed EntIdempotencyStore, so the marker
+	// commits with the handler's revoke in one ent transaction (the ent path is now
+	// genuinely transactional, not the in-memory store).
+	d := events.NewDispatcher(store, tx, iamv1.NewEntIdempotencyStore(client))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandler(client, apiKeys))
 	delivered, err := d.RunOnce(ctx, 10)
 	if err != nil {
@@ -251,7 +255,7 @@ func TestTenantIsolation_DispatchScopesHandlerToEventTenant(t *testing.T) {
 
 	// Dispatch with a BACKGROUND ctx that has NO tenant — modelling a real poller.
 	bg := context.Background()
-	d := events.NewDispatcher(store, tx, events.NewMemoryIdempotencyStore())
+	d := events.NewDispatcher(store, tx, iamv1.NewEntIdempotencyStore(client))
 	d.Subscribe(eventUserSuspended, "revoke-api-keys", revokeKeysHandler(client, apiKeys))
 	if _, err := d.RunOnce(bg, 10); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -268,5 +272,162 @@ func TestTenantIsolation_DispatchScopesHandlerToEventTenant(t *testing.T) {
 	}
 	if len(globexKeys) != 1 {
 		t.Fatalf("globex's key must NOT be revoked by acme's event (cross-tenant leak), %d remain", len(globexKeys))
+	}
+}
+
+// TestAC2_Ent_RecordRollsBackWithHandlerTx proves the gap-closer at the store
+// level: the SQL-backed EntIdempotencyStore marker is GENUINELY part of the
+// handler's ent transaction (the orphan-marker window the in-memory store leaves
+// is now closed). A handler writes its effect AND records the marker, then fails;
+// the marker rolls back WITH the effect, so it does not survive on the base client
+// and a fresh Record of the same key succeeds. This is the property the in-memory
+// store could not give the ent path: the marker and the effect are one atomic unit.
+func TestAC2_Ent_RecordRollsBackWithHandlerTx(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:iam_idem_rollback?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+	ctx := tenantCtx("acme")
+
+	users := iamv1.NewUserEntRepository(client)
+	tx := iamv1.NewEntTxRunner(client)
+	idem := iamv1.NewEntIdempotencyStore(client)
+
+	if _, err := users.Create(ctx, &iamv1.User{Id: "u1", Email: "u1@acme.test"}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	const key = "evt-rollback\x1fhandler"
+	boom := errors.New("handler failed after recording")
+
+	// A handler that mutates the user (the effect) AND records the marker, then fails.
+	err := tx.Atomically(ctx, func(ctx context.Context) error {
+		u, _ := users.Get(ctx, "u1")
+		u.DisplayName = "changed"
+		if _, uerr := users.Update(ctx, "u1", u, "display_name"); uerr != nil {
+			return uerr
+		}
+		if rerr := idem.Record(ctx, key); rerr != nil {
+			return rerr
+		}
+		return boom // roll back BOTH the effect and the marker
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("expected boom, got %v", err)
+	}
+
+	// The effect rolled back...
+	if got, _ := users.Get(ctx, "u1"); got.GetDisplayName() == "changed" {
+		t.Fatal("the user change must have rolled back with the marker")
+	}
+	// ...and so did the marker: Seen is false, no orphan on the base client.
+	if seen, _ := idem.Seen(ctx, key); seen {
+		t.Fatal("a rolled-back Record must NOT leave a durable marker (orphan-marker window)")
+	}
+	// A fresh Record of the same key now succeeds — proving nothing leaked.
+	if rerr := tx.Atomically(ctx, func(ctx context.Context) error {
+		return idem.Record(ctx, key)
+	}); rerr != nil {
+		t.Fatalf("a fresh Record after a rolled-back attempt must succeed, got %v", rerr)
+	}
+	// And a SECOND Record of that now-committed key collides on the PK and maps to
+	// ErrAlreadyApplied — the in-tx unique guard that serializes a double-apply.
+	dupErr := tx.Atomically(ctx, func(ctx context.Context) error {
+		return idem.Record(ctx, key)
+	})
+	if !errors.Is(dupErr, events.ErrAlreadyApplied) {
+		t.Fatalf("duplicate Record must return ErrAlreadyApplied, got %v", dupErr)
+	}
+}
+
+// TestAC2_Ent_ExactlyOnceUnderConcurrentDispatch is the functional (sqlite) twin
+// of TestPG_Ent_ExactlyOnceUnderConcurrentDispatch: two dispatchers race to deliver
+// the SAME event. The SQL-backed EntIdempotencyStore records the (event, handler)
+// marker INSIDE the handler's ent transaction, so exactly one delivery commits its
+// effect and the other is short-circuited (the Seen fast-path or the in-tx PK
+// conflict). The invariant is exactly-once: the user's key is revoked once and
+// stays revoked, and exactly one idempotency marker commits.
+//
+// SQLite serializes writers, so this proves the ent path is functionally correct;
+// the genuine concurrent UNIQUE race is exercised on real Postgres in postgres_events_test.go.
+func TestAC2_Ent_ExactlyOnceUnderConcurrentDispatch(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:iam_idem_conc?mode=memory&cache=shared&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+	ctx := tenantCtx("acme")
+	enc := secret.NewDev([]byte("0123456789abcdef0123456789abcdef"))
+
+	users := iamv1.NewUserEntRepository(client)
+	apiKeys := iamv1.NewApiKeyEntRepository(client, enc)
+	tx := iamv1.NewEntTxRunner(client)
+	store := iamv1.NewEntOutboxStore(client, 0)
+	pub := events.NewOutboxPublisher(store)
+
+	if _, err := users.Create(ctx, &iamv1.User{Id: "u1", Email: "u1@acme.test", DisplayName: "Alice"}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := apiKeys.Create(ctx, &iamv1.ApiKey{Id: "k1", UserId: "u1", KeyValue: "tok1", KeyPrefix: "k1"}); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+	if err := suspendUser(ctx, tx, users, pub, "u1"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	var mu sync.Mutex
+	committedEffects := 0
+	revoke := revokeKeysHandler(client, apiKeys)
+	idem := iamv1.NewEntIdempotencyStore(client)
+	mkDispatcher := func() *events.Dispatcher {
+		d := events.NewDispatcher(store, tx, idem)
+		d.Subscribe(eventUserSuspended, "revoke-api-keys", func(hctx context.Context, evt events.Event) error {
+			if err := revoke(hctx, evt); err != nil {
+				return err
+			}
+			mu.Lock()
+			committedEffects++
+			mu.Unlock()
+			return nil
+		})
+		return d
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// A racer that hits the marker conflict / a busy row is acceptable
+			// (at-least-once: the row stays for retry); exactly-once is asserted below.
+			_, _ = mkDispatcher().RunOnce(ctx, 10)
+		}()
+	}
+	wg.Wait()
+
+	// Exactly-once: the key is revoked and stays revoked.
+	if remaining, _, _ := apiKeys.List(ctx, persistence.ListOptions{Filter: `user_id = "u1"`, PageSize: 10}); len(remaining) != 0 {
+		t.Fatalf("the key must be revoked exactly once and stay revoked, %d present", len(remaining))
+	}
+	// A surviving undelivered row would be re-delivered by a later poll; drive one
+	// more pass so the row is terminal before asserting on the marker count.
+	if undelivered, _ := client.Outbox.Query().Where(entoutbox.DeliveredTimeIsNil()).Count(ctx); undelivered != 0 {
+		if _, err := mkDispatcher().RunOnce(ctx, 10); err != nil {
+			t.Fatalf("convergence pass: %v", err)
+		}
+	}
+	// Exactly one idempotency marker committed across the two racers: the marker is
+	// unique per (event, handler), so a single marker row is the engine-level proof
+	// that exactly one delivery committed its effect.
+	markers, err := client.IdemMarker.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count idempotency markers: %v", err)
+	}
+	if markers != 1 {
+		t.Fatalf("exactly-once: exactly one idempotency marker must commit, found %d", markers)
+	}
+	mu.Lock()
+	effects := committedEffects
+	mu.Unlock()
+	// A loser whose marker INSERT conflicts rolls its tx back AFTER the body ran, so
+	// effects may be 1 or 2; the single committed marker (above) is what proves the
+	// effect applied exactly once. At least one racer must have delivered.
+	if effects < 1 {
+		t.Fatalf("at least one dispatcher must have delivered the event, got %d", effects)
 	}
 }
