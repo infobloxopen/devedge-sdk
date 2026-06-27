@@ -13,6 +13,8 @@ import (
 // to their package variables.
 func init() {
 	fleetMixin := schema.Fleet{}.Mixin()
+	fleetMixinHooks2 := fleetMixin[2].Hooks()
+	fleet.Hooks[0] = fleetMixinHooks2[0]
 	fleetMixinInters0 := fleetMixin[0].Interceptors()
 	fleetMixinInters1 := fleetMixin[1].Interceptors()
 	fleet.Interceptors[0] = fleetMixinInters0[0]

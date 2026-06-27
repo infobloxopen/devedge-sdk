@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
@@ -175,6 +176,11 @@ type fieldInfo struct {
 	HasMany    *fieldv1.HasMany
 	BelongsTo  *fieldv1.BelongsTo
 	ManyToMany *fieldv1.ManyToMany
+	// F031 DDD: cross-aggregate link (infoblox.ddd.v1.references). GORM aggregate
+	// support is a non-goal — the field is dropped from the model (only the sibling
+	// scalar FK persists); this is captured solely so the field is treated as
+	// relationship-mapped by the fail-closed coverage check (GORM keeps building).
+	References *dddv1.References
 }
 
 // msgForeignKeyFields returns the set of snake_case scalar field names that are
@@ -208,7 +214,11 @@ func toStorageFields(msg messageInfo) []storagegen.Field {
 			IsRepeated:     f.IsRepeated,
 			IsMessage:      f.IsMessage,
 			IsEnum:         f.IsEnum,
-			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil,
+			// A references field (cross-aggregate link) is treated as relationship-
+			// mapped: the message field is dropped from the GORM model (only its
+			// sibling scalar FK persists), so without this it would be flagged an
+			// unmapped nested message and break the GORM fixture build (non-goal).
+			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil || f.References != nil,
 			IsScalarFK:     fks[f.SnakeName] || fks[f.Name],
 			HasColumnType:  f.GoType != "" && f.GoType != "interface{}",
 		})
@@ -457,6 +467,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, withS
 							fmt.Fprintf(b, "\t%s string `gorm:\"column:%s\"`\n", fkGoName, fk)
 						}
 					}
+					continue
+				}
+				if f.References != nil {
+					// F031: cross-aggregate link (ddd.v1.references). GORM aggregate
+					// support is a non-goal: emit NO association — the sibling scalar FK
+					// column declared by the proto author carries the link.
+					fmt.Fprintf(b, "\t// %s is a cross-aggregate reference (ddd.v1.references), not a GORM association; the scalar %s column carries the link\n", f.Name, f.References.GetForeignKey())
 					continue
 				}
 				fmt.Fprintf(b, "\t// TODO: nested message %s skipped — serialization strategy TBD (W5-6)\n", f.Name)

@@ -10,11 +10,13 @@ be added once the order is SHIPPED"); a group and its memberships ("a group must
 admin"). The invariant spans more than one resource, so it cannot live on any single
 resource's CRUD handler.
 
-> **Status.** This page is a decision guide. The transaction seam this builds on ships
-> today — see [Transactions](../transactions/). The full aggregate machinery (the
-> `infoblox.ddd.v1` annotations, `AggregateRepository`, the fail-closed boundary gate, and
-> member write-redirection) is a sequenced follow-up; the forward pointer at the bottom
-> tracks it.
+> **Status.** The aggregate machinery ships today on top of the
+> [transaction seam](../transactions/): the SDK-owned `infoblox.ddd.v1` annotations
+> (`aggregate` / `member` / `references`), an `AggregateRepository[Root, ID]` with
+> `Load`/`Save`, a fail-closed boundary gate at `Serve`, member write-redirection in the
+> generated handlers, cascade-on-delete for owned members, and `etag`-as-aggregate-version.
+> Backends: ent and in-memory. GORM aggregate support is a non-goal (a `references` field is
+> emitted as a plain scalar FK so the GORM backend keeps building).
 
 ## The decision test: is this an aggregate?
 
@@ -40,37 +42,122 @@ Rule of thumb: **partition, don't aggregate, for scale.** A tenant (`account_id`
 *partition*, not an aggregate root — it scopes queries, it does not enforce a cross-entity
 write invariant. High-cardinality children should be their own aggregate, referenced by ID.
 
-## Atomic check-then-write today
+## Declaring an aggregate
 
-Until the aggregate machinery lands, the invariant is enforced with the transaction seam
-directly: load the root, check the invariant, write the member — atomically. See the
-[atomic check-then-write recipe](../transactions/#atomic-check-then-write-recipe).
+The boundary is declared with the SDK-owned `infoblox.ddd.v1` annotations (generated
+locally, in-repo — see [annotations](../annotations/)):
 
-```go
-err := txRunner.Atomically(ctx, func(ctx context.Context) error {
-    order, err := orders.Get(ctx, orderID)
-    if err != nil {
-        return err
-    }
-    if order.State == "SHIPPED" {
-        return status.Error(codes.FailedPrecondition, "order is shipped; cannot add items")
-    }
-    _, err = items.Create(ctx, item)
-    return err
-})
+```protobuf
+import "infoblox/ddd/v1/ddd.proto";
+
+// Order is the aggregate ROOT.
+message Order {
+  option (infoblox.ddd.v1.aggregate) = {root: true};
+
+  string id    = 1;
+  string state = 2;
+  // Containment: the owned line items. has_many keeps the traversable edge.
+  repeated Item items = 3 [(infoblox.field.v1.opts) = {has_many: {foreign_key: "order_id"}}];
+  string etag  = 4 [(google.api.field_behavior) = OUTPUT_ONLY]; // the aggregate version
+}
+
+// Item is a MEMBER owned by Order. Written THROUGH the root, addressable for reads.
+message Item {
+  option (infoblox.ddd.v1.member) = {root: "Order"};
+
+  string id       = 1;
+  string order_id = 2;
+  Order  order    = 3 [(infoblox.field.v1.opts) = {belongs_to: {foreign_key: "order_id"}}];
+}
 ```
 
-## Coming next
+What the generators do with this:
 
-A future release adds the SDK-owned aggregate machinery on top of this seam:
+- **Containment → cascade.** The `Order`→`Item` foreign key is emitted with
+  `OnDelete: Cascade` (the root owns its members; deleting the order deletes its items).
+  A plain `has_many`/`belongs_to` with no `member` declaration keeps the default action,
+  so this is opt-in.
+- **`references` → ID-only link.** A cross-aggregate pointer uses
+  `(infoblox.ddd.v1.references) = {aggregate: "User", foreign_key: "user_id"}` on a
+  message-typed field. It emits a **scalar FK + ID and NO traversable edge** — code cannot
+  walk or mutate across roots. (Contrast `belongs_to`/`has_many`, which are within-aggregate
+  containment edges.) Its FK stays restrict/`SetNull`, never cascade — a reference is not
+  ownership.
+- **Member write-redirection.** A member service's write-capable standard methods
+  (Create/Update/Delete/Undelete) are generated as gRPC `Unimplemented` ("route through the
+  root"); `Get`/`List` keep delegating to the repository.
+- **Fail-closed boundary gate.** At `Serve`, `AssertAggregateBoundaries` runs beside the
+  authz completeness gate: a member resource that registers a write-capable method **fails
+  closed** with a clear error (the same instinct as the authz gate — an undeclared method is
+  denied). Removing the write RPC (keeping only `Get`/`List`) serves.
 
-- `infoblox.ddd.v1` annotations (`aggregate` / `member`) and an ID-only `references`
-  annotation, generated locally in-repo;
-- an `AggregateRepository[Root, ID]` with `Load`/`Save`;
-- a **fail-closed boundary gate** at `Serve` (a member with no declared root is a boot
-  error — the same instinct as the authz completeness gate);
-- **member write-redirection** in the generated handlers (a member's direct
-  Create/Update/Delete is suppressed — "route through the root");
-- cascade-on-delete for owned members, and `etag`-as-aggregate-version.
+## Load and Save: the aggregate as one unit
 
-Until then, model aggregates with the transaction seam and the decision test above.
+An `AggregateRepository[Root, ID]` loads and saves the cluster as a consistency unit:
+
+```go
+root, err := orderAgg.Load(ctx, orderID)   // root + its items, eager-loaded in one read
+// ... a domain method mutates the cluster (add/remove/change a member) ...
+saved, err := orderAgg.Save(ctx, root)     // one tx; member mutations + a single etag bump
+```
+
+- **Load** uses a generated graph-load primitive (`Load<Root>Aggregate`) that eager-loads
+  the declared containment edges — service code never touches the ent client.
+- **Save** runs in one `Atomically` transaction (commit-or-rollback as a unit), tracks
+  **member mutations** (added/removed/changed members), runs the root's optional
+  `Validate(ctx) error` invariant hook before persisting, and bumps the **root etag exactly
+  once** on any member change. The root etag is the **aggregate version**: a stale version
+  (the caller holds an old etag) fails the `Save` with `ErrPreconditionFailed`.
+
+### Domain invariants — the `Validate` hook
+
+A root type that implements `Validate(ctx) error` (by convention) has it called by `Save`
+before any persist. Put it in a regen-safe owned file beside the generated code:
+
+```go
+// order_behavior.go (owned, not generated)
+func (o *Order) Validate(_ context.Context) error {
+    if o.State == "SHIPPED" && len(o.Items) > 0 {
+        return status.Error(codes.FailedPrecondition, "order is shipped; cannot change items")
+    }
+    return nil
+}
+```
+
+A violated invariant rejects the `Save` (no partial write); the error maps to a gRPC code
+via the error mapper.
+
+## Multi-surface: a read-only projection of a member is NOT a member write
+
+A member resource may have several read surfaces — for example a WS-005 read-only
+projection (a `LookupBy<Hash>` or a summary view that shares the member's table). These are
+**reads**: they carry no write authority, so the boundary gate does **not** treat them as a
+member write. Only a registered write-capable standard method on the member trips the gate.
+Auth lookups follow the same rule: resolve an API key by its hashed secret via a projection
+(`LookupBy<Field>Hash`), **not** by loading the owning aggregate.
+
+## Worked example: IAM
+
+`testdata/iam` proves the shape end to end:
+
+- **`account_id` is the tenant partition**, not an aggregate root — it scopes queries
+  (`TenantMixin`) and does not enforce a cross-entity write invariant.
+- **`Group` is an aggregate root that owns its `Membership` members** (the rule-holding
+  aggregate: "≥1 admin" lives inside the group's boundary). Memberships are written through
+  the group; the group→membership FK cascades on delete.
+- **`ApiKey` is its own aggregate that references a `User`** via
+  `ddd.v1.references` — a scalar `user_id` FK, no edge into the user aggregate.
+- **Auth lookup is a projection** (`LookupByKeyValueHash` on the secret), never an aggregate
+  load.
+
+## Caveats
+
+- The boundary gate guards the **registered transport surface**. A handler that reaches into
+  the ent client directly bypasses it — the same caveat class as the authz gate. Keep `Save`
+  the sole write path for the aggregate.
+- **One root per `Save`.** Cross-aggregate consistency is eventual — via the
+  [transactional outbox + domain events](../events/) seam (`events.Publisher` /
+  `events.Dispatcher`), not a two-aggregate transaction. Link across aggregates by
+  `references` (ID only); *react* across them with events.
+- **Keep aggregates small.** A high-cardinality `has_many` eager-loaded on every `Load` is
+  the main anti-pattern — make such children their own aggregate, referenced by ID.

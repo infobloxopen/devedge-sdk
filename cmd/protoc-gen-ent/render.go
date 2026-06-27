@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
@@ -27,7 +28,11 @@ func toStorageFields(msg entMessageInfo) []storagegen.Field {
 			IsRepeated:     f.IsRepeated,
 			IsMessage:      f.IsMessage,
 			IsEnum:         f.IsEnum,
-			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil,
+			// A references field (cross-aggregate link) is wirable like a
+			// relationship for the F027 coverage check: its message field is dropped
+			// (no edge), only its scalar foreign_key column is persisted. Without
+			// this it would be flagged an unmapped nested message and fail codegen.
+			IsRelationship: f.HasOne != nil || f.HasMany != nil || f.BelongsTo != nil || f.ManyToMany != nil || f.References != nil,
 			IsScalarFK:     fks[f.SnakeName] || fks[f.Name],
 			HasColumnType:  f.EntType != "",
 		})
@@ -80,6 +85,12 @@ type entMessageInfo struct {
 	HasExpireTime   bool   // true when the message has an expire_time OUTPUT_ONLY Timestamp field (AIP-148)
 	HasETag         bool   // true when the message has a string `etag` field (AIP-154); supplied by EtagMixin
 	ResourcePattern string // AIP-122 resource name pattern from (google.api.resource), e.g. "apikeys/{api_key}"
+	// F031 DDD aggregate markers (infoblox.ddd.v1). AggregateRoot is true when the
+	// message is an aggregate root; MemberRoot names the owning root when the
+	// message is a member (a containment relationship). A member→root containment
+	// edge generates OnDelete: Cascade (the root owns its members).
+	AggregateRoot bool
+	MemberRoot    string // owning aggregate root message name; "" when not a member
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -143,6 +154,12 @@ type entFieldInfo struct {
 	HasMany    *fieldv1.HasMany
 	BelongsTo  *fieldv1.BelongsTo
 	ManyToMany *fieldv1.ManyToMany
+	// F031 DDD: References is a CROSS-aggregate link (infoblox.ddd.v1.references):
+	// a scalar FK + ID and NO traversable edge. The message-kind field carrying it
+	// is dropped from Fields() and Edges() — only its foreign_key scalar column
+	// (declared as a sibling scalar field) is persisted. Its FK stays restrict/
+	// SetNull (NOT cascade — cross-aggregate links are not owned).
+	References *dddv1.References
 }
 
 // msgHasTenantField reports whether the message has an account_id field, which
@@ -275,6 +292,71 @@ func belongsToInverseRef(child entMessageInfo, bt entFieldInfo, parentType strin
 	return "", false
 }
 
+// isContainmentEdge reports whether the relationship field f on msg is a DDD
+// CONTAINMENT edge — an edge between an aggregate member and its owning root, in
+// either direction:
+//
+//   - msg is a member and f (a belongs_to/has_one) points at msg's declared root,
+//   - msg is the root (or has a member sibling) and f (a has_many/has_one) points
+//     at a sibling message whose member_of root is msg.
+//
+// Containment edges get OnDelete: Cascade (the root owns its members). A
+// cross-aggregate `references` link (no edge) stays restrict/SetNull, and a plain
+// has_many/belongs_to with no ddd.v1 member declaration keeps ent's default
+// referential action (unchanged), so this is purely additive.
+func isContainmentEdge(msg entMessageInfo, f entFieldInfo, target string, siblings []entMessageInfo) bool {
+	// Member side: this message is a member and the belongs_to/has_one points at
+	// its declared owning root.
+	if msg.MemberRoot != "" && (f.BelongsTo != nil || f.HasOne != nil) && target == msg.MemberRoot {
+		return true
+	}
+	// Root side: this message owns at least one member and the has_many/has_one
+	// points at a sibling member whose member_of root is this message.
+	if f.HasMany != nil || f.HasOne != nil {
+		for _, sib := range siblings {
+			if sib.MessageName == target && sib.MemberRoot == msg.MessageName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// emitsCascadeOnEdge reports whether the OnDelete(Cascade) annotation is actually
+// EMITTED on the edge rendered for field f (not merely that f is a containment
+// edge). The annotation is attached to the FK-owning assoc/forward edge.To side —
+// a has_many/has_one assoc edge, or a STANDALONE belongs_to forward edge — never
+// to an inverse belongs_to (edge.From), whose paired has_many carries it. This
+// must mirror the Edges() emission switch exactly so the entsql import is added
+// iff at least one annotation is written (an unused import fails entc).
+func emitsCascadeOnEdge(msg entMessageInfo, f entFieldInfo, siblings []entMessageInfo) bool {
+	target := edgeTargetType(f)
+	if !isContainmentEdge(msg, f, target, siblings) {
+		return false
+	}
+	switch {
+	case f.HasOne != nil, f.HasMany != nil:
+		return true
+	case f.BelongsTo != nil:
+		// Annotated only when it is a STANDALONE forward edge (no inverse has_many).
+		_, hasInverse := belongsToInverseRef(msg, f, target, siblings)
+		return !hasInverse
+	}
+	return false
+}
+
+// msgHasContainmentEdge reports whether msg actually EMITS at least one
+// OnDelete(Cascade) annotation, so renderEntSchema imports entgo.io/ent/dialect/
+// entsql only when it is used (an unused import fails entc codegen).
+func msgHasContainmentEdge(msg entMessageInfo, siblings []entMessageInfo) bool {
+	for _, f := range msg.Fields {
+		if emitsCascadeOnEdge(msg, f, siblings) {
+			return true
+		}
+	}
+	return false
+}
+
 // renderEntSchema generates the ent/schema/<snake>.go content for a single
 // resource message. siblings is the full set of resource messages in the proto
 // file, used to pair a belongs_to with its parent's has_many as a proper ent
@@ -291,6 +373,7 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	hasIndex := msgHasIndexField(msg)
 	hasTenantUnique := msgHasTenantUnique(msg)
 	hasEdges := msgHasEdges(msg)
+	hasCascade := msgHasContainmentEdge(msg, siblings)
 
 	// A resource that is BOTH soft-delete and per-tenant `unique` needs special
 	// handling so a unique key can be re-created after the holding row is
@@ -321,8 +404,10 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	if hasSecret || hasIndex || hasTenantUnique {
 		b.WriteString("\t\"entgo.io/ent/schema/index\"\n")
 	}
-	if usePartial {
-		// entsql.IndexWhere builds the partial unique index (PostgreSQL/SQLite).
+	if usePartial || hasCascade {
+		// entsql.IndexWhere builds the partial unique index (PostgreSQL/SQLite);
+		// entsql.OnDelete(entsql.Cascade) sets the referential action on a DDD
+		// containment edge (the aggregate root owns its members).
 		b.WriteString("\t\"entgo.io/ent/dialect/entsql\"\n")
 	}
 	if hasTenant || hasSoftDelete || msg.HasETag {
@@ -391,6 +476,12 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 				// Relationships are in Edges() — not a field.
 				continue
 			}
+			if f.References != nil {
+				// F031: cross-aggregate link. The message field is dropped (no edge,
+				// no column); only the scalar foreign_key column — declared as a
+				// sibling scalar field by the proto author — is persisted.
+				continue
+			}
 			fmt.Fprintf(&b, "\t\t// TODO: nested message %s skipped\n", f.Name)
 		case f.IsSecret:
 			// Secret fields are never stored as plaintext: a lookup hash and a
@@ -442,24 +533,42 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 		fmt.Fprintf(&b, "// Edges defines the edges (relationships) of %s.\n", msg.MessageName)
 		fmt.Fprintf(&b, "func (%s) Edges() []ent.Edge {\n", msg.MessageName)
 		b.WriteString("\treturn []ent.Edge{\n")
+		// cascadeAnno appends OnDelete: Cascade to a containment edge that OWNS the
+		// FK constraint definition (the assoc/forward edge.To side). The inverse
+		// edge.From(...).Ref(...) side must NOT also carry it — ent would see two
+		// referential actions for one FK. So we attach it to the root's has_many/
+		// has_one assoc edge and to a STANDALONE belongs_to forward edge, never to
+		// an inverse belongs_to (its paired has_many on the root carries it).
+		cascadeAnno := ".Annotations(entsql.OnDelete(entsql.Cascade))"
 		for _, f := range msg.Fields {
 			ename := edgeName(f.Name)
 			target := edgeTargetType(f)
+			cascade := emitsCascadeOnEdge(msg, f, siblings)
 			switch {
 			case f.HasOne != nil:
 				// One-to-one, FK on the associated table: a required unique edge.
-				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type).Unique().Required(),\n", ename, target)
+				line := fmt.Sprintf("edge.To(\"%s\", %s.Type).Unique().Required()", ename, target)
+				if cascade {
+					line += cascadeAnno
+				}
+				fmt.Fprintf(&b, "\t\t%s,\n", line)
 			case f.HasMany != nil:
 				// The "one" side of one-to-many owns the assoc edge; the child's
-				// belongs_to is its inverse (edge.From below).
-				fmt.Fprintf(&b, "\t\tedge.To(\"%s\", %s.Type),\n", ename, target)
+				// belongs_to is its inverse (edge.From below). A containment has_many
+				// (root → owned members) carries OnDelete: Cascade here.
+				line := fmt.Sprintf("edge.To(\"%s\", %s.Type)", ename, target)
+				if cascade {
+					line += cascadeAnno
+				}
+				fmt.Fprintf(&b, "\t\t%s,\n", line)
 			case f.BelongsTo != nil:
 				fk := f.BelongsTo.GetForeignKey()
 				if ref, ok := belongsToInverseRef(msg, f, target, siblings); ok {
 					// Inverse of the parent's has_many. .Field binds the edge's FK to
 					// the scalar FK column the proto exposes, so ent emits a single
 					// Set<FK> setter (declaring both a scalar field and the edge would
-					// otherwise collide on the by-ID setter name).
+					// otherwise collide on the by-ID setter name). The paired has_many
+					// on the parent owns the OnDelete action, so none is added here.
 					line := fmt.Sprintf("edge.From(\"%s\", %s.Type).Ref(\"%s\").Unique()", ename, target, ref)
 					if fk != "" && msgHasScalarField(msg, fk) {
 						line += fmt.Sprintf(".Field(\"%s\")", fk)
@@ -469,9 +578,13 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 					// No matching has_many on the parent: a self-contained forward
 					// edge that needs no counterpart and compiles standalone. Bind
 					// the scalar FK when present so the by-ID setter does not collide.
+					// A standalone containment belongs_to owns its FK, so cascade here.
 					line := fmt.Sprintf("edge.To(\"%s\", %s.Type).Unique()", ename, target)
 					if fk != "" && msgHasScalarField(msg, fk) {
 						line += fmt.Sprintf(".Field(\"%s\")", fk)
+					}
+					if cascade {
+						line += cascadeAnno
 					}
 					fmt.Fprintf(&b, "\t\t%s,\n", line)
 				}
@@ -1310,6 +1423,83 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		fmt.Fprintf(&b, "\treturn fromEnt%s(e), nil\n}\n", res)
 	}
 
+	// ---- F031 aggregate graph-load primitive (D-2 option a) ----
+	// For an aggregate ROOT that owns members via containment edges, emit
+	// Load<Root>Aggregate: eager-load the root with its declared containment edges
+	// in one tx-bound query and project the members onto the root's repeated
+	// field(s), so SERVICE code never touches the ent client to assemble a cluster.
+	if members := containmentMembers(msg, owner); !msg.isSurface() && len(members) > 0 {
+		b.WriteString(renderLoadAggregate(res, model, lower, members))
+	}
+
+	return b.String()
+}
+
+// aggregateMember describes one owned containment edge of an aggregate root, for
+// the Load<Root>Aggregate graph-load primitive.
+type aggregateMember struct {
+	EdgePascal   string // ent edge/field Go name (e.g. "Vehicles") — drives With<Edge> + e.Edges.<Edge>
+	ProtoGoField string // root proto repeated field Go name (e.g. "Vehicles")
+	MemberType   string // member proto/ent Go type (e.g. "Vehicle") — fromEnt<MemberType>
+}
+
+// containmentMembers returns the owned containment members of an aggregate root —
+// its repeated has_many edges that point at a member message. references and plain
+// (non-member) relationships are excluded. Returns nil for a non-root message.
+func containmentMembers(msg entMessageInfo, _ entMessageInfo) []aggregateMember {
+	var out []aggregateMember
+	for _, f := range msg.Fields {
+		if f.References != nil {
+			continue
+		}
+		// Only repeated containment edges (has_many) are eager-loaded clusters; a
+		// has_one owned member could be added later but is uncommon for aggregates.
+		if f.HasMany == nil {
+			continue
+		}
+		target := edgeTargetType(f)
+		pascal := strings.Title(edgeName(f.Name)) // ent capitalizes the edge name
+		out = append(out, aggregateMember{
+			EdgePascal:   pascal,
+			ProtoGoField: pascal, // proto repeated field Go name == capitalized field name
+			MemberType:   target,
+		})
+	}
+	return out
+}
+
+// renderLoadAggregate emits Load<Root>Aggregate(ctx, client, id): a tx-aware,
+// eager-loading graph read of the aggregate cluster. It resolves the tx-or-client
+// from ctx (so it participates in an enclosing Atomically), queries the root by id
+// with each containment edge eager-loaded, and projects the members onto the root
+// proto via the per-member fromEnt<Member>. Returns persistence.ErrNotFound when
+// the root id does not exist.
+func renderLoadAggregate(res, model, lower string, members []aggregateMember) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n// Load%sAggregate eager-loads the %s aggregate root identified by id together\n", res, res)
+	b.WriteString("// with its owned containment members, in one tx-bound query (the F031 graph-load\n")
+	b.WriteString("// primitive, D-2). It resolves the tx-or-client from ctx so it participates in an\n")
+	b.WriteString("// enclosing Atomically. Returns persistence.ErrNotFound when no such root exists.\n")
+	fmt.Fprintf(&b, "func Load%sAggregate(ctx context.Context, client *ent.Client, id string) (*%s, error) {\n", res, res)
+	// tx-or-client resolver (mirrors the per-resource resolver in the constructor).
+	fmt.Fprintf(&b, "\tc := client.%s\n", model)
+	b.WriteString("\tif h, ok := persistence.TxFromContext(ctx); ok {\n")
+	b.WriteString("\t\tif tx, ok := h.(*ent.Tx); ok {\n")
+	fmt.Fprintf(&b, "\t\t\tc = tx.%s\n", model)
+	b.WriteString("\t\t}\n\t}\n")
+	fmt.Fprintf(&b, "\tq := c.Query().Where(ent%s.ID(id))\n", lower)
+	for _, m := range members {
+		fmt.Fprintf(&b, "\tq = q.With%s()\n", m.EdgePascal)
+	}
+	b.WriteString("\te, err := q.Only(ctx)\n")
+	b.WriteString("\tif err != nil {\n\t\tif ent.IsNotFound(err) {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n\t\treturn nil, err\n\t}\n")
+	fmt.Fprintf(&b, "\troot := fromEnt%s(e)\n", res)
+	for _, m := range members {
+		fmt.Fprintf(&b, "\tfor _, m := range e.Edges.%s {\n", m.EdgePascal)
+		fmt.Fprintf(&b, "\t\troot.%s = append(root.%s, fromEnt%s(m))\n", m.ProtoGoField, m.ProtoGoField, m.MemberType)
+		b.WriteString("\t}\n")
+	}
+	b.WriteString("\treturn root, nil\n}\n")
 	return b.String()
 }
 

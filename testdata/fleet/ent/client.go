@@ -333,7 +333,8 @@ func (c *FleetClient) QueryVehicles(_m *Fleet) *VehicleQuery {
 
 // Hooks returns the client hooks.
 func (c *FleetClient) Hooks() []Hook {
-	return c.hooks.Fleet
+	hooks := c.hooks.Fleet
+	return append(hooks[:len(hooks):len(hooks)], fleet.Hooks[:]...)
 }
 
 // Interceptors returns the client interceptors.

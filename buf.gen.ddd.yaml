@@ -1,0 +1,19 @@
+version: v2
+# SDK-OWNED annotation bindings: generate the Go .pb.go for the
+# infoblox.ddd.v1 namespace LOCALLY, in-repo. Unlike infoblox/{authz,field,
+# storage} — whose Go bindings come from the published canonical module and are
+# never generated here (proto/infoblox/.../*.proto are import-only mirrors with a
+# canonical go_package) — infoblox.ddd.v1 is defined and owned by devedge-sdk.
+# Its go_package points at this module, so its binding MUST be generated here.
+# This is safe (the one place the repo generates an annotation .pb.go locally)
+# because the namespace is SDK-private: no other module registers it, so there is
+# no register-once protoregistry collision. Output lands at
+# proto/infoblox/ddd/v1/ddd.pb.go; protoc-gen-{ent,svc} import it as dddv1.
+inputs:
+  - directory: proto
+    paths:
+      - proto/infoblox/ddd/v1/ddd.proto
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/infobloxopen/devedge-sdk

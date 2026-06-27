@@ -75,6 +75,11 @@ func DeleteTime(v time.Time) predicate.Fleet {
 	return predicate.Fleet(sql.FieldEQ(FieldDeleteTime, v))
 }
 
+// Etag applies equality check predicate on the "etag" field. It's identical to EtagEQ.
+func Etag(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldEQ(FieldEtag, v))
+}
+
 // DisplayName applies equality check predicate on the "display_name" field. It's identical to DisplayNameEQ.
 func DisplayName(v string) predicate.Fleet {
 	return predicate.Fleet(sql.FieldEQ(FieldDisplayName, v))
@@ -193,6 +198,81 @@ func DeleteTimeIsNil() predicate.Fleet {
 // DeleteTimeNotNil applies the NotNil predicate on the "delete_time" field.
 func DeleteTimeNotNil() predicate.Fleet {
 	return predicate.Fleet(sql.FieldNotNull(FieldDeleteTime))
+}
+
+// EtagEQ applies the EQ predicate on the "etag" field.
+func EtagEQ(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldEQ(FieldEtag, v))
+}
+
+// EtagNEQ applies the NEQ predicate on the "etag" field.
+func EtagNEQ(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldNEQ(FieldEtag, v))
+}
+
+// EtagIn applies the In predicate on the "etag" field.
+func EtagIn(vs ...string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldIn(FieldEtag, vs...))
+}
+
+// EtagNotIn applies the NotIn predicate on the "etag" field.
+func EtagNotIn(vs ...string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldNotIn(FieldEtag, vs...))
+}
+
+// EtagGT applies the GT predicate on the "etag" field.
+func EtagGT(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldGT(FieldEtag, v))
+}
+
+// EtagGTE applies the GTE predicate on the "etag" field.
+func EtagGTE(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldGTE(FieldEtag, v))
+}
+
+// EtagLT applies the LT predicate on the "etag" field.
+func EtagLT(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldLT(FieldEtag, v))
+}
+
+// EtagLTE applies the LTE predicate on the "etag" field.
+func EtagLTE(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldLTE(FieldEtag, v))
+}
+
+// EtagContains applies the Contains predicate on the "etag" field.
+func EtagContains(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldContains(FieldEtag, v))
+}
+
+// EtagHasPrefix applies the HasPrefix predicate on the "etag" field.
+func EtagHasPrefix(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldHasPrefix(FieldEtag, v))
+}
+
+// EtagHasSuffix applies the HasSuffix predicate on the "etag" field.
+func EtagHasSuffix(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldHasSuffix(FieldEtag, v))
+}
+
+// EtagIsNil applies the IsNil predicate on the "etag" field.
+func EtagIsNil() predicate.Fleet {
+	return predicate.Fleet(sql.FieldIsNull(FieldEtag))
+}
+
+// EtagNotNil applies the NotNil predicate on the "etag" field.
+func EtagNotNil() predicate.Fleet {
+	return predicate.Fleet(sql.FieldNotNull(FieldEtag))
+}
+
+// EtagEqualFold applies the EqualFold predicate on the "etag" field.
+func EtagEqualFold(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldEqualFold(FieldEtag, v))
+}
+
+// EtagContainsFold applies the ContainsFold predicate on the "etag" field.
+func EtagContainsFold(v string) predicate.Fleet {
+	return predicate.Fleet(sql.FieldContainsFold(FieldEtag, v))
 }
 
 // DisplayNameEQ applies the EQ predicate on the "display_name" field.

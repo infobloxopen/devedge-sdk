@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
@@ -106,6 +107,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				hasMany      *fieldv1.HasMany
 				belongsTo    *fieldv1.BelongsTo
 				manyToMany   *fieldv1.ManyToMany
+				references   *dddv1.References
 			)
 			if opts := field.Desc.Options(); opts != nil {
 				if proto.HasExtension(opts, fieldv1.E_Opts) {
@@ -120,6 +122,17 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						hasMany = fopts.GetHasMany()
 						belongsTo = fopts.GetBelongsTo()
 						manyToMany = fopts.GetManyToMany()
+					}
+				}
+				// F031 DDD: GORM aggregate support is a NON-GOAL, but protoc-gen-storage
+				// must not BREAK on (infoblox.ddd.v1.references). It is a cross-aggregate
+				// link (scalar FK + ID, no association): the message-kind field is
+				// dropped from the model — only the sibling scalar FK column persists —
+				// so the GORM fixtures keep building. Reading it here marks the field as
+				// relationship-mapped for the fail-closed coverage check.
+				if proto.HasExtension(opts, dddv1.E_References) {
+					if rf, ok := proto.GetExtension(opts, dddv1.E_References).(*dddv1.References); ok && rf != nil {
+						references = rf
 					}
 				}
 				if proto.HasExtension(opts, apiannotations.E_FieldBehavior) {
@@ -192,6 +205,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				HasMany:       hasMany,
 				BelongsTo:     belongsTo,
 				ManyToMany:    manyToMany,
+				References:    references,
 			})
 		}
 		messages = append(messages, msg)

@@ -21,6 +21,8 @@ type Fleet struct {
 	AccountID string `json:"account_id,omitempty"`
 	// AIP-148 soft-delete timestamp; nil for live entities.
 	DeleteTime *time.Time `json:"delete_time,omitempty"`
+	// AIP-154 opaque concurrency token; re-stamped on every write.
+	Etag string `json:"etag,omitempty"`
 	// DisplayName holds the value of the "display_name" field.
 	DisplayName string `json:"display_name,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -52,7 +54,7 @@ func (*Fleet) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case fleet.FieldID, fleet.FieldAccountID, fleet.FieldDisplayName:
+		case fleet.FieldID, fleet.FieldAccountID, fleet.FieldEtag, fleet.FieldDisplayName:
 			values[i] = new(sql.NullString)
 		case fleet.FieldDeleteTime:
 			values[i] = new(sql.NullTime)
@@ -89,6 +91,12 @@ func (_m *Fleet) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.DeleteTime = new(time.Time)
 				*_m.DeleteTime = value.Time
+			}
+		case fleet.FieldEtag:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field etag", values[i])
+			} else if value.Valid {
+				_m.Etag = value.String
 			}
 		case fleet.FieldDisplayName:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -144,6 +152,9 @@ func (_m *Fleet) String() string {
 		builder.WriteString("delete_time=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("etag=")
+	builder.WriteString(_m.Etag)
 	builder.WriteString(", ")
 	builder.WriteString("display_name=")
 	builder.WriteString(_m.DisplayName)
