@@ -42,6 +42,12 @@ const (
 	entVersion           = "v0.14.6"
 	moderncSQLiteVersion = "v1.52.0"
 	fieldBindingVersion  = "v1.0.0-alpha.1"
+	// Observability (F034): the OTel API the generated main pulls through the SDK's
+	// observability/otel adapter + server seam. Kept in lockstep with the SDK's own
+	// go.mod (API v1.x, contrib v0.x); `go mod tidy` reconciles the SDK/exporter
+	// indirects. The adapter itself ships INSIDE the devedge-sdk module, so the
+	// generated project needs no separate adapter require.
+	otelAPIVersion = "v1.44.0"
 )
 
 // Options are the user-supplied inputs to a scaffold.
@@ -131,6 +137,7 @@ type Model struct {
 	EntVersion            string
 	ModerncSQLiteVersion  string
 	FieldBindingVersion   string
+	OTelAPIVersion        string
 }
 
 var (
@@ -231,6 +238,7 @@ func (o Options) Validate() (*Model, error) {
 		EntVersion:            entVersion,
 		ModerncSQLiteVersion:  moderncSQLiteVersion,
 		FieldBindingVersion:   fieldBindingVersion,
+		OTelAPIVersion:        otelAPIVersion,
 	}
 	return m, nil
 }

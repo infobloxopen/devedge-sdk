@@ -30,9 +30,8 @@ package main
 import (
 	"context"
 	"log"
-{{- if .Aggregate}}
+	"log/slog"
 	"time"
-{{- end}}
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -43,6 +42,7 @@ import (
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/events"
 {{- end}}
+	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
@@ -51,6 +51,10 @@ import (
 
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
+
+// version is the service version stamped onto every span/metric (OTel resource
+// service.version). Override at build time with -ldflags "-X main.version=...".
+var version = "0.0.0-dev"
 
 {{- if .Aggregate}}
 
@@ -217,6 +221,9 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 		// tenant, groups -> group:<name>). Without it the principal is empty and
 		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
 		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+		// Structured request logging is on by default (one trace-correlated slog
+		// record per RPC; secret-annotated payload fields redacted at Debug).
+		Logger: slog.Default(),
 	})
 	if err != nil {
 		return nil, err
@@ -251,6 +258,29 @@ func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr string) (*server.
 }
 
 func main() {
+	ctx := context.Background()
+
+	// Observability is wired behind the SDK's OTel seam. otel.Setup installs the
+	// global tracer/meter providers + a W3C propagator; the server's built-in
+	// otelgrpc/otelhttp instrumentation then emits per-RPC spans + RED metrics and
+	// one end-to-end trace across the REST gateway hop, with no per-handler code.
+	// The default "otlp" exporter is driven by the standard OTEL_* env
+	// (OTEL_EXPORTER_OTLP_ENDPOINT, ...) — with no endpoint set it no-ops cleanly,
+	// so the service still runs locally with zero observability overhead. Set
+	// `Exporter: "stdout"` for local-dev traces on the console, "none" to disable.
+	shutdown, err := otel.Setup(ctx, otel.Config{
+		ServiceName:    "{{.BinName}}",
+		ServiceVersion: version,
+	})
+	if err != nil {
+		log.Fatalf("{{.BinName}}: observability: %v", err)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdown(sctx)
+	}()
+
 	// Dev authorizer: grants the "admin" group every verb on every resource in any
 	// tenant. Paired with grpcauthz.DevPrincipalFunc (wired in newServer), a caller
 	// is authorized when it sends `account-id: <tenant>` and `groups: admin`; anyone
@@ -267,7 +297,7 @@ func main() {
 		log.Fatalf("{{.BinName}}: init: %v", err)
 	}
 	log.Printf("{{.BinName}}: serving gRPC on :{{.GRPCPort}}, HTTP on :{{.HTTPPort}}")
-	if err := s.Serve(context.Background()); err != nil {
+	if err := s.Serve(ctx); err != nil {
 		log.Fatalf("{{.BinName}}: serve: %v", err)
 	}
 }
