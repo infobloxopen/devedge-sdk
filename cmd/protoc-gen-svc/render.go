@@ -14,7 +14,15 @@ type serviceInfo struct {
 	// case no default CRUD handler is generated for the service.
 	Resource           string
 	ResourceSoftDelete bool
+	// MemberRoot names the owning aggregate root when the service's resource is a
+	// DDD member (infoblox.ddd.v1.member). When set, write-capable standard methods
+	// are emitted as Unimplemented (route through the root) and the service records
+	// a server.MemberBinding so the boot-time boundary gate fails closed.
+	MemberRoot string
 }
+
+// isMember reports whether the service's resource is a DDD aggregate member.
+func (s serviceInfo) isMember() bool { return s.MemberRoot != "" }
 
 // hasStdMethods reports whether the service has at least one detected standard
 // method (so a default CRUD handler is worth generating).
@@ -24,6 +32,18 @@ func (s serviceInfo) hasStdMethods() bool {
 	}
 	for _, m := range s.Methods {
 		if m.Std != stdNone {
+			return true
+		}
+	}
+	return false
+}
+
+// hasWriteMethods reports whether the service has at least one write-capable
+// standard method (Create/Update/Delete/Undelete). Used to decide whether a
+// member service needs the status/codes imports for its Unimplemented redirects.
+func (s serviceInfo) hasWriteMethods() bool {
+	for _, m := range s.Methods {
+		if m.Std.isWrite() {
 			return true
 		}
 	}
@@ -79,16 +99,26 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	fmt.Fprintf(&b, "package %s\n\n", pkgName)
 
 	needPersistence := false
+	needStatus := false
 	for _, svc := range services {
 		if svc.hasStdMethods() {
 			needPersistence = true
+		}
+		if svc.isMember() && svc.hasWriteMethods() {
+			// A member service redirects its write methods to gRPC Unimplemented.
+			needStatus = true
 		}
 	}
 
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n\n")
 	b.WriteString("\t\"github.com/grpc-ecosystem/grpc-gateway/v2/runtime\"\n")
-	b.WriteString("\t\"google.golang.org/grpc\"\n\n")
+	b.WriteString("\t\"google.golang.org/grpc\"\n")
+	if needStatus {
+		b.WriteString("\t\"google.golang.org/grpc/codes\"\n")
+		b.WriteString("\t\"google.golang.org/grpc/status\"\n")
+	}
+	b.WriteString("\n")
 	if needPersistence {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	}
@@ -122,6 +152,21 @@ func renderRegister(b *strings.Builder, svc serviceInfo) {
 	}
 	b.WriteString("\t)\n")
 	fmt.Fprintf(b, "\ts.AddRules(%sAuthzRules...)\n", svc.ServiceName)
+	// F031 DDD: a member service contributes a member→root binding so the boot-time
+	// boundary gate fails closed if any of its write methods is registered.
+	if svc.isMember() {
+		fmt.Fprintf(b, "\ts.RecordMemberBinding(server.MemberBinding{\n")
+		fmt.Fprintf(b, "\t\tResource: %q,\n", svc.Resource)
+		fmt.Fprintf(b, "\t\tRoot:     %q,\n", svc.MemberRoot)
+		b.WriteString("\t\tWriteMethods: []string{\n")
+		for _, m := range svc.Methods {
+			if m.Std.isWrite() {
+				fmt.Fprintf(b, "\t\t\t%s_%s_FullMethodName,\n", svc.ServiceName, m.Name)
+			}
+		}
+		b.WriteString("\t\t},\n")
+		b.WriteString("\t})\n")
+	}
 	fmt.Fprintf(b, "\tRegister%sServer(s.GRPCServer(), srv)\n", svc.ServiceName)
 	b.WriteString("\ts.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {\n")
 	fmt.Fprintf(b, "\t\treturn Register%sHandlerClient(ctx, mux, New%sClient(conn))\n", svc.ServiceName, svc.ServiceName)
@@ -148,6 +193,19 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 	b.WriteString("}\n\n")
 
 	for _, m := range svc.Methods {
+		// F031 DDD member write-redirection (G-4): a member resource is addressable
+		// for reads but written THROUGH its root, so its write-capable standard
+		// methods are emitted as gRPC Unimplemented instead of delegating to the
+		// repo. Get/List fall through to the normal cases below. The boundary gate
+		// at Serve additionally fails closed if such a write method is registered.
+		if svc.isMember() && m.Std.isWrite() {
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			fmt.Fprintf(b, "\t// %s is a member of aggregate %s: write through the root, not here.\n", svc.Resource, svc.MemberRoot)
+			fmt.Fprintf(b, "\treturn nil, status.Errorf(codes.Unimplemented, \"%s is a member of aggregate %s: write through the aggregate root\")\n", svc.Resource, svc.MemberRoot)
+			b.WriteString("}\n\n")
+			continue
+		}
 		switch m.Std {
 		case stdCreate:
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",

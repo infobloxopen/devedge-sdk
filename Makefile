@@ -12,13 +12,19 @@ generate:
 	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
 	go build -o bin/protoc-gen-ent           ./cmd/protoc-gen-ent
+	# SDK-OWNED infoblox.ddd.v1 annotation binding: generated LOCALLY (the one
+	# annotation .pb.go the repo generates in-repo — safe, SDK-private namespace).
+	# Run before the others so protoc-gen-{ent,svc} can import the dddv1 binding.
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.ddd.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.toy.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.apikey.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.fleet.yaml
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.iam.yaml
 	cd testdata/toy && go mod tidy
 	cd testdata/apikey && go mod tidy
 	cd testdata/fleet && go mod tidy
+	cd testdata/iam && go mod tidy
 	go mod tidy
 	@echo "NOTE: protoc-gen-ent regenerates ent SCHEMAS only. If a relationship/"
 	@echo "      resource shape changed, regenerate the ent CLIENT too:"
@@ -33,6 +39,7 @@ sync-scaffold-mirrors:
 	cp proto/infoblox/authz/v1/authz.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/authz/v1/authz.proto
 	cp proto/infoblox/field/v1/field.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/field/v1/field.proto
 	cp proto/infoblox/storage/v1/storage.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/storage/v1/storage.proto
+	cp proto/infoblox/ddd/v1/ddd.proto cmd/devedge-sdk/internal/scaffold/mirrors/infoblox/ddd/v1/ddd.proto
 
 build:
 	go build ./...

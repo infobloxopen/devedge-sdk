@@ -15,10 +15,18 @@ option go_package = "github.com/infobloxopen/devedge-sdk/testdata/fleet/fleetv1;
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/field/v1/field.proto";
+import "infoblox/ddd/v1/ddd.proto";
 
 // Fleet is the parent resource: a tenant-scoped collection of Vehicles with a
 // per-tenant unique display_name.
+//
+// F031: Fleet is an aggregate ROOT and Vehicle is its owned MEMBER (containment).
+// The Fleet→Vehicle FK therefore generates OnDelete: Cascade (deleting a Fleet
+// deletes its Vehicles), and an etag field + EtagMixin make the Fleet etag the
+// aggregate version that an AggregateRepository.Save bumps on any member change.
 message Fleet {
+  option (infoblox.ddd.v1.aggregate) = {root: true};
+
   string id           = 1;
   string account_id   = 2;
   string display_name = 3 [(infoblox.field.v1.opts) = {unique: true}];
@@ -30,12 +38,20 @@ message Fleet {
   // (partial unique index on PostgreSQL/SQLite; a soft_delete_key discriminator
   // on MySQL).
   google.protobuf.Timestamp delete_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // AIP-154 etag = the aggregate version (F031 etag-as-aggregate-version). Owned
+  // by EtagMixin; AggregateRepository.Save bumps it on any member mutation.
+  string etag = 6;
 }
 
 // Vehicle is the child resource: it belongs_to a Fleet. fleet_id is exposed as
 // a first-class scalar field (so clients can read/filter it) AND drives the
 // belongs_to association — the combination that previously collided in ent.
+//
+// F031: Vehicle is a MEMBER of the Fleet aggregate (containment). Its belongs_to
+// Fleet FK generates OnDelete: Cascade.
 message Vehicle {
+  option (infoblox.ddd.v1.member) = {root: "Fleet"};
+
   string id         = 1;
   string account_id = 2;
   string vin        = 3 [(infoblox.field.v1.opts) = {unique: true}];

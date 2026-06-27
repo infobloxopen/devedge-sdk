@@ -17,6 +17,7 @@ package fleetv1
 
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	_ "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -35,6 +36,11 @@ const (
 
 // Fleet is the parent resource: a tenant-scoped collection of Vehicles with a
 // per-tenant unique display_name.
+//
+// F031: Fleet is an aggregate ROOT and Vehicle is its owned MEMBER (containment).
+// The Fleet→Vehicle FK therefore generates OnDelete: Cascade (deleting a Fleet
+// deletes its Vehicles), and an etag field + EtagMixin make the Fleet etag the
+// aggregate version that an AggregateRepository.Save bumps on any member change.
 type Fleet struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -47,7 +53,10 @@ type Fleet struct {
 	// follow-up: display_name must be re-creatable once a Fleet is soft-deleted
 	// (partial unique index on PostgreSQL/SQLite; a soft_delete_key discriminator
 	// on MySQL).
-	DeleteTime    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
+	DeleteTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
+	// AIP-154 etag = the aggregate version (F031 etag-as-aggregate-version). Owned
+	// by EtagMixin; AggregateRepository.Save bumps it on any member mutation.
+	Etag          string `protobuf:"bytes,6,opt,name=etag,proto3" json:"etag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -117,9 +126,19 @@ func (x *Fleet) GetDeleteTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Fleet) GetEtag() string {
+	if x != nil {
+		return x.Etag
+	}
+	return ""
+}
+
 // Vehicle is the child resource: it belongs_to a Fleet. fleet_id is exposed as
 // a first-class scalar field (so clients can read/filter it) AND drives the
 // belongs_to association — the combination that previously collided in ent.
+//
+// F031: Vehicle is a MEMBER of the Fleet aggregate (containment). Its belongs_to
+// Fleet FK generates OnDelete: Cascade.
 type Vehicle struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -202,7 +221,7 @@ var File_fleet_proto protoreflect.FileDescriptor
 
 const file_fleet_proto_rawDesc = "" +
 	"\n" +
-	"\vfleet.proto\x12\bfleet.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/field/v1/field.proto\"\xe5\x01\n" +
+	"\vfleet.proto\x12\bfleet.v1\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/field/v1/field.proto\x1a\x19infoblox/ddd/v1/ddd.proto\"\x81\x02\n" +
 	"\x05Fleet\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -212,7 +231,8 @@ const file_fleet_proto_rawDesc = "" +
 	"\n" +
 	"\bfleet_idR\bvehicles\x12@\n" +
 	"\vdelete_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
-	"deleteTime\"\xa7\x01\n" +
+	"deleteTime\x12\x12\n" +
+	"\x04etag\x18\x06 \x01(\tR\x04etag:\x06ҵ\x18\x02\b\x01\"\xb4\x01\n" +
 	"\aVehicle\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -221,7 +241,8 @@ const file_fleet_proto_rawDesc = "" +
 	"\bfleet_id\x18\x04 \x01(\tR\afleetId\x128\n" +
 	"\x05fleet\x18\x05 \x01(\v2\x0f.fleet.v1.FleetB\x11\x9a\xb5\x18\r\xb2\x01\n" +
 	"\n" +
-	"\bfleet_idR\x05fleetBDZBgithub.com/infobloxopen/devedge-sdk/testdata/fleet/fleetv1;fleetv1b\x06proto3"
+	"\bfleet_idR\x05fleet:\vڵ\x18\a\n" +
+	"\x05FleetBDZBgithub.com/infobloxopen/devedge-sdk/testdata/fleet/fleetv1;fleetv1b\x06proto3"
 
 var (
 	file_fleet_proto_rawDescOnce sync.Once

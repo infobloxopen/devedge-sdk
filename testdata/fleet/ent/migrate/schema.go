@@ -14,6 +14,7 @@ var (
 		{Name: "id", Type: field.TypeString},
 		{Name: "account_id", Type: field.TypeString},
 		{Name: "delete_time", Type: field.TypeTime, Nullable: true},
+		{Name: "etag", Type: field.TypeString, Nullable: true},
 		{Name: "display_name", Type: field.TypeString, Nullable: true},
 	}
 	// FleetsTable holds the schema information for the "fleets" table.
@@ -25,7 +26,7 @@ var (
 			{
 				Name:    "ux_fleet_account_display_name",
 				Unique:  true,
-				Columns: []*schema.Column{FleetsColumns[1], FleetsColumns[3]},
+				Columns: []*schema.Column{FleetsColumns[1], FleetsColumns[4]},
 				Annotation: &entsql.IndexAnnotation{
 					Where: "delete_time IS NULL",
 				},
@@ -49,7 +50,7 @@ var (
 				Symbol:     "vehicles_fleets_vehicles",
 				Columns:    []*schema.Column{VehiclesColumns[3]},
 				RefColumns: []*schema.Column{FleetsColumns[0]},
-				OnDelete:   schema.SetNull,
+				OnDelete:   schema.Cascade,
 			},
 		},
 		Indexes: []*schema.Index{

@@ -79,6 +79,21 @@ func (r *MemoryRepository[T, K]) GetETagForKey(key K) string {
 	return r.etags[key]
 }
 
+// GetETagForKeyTx is the transaction-aware sibling of GetETagForKey: it reads the
+// stored ETag while RESPECTING an active transaction this repository is enrolled
+// in. Inside such a transaction the [MemoryTxRunner] already holds the write lock
+// (which is non-reentrant), so taking r.mu would self-deadlock — callers that read
+// the etag from inside an Atomically (e.g. an AggregateSpec.LoadEtag re-validating
+// the optimistic-concurrency precondition inside the serialized critical section)
+// MUST use this method, not GetETagForKey.
+func (r *MemoryRepository[T, K]) GetETagForKeyTx(ctx context.Context, key K) string {
+	if !r.inThisTx(ctx) {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+	}
+	return r.etags[key]
+}
+
 // List implements [Repository] with cursor-based pagination.
 // PageToken is a base64-encoded decimal offset. PageSize defaults to 50.
 // Filter and OrderBy are ignored by the in-memory implementation.

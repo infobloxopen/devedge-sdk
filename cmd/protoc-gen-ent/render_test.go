@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
@@ -516,6 +517,85 @@ func TestRenderEntSchema_uniqueNoSoftDelete_unchanged(t *testing.T) {
 		mustNotContain(t, out, "SoftDeleteUniqueMixin")
 	}
 	targetDialect = "postgres"
+}
+
+// F031 AC-4: a (infoblox.ddd.v1.references) field is a CROSS-aggregate link — it
+// generates a scalar FK column + ID and NO traversable edge (no edge.To/edge.From
+// pointing at the referenced aggregate), so code cannot walk or mutate across
+// roots. The sibling scalar FK column (declared by the proto author) persists.
+func TestRenderEntSchema_referencesIsScalarFKNoEdge(t *testing.T) {
+	// An ApiKey that references a User in ANOTHER aggregate via user_id.
+	msg := entMessageInfo{
+		MessageName: "ApiKey",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "user_id", SnakeName: "user_id", EntType: "String"},
+			{Name: "user", SnakeName: "user", IsMessage: true, RelatedType: "User",
+				References: &dddv1.References{Aggregate: "User", ForeignKey: "user_id"}},
+		},
+	}
+	out := renderEntSchema(msg, nil)
+	// The scalar FK column is persisted.
+	mustContain(t, out, `field.String("user_id")`)
+	// No edge at all — references must NOT produce a graph edge to the other root.
+	mustNotContain(t, out, "func (ApiKey) Edges()")
+	mustNotContain(t, out, "edge.To(\"user\"")
+	mustNotContain(t, out, "edge.From(\"user\"")
+	mustNotContain(t, out, "User.Type")
+}
+
+// F031 AC-5 (codegen half): a containment has_many edge of an aggregate root
+// (member declared via member_of) carries OnDelete: Cascade — the root owns its
+// members. A cross-aggregate references link does not.
+func TestRenderEntSchema_containmentEdgeCascades(t *testing.T) {
+	root := entMessageInfo{
+		MessageName:   "Order",
+		AggregateRoot: true,
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "items", SnakeName: "items", IsRepeated: true, IsMessage: true,
+				RelatedType: "Item", HasMany: &fieldv1.HasMany{ForeignKey: "order_id"}},
+		},
+	}
+	member := entMessageInfo{
+		MessageName: "Item",
+		MemberRoot:  "Order",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "order_id", SnakeName: "order_id", EntType: "String"},
+			{Name: "order", SnakeName: "order", IsMessage: true, RelatedType: "Order",
+				BelongsTo: &fieldv1.BelongsTo{ForeignKey: "order_id"}},
+		},
+	}
+	siblings := []entMessageInfo{root, member}
+
+	// Root's has_many carries the cascade.
+	rootOut := renderEntSchema(root, siblings)
+	mustContain(t, rootOut, `edge.To("items", Item.Type).Annotations(entsql.OnDelete(entsql.Cascade))`)
+	mustContain(t, rootOut, `"entgo.io/ent/dialect/entsql"`)
+
+	// The member's inverse belongs_to does NOT also carry the action (one FK, one
+	// referential action) and therefore does not import entsql.
+	memberOut := renderEntSchema(member, siblings)
+	mustContain(t, memberOut, `edge.From("order", Order.Type).Ref("items").Unique().Field("order_id")`)
+	mustNotContain(t, memberOut, "OnDelete")
+	mustNotContain(t, memberOut, `"entgo.io/ent/dialect/entsql"`)
+}
+
+// A plain (non-DDD) has_many/belongs_to pair must NOT acquire OnDelete: Cascade —
+// the cascade is opt-in via the member_of annotation, keeping the change additive.
+func TestRenderEntSchema_plainEdgeNoCascade(t *testing.T) {
+	parent := entMessageInfo{
+		MessageName: "Fleet",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "vehicles", SnakeName: "vehicles", IsRepeated: true, IsMessage: true,
+				RelatedType: "Vehicle", HasMany: &fieldv1.HasMany{ForeignKey: "fleet_id"}},
+		},
+	}
+	out := renderEntSchema(parent, []entMessageInfo{parent})
+	mustContain(t, out, `edge.To("vehicles", Vehicle.Type)`)
+	mustNotContain(t, out, "OnDelete")
 }
 
 func mustContain(t *testing.T, s, substr string) {

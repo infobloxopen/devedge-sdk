@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
@@ -95,6 +96,22 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			}
 		}
 		msg := entMessageInfo{MessageName: name, Model: resolvedModel}
+		// F031 DDD: read the SDK-owned infoblox.ddd.v1 message options. (aggregate)
+		// marks an aggregate ROOT; (member) marks a resource OWNED by a named root.
+		// A member→root containment drives OnDelete: Cascade on the owning edge and
+		// the boundary gate / member write-redirection in protoc-gen-svc.
+		if mopts := m.Desc.Options(); mopts != nil {
+			if proto.HasExtension(mopts, dddv1.E_Aggregate) {
+				if ag, ok := proto.GetExtension(mopts, dddv1.E_Aggregate).(*dddv1.Aggregate); ok && ag != nil {
+					msg.AggregateRoot = ag.GetRoot()
+				}
+			}
+			if proto.HasExtension(mopts, dddv1.E_Member) {
+				if mb, ok := proto.GetExtension(mopts, dddv1.E_Member).(*dddv1.Member); ok && mb != nil {
+					msg.MemberRoot = mb.GetRoot()
+				}
+			}
+		}
 		// AIP-122: capture the (google.api.resource) pattern so an OUTPUT_ONLY `name`
 		// field can be DERIVED from id (Format<R>Name) rather than stored — matching
 		// protoc-gen-storage. Without the pattern there is nothing to format from.
@@ -116,6 +133,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				hasMany      *fieldv1.HasMany
 				belongsTo    *fieldv1.BelongsTo
 				manyToMany   *fieldv1.ManyToMany
+				references   *dddv1.References
 			)
 			if opts := field.Desc.Options(); opts != nil {
 				if proto.HasExtension(opts, fieldv1.E_Opts) {
@@ -128,6 +146,16 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						hasMany = fopts.GetHasMany()
 						belongsTo = fopts.GetBelongsTo()
 						manyToMany = fopts.GetManyToMany()
+					}
+				}
+				// F031 DDD: (infoblox.ddd.v1.references) is a CROSS-aggregate link —
+				// a scalar FK + ID with NO traversable edge (so code cannot walk or
+				// mutate across roots). Unlike belongs_to (within-aggregate
+				// containment), the message-kind field carrying it is NOT emitted as
+				// an edge; only its foreign_key scalar column is emitted.
+				if proto.HasExtension(opts, dddv1.E_References) {
+					if rf, ok := proto.GetExtension(opts, dddv1.E_References).(*dddv1.References); ok && rf != nil {
+						references = rf
 					}
 				}
 				if proto.HasExtension(opts, apiannotations.E_FieldBehavior) {
@@ -196,6 +224,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				HasMany:     hasMany,
 				BelongsTo:   belongsTo,
 				ManyToMany:  manyToMany,
+				References:  references,
 			})
 		}
 		messages = append(messages, msg)

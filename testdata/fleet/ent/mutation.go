@@ -37,6 +37,7 @@ type FleetMutation struct {
 	id              *string
 	account_id      *string
 	delete_time     *time.Time
+	etag            *string
 	display_name    *string
 	clearedFields   map[string]struct{}
 	vehicles        map[string]struct{}
@@ -236,6 +237,55 @@ func (m *FleetMutation) ResetDeleteTime() {
 	delete(m.clearedFields, fleet.FieldDeleteTime)
 }
 
+// SetEtag sets the "etag" field.
+func (m *FleetMutation) SetEtag(s string) {
+	m.etag = &s
+}
+
+// Etag returns the value of the "etag" field in the mutation.
+func (m *FleetMutation) Etag() (r string, exists bool) {
+	v := m.etag
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEtag returns the old "etag" field's value of the Fleet entity.
+// If the Fleet object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMutation) OldEtag(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEtag is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEtag requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEtag: %w", err)
+	}
+	return oldValue.Etag, nil
+}
+
+// ClearEtag clears the value of the "etag" field.
+func (m *FleetMutation) ClearEtag() {
+	m.etag = nil
+	m.clearedFields[fleet.FieldEtag] = struct{}{}
+}
+
+// EtagCleared returns if the "etag" field was cleared in this mutation.
+func (m *FleetMutation) EtagCleared() bool {
+	_, ok := m.clearedFields[fleet.FieldEtag]
+	return ok
+}
+
+// ResetEtag resets all changes to the "etag" field.
+func (m *FleetMutation) ResetEtag() {
+	m.etag = nil
+	delete(m.clearedFields, fleet.FieldEtag)
+}
+
 // SetDisplayName sets the "display_name" field.
 func (m *FleetMutation) SetDisplayName(s string) {
 	m.display_name = &s
@@ -373,12 +423,15 @@ func (m *FleetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *FleetMutation) Fields() []string {
-	fields := make([]string, 0, 3)
+	fields := make([]string, 0, 4)
 	if m.account_id != nil {
 		fields = append(fields, fleet.FieldAccountID)
 	}
 	if m.delete_time != nil {
 		fields = append(fields, fleet.FieldDeleteTime)
+	}
+	if m.etag != nil {
+		fields = append(fields, fleet.FieldEtag)
 	}
 	if m.display_name != nil {
 		fields = append(fields, fleet.FieldDisplayName)
@@ -395,6 +448,8 @@ func (m *FleetMutation) Field(name string) (ent.Value, bool) {
 		return m.AccountID()
 	case fleet.FieldDeleteTime:
 		return m.DeleteTime()
+	case fleet.FieldEtag:
+		return m.Etag()
 	case fleet.FieldDisplayName:
 		return m.DisplayName()
 	}
@@ -410,6 +465,8 @@ func (m *FleetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldAccountID(ctx)
 	case fleet.FieldDeleteTime:
 		return m.OldDeleteTime(ctx)
+	case fleet.FieldEtag:
+		return m.OldEtag(ctx)
 	case fleet.FieldDisplayName:
 		return m.OldDisplayName(ctx)
 	}
@@ -434,6 +491,13 @@ func (m *FleetMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDeleteTime(v)
+		return nil
+	case fleet.FieldEtag:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEtag(v)
 		return nil
 	case fleet.FieldDisplayName:
 		v, ok := value.(string)
@@ -475,6 +539,9 @@ func (m *FleetMutation) ClearedFields() []string {
 	if m.FieldCleared(fleet.FieldDeleteTime) {
 		fields = append(fields, fleet.FieldDeleteTime)
 	}
+	if m.FieldCleared(fleet.FieldEtag) {
+		fields = append(fields, fleet.FieldEtag)
+	}
 	if m.FieldCleared(fleet.FieldDisplayName) {
 		fields = append(fields, fleet.FieldDisplayName)
 	}
@@ -495,6 +562,9 @@ func (m *FleetMutation) ClearField(name string) error {
 	case fleet.FieldDeleteTime:
 		m.ClearDeleteTime()
 		return nil
+	case fleet.FieldEtag:
+		m.ClearEtag()
+		return nil
 	case fleet.FieldDisplayName:
 		m.ClearDisplayName()
 		return nil
@@ -511,6 +581,9 @@ func (m *FleetMutation) ResetField(name string) error {
 		return nil
 	case fleet.FieldDeleteTime:
 		m.ResetDeleteTime()
+		return nil
+	case fleet.FieldEtag:
+		m.ResetEtag()
 		return nil
 	case fleet.FieldDisplayName:
 		m.ResetDisplayName()

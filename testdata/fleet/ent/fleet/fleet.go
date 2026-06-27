@@ -17,6 +17,8 @@ const (
 	FieldAccountID = "account_id"
 	// FieldDeleteTime holds the string denoting the delete_time field in the database.
 	FieldDeleteTime = "delete_time"
+	// FieldEtag holds the string denoting the etag field in the database.
+	FieldEtag = "etag"
 	// FieldDisplayName holds the string denoting the display_name field in the database.
 	FieldDisplayName = "display_name"
 	// EdgeVehicles holds the string denoting the vehicles edge name in mutations.
@@ -37,6 +39,7 @@ var Columns = []string{
 	FieldID,
 	FieldAccountID,
 	FieldDeleteTime,
+	FieldEtag,
 	FieldDisplayName,
 }
 
@@ -56,6 +59,7 @@ func ValidColumn(column string) bool {
 //
 //	import _ "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent/runtime"
 var (
+	Hooks        [1]ent.Hook
 	Interceptors [2]ent.Interceptor
 	// AccountIDValidator is a validator for the "account_id" field. It is called by the builders before save.
 	AccountIDValidator func(string) error
@@ -77,6 +81,11 @@ func ByAccountID(opts ...sql.OrderTermOption) OrderOption {
 // ByDeleteTime orders the results by the delete_time field.
 func ByDeleteTime(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDeleteTime, opts...).ToFunc()
+}
+
+// ByEtag orders the results by the etag field.
+func ByEtag(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEtag, opts...).ToFunc()
 }
 
 // ByDisplayName orders the results by the display_name field.

@@ -173,6 +173,7 @@ func fromEntFleet(e *ent.Fleet) *Fleet {
 		Id:          e.ID,
 		AccountId:   e.AccountID,
 		DisplayName: e.DisplayName,
+		Etag:        e.Etag, // AIP-154: the EtagMixin-stamped token a client echoes as If-Match
 	}
 	if e.DeleteTime != nil {
 		p.DeleteTime = timestamppb.New(*e.DeleteTime)
@@ -181,4 +182,31 @@ func fromEntFleet(e *ent.Fleet) *Fleet {
 		FromEntFleetCustom(e, p)
 	}
 	return p
+}
+
+// LoadFleetAggregate eager-loads the Fleet aggregate root identified by id together
+// with its owned containment members, in one tx-bound query (the F031 graph-load
+// primitive, D-2). It resolves the tx-or-client from ctx so it participates in an
+// enclosing Atomically. Returns persistence.ErrNotFound when no such root exists.
+func LoadFleetAggregate(ctx context.Context, client *ent.Client, id string) (*Fleet, error) {
+	c := client.Fleet
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*ent.Tx); ok {
+			c = tx.Fleet
+		}
+	}
+	q := c.Query().Where(entfleet.ID(id))
+	q = q.WithVehicles()
+	e, err := q.Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, err
+	}
+	root := fromEntFleet(e)
+	for _, m := range e.Edges.Vehicles {
+		root.Vehicles = append(root.Vehicles, fromEntVehicle(m))
+	}
+	return root, nil
 }

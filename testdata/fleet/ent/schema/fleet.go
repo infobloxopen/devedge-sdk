@@ -21,6 +21,7 @@ func (Fleet) Mixin() []ent.Mixin {
 	return []ent.Mixin{
 		entrepo.TenantMixin{},
 		entrepo.SoftDeleteMixin{},
+		entrepo.EtagMixin{},
 	}
 }
 
@@ -35,7 +36,7 @@ func (Fleet) Fields() []ent.Field {
 // Edges defines the edges (relationships) of Fleet.
 func (Fleet) Edges() []ent.Edge {
 	return []ent.Edge{
-		edge.To("vehicles", Vehicle.Type),
+		edge.To("vehicles", Vehicle.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
 

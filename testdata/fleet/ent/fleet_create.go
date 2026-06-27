@@ -41,6 +41,20 @@ func (_c *FleetCreate) SetNillableDeleteTime(v *time.Time) *FleetCreate {
 	return _c
 }
 
+// SetEtag sets the "etag" field.
+func (_c *FleetCreate) SetEtag(v string) *FleetCreate {
+	_c.mutation.SetEtag(v)
+	return _c
+}
+
+// SetNillableEtag sets the "etag" field if the given value is not nil.
+func (_c *FleetCreate) SetNillableEtag(v *string) *FleetCreate {
+	if v != nil {
+		_c.SetEtag(*v)
+	}
+	return _c
+}
+
 // SetDisplayName sets the "display_name" field.
 func (_c *FleetCreate) SetDisplayName(v string) *FleetCreate {
 	_c.mutation.SetDisplayName(v)
@@ -160,6 +174,10 @@ func (_c *FleetCreate) createSpec() (*Fleet, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DeleteTime(); ok {
 		_spec.SetField(fleet.FieldDeleteTime, field.TypeTime, value)
 		_node.DeleteTime = &value
+	}
+	if value, ok := _c.mutation.Etag(); ok {
+		_spec.SetField(fleet.FieldEtag, field.TypeString, value)
+		_node.Etag = value
 	}
 	if value, ok := _c.mutation.DisplayName(); ok {
 		_spec.SetField(fleet.FieldDisplayName, field.TypeString, value)

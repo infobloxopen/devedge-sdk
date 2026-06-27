@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
 
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 )
@@ -43,7 +44,8 @@ func main() {
 // opt into soft-delete (OUTPUT_ONLY delete_time Timestamp). Keyed by Go type name.
 type resourceFacts struct {
 	softDelete bool
-	hasName    bool // has an AIP-122 name field / resource pattern
+	hasName    bool   // has an AIP-122 name field / resource pattern
+	memberRoot string // (infoblox.ddd.v1.member).root — owning aggregate root, "" when not a member
 }
 
 func generateFile(gen *protogen.Plugin, f *protogen.File) {
@@ -63,6 +65,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		svc.Resource = detectServiceResource(s, facts)
 		if r, ok := facts[svc.Resource]; ok {
 			svc.ResourceSoftDelete = r.softDelete
+			svc.MemberRoot = r.memberRoot
 		}
 		for _, m := range s.Methods {
 			mi := methodInfo{
@@ -106,6 +109,14 @@ func messageResourceFacts(m *protogen.Message) resourceFacts {
 				if len(rd.GetPattern()) > 0 {
 					r.hasName = true
 				}
+			}
+		}
+		// F031 DDD: (infoblox.ddd.v1.member) marks this resource as owned by a root
+		// aggregate. A member's write-capable standard methods are emitted as
+		// Unimplemented (route through the root) and recorded for the boundary gate.
+		if proto.HasExtension(mopts, dddv1.E_Member) {
+			if mb, _ := proto.GetExtension(mopts, dddv1.E_Member).(*dddv1.Member); mb != nil {
+				r.memberRoot = mb.GetRoot()
 			}
 		}
 	}
@@ -180,7 +191,7 @@ func detectServiceResource(s *protogen.Service, facts map[string]resourceFacts) 
 	return ""
 }
 
-func isResourceFacts(r resourceFacts) bool { return r.hasName || r.softDelete }
+func isResourceFacts(r resourceFacts) bool { return r.hasName || r.softDelete || r.memberRoot != "" }
 
 // stdMethod is the classified AIP standard-method kind for an RPC.
 type stdMethod int
@@ -194,6 +205,19 @@ const (
 	stdDelete
 	stdUndelete
 )
+
+// isWrite reports whether a classified standard method is write-capable
+// (Create/Update/Delete/Undelete). For a DDD aggregate member these are
+// suppressed (emitted Unimplemented, route through the root) and recorded for the
+// boundary gate; Get/List stay addressable (reads ≠ write authority).
+func (s stdMethod) isWrite() bool {
+	switch s {
+	case stdCreate, stdUpdate, stdDelete, stdUndelete:
+		return true
+	default:
+		return false
+	}
+}
 
 // classifyMethod detects which AIP standard method an RPC implements, by the
 // shape of its request/response messages (D-2), tolerating extra optional

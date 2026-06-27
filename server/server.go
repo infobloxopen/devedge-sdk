@@ -80,6 +80,10 @@ type Server struct {
 	// generated Register<Svc>). The completeness gate at Serve fails closed if any
 	// of these lacks a rule or a public exemption.
 	methods []string
+	// memberBindings is the accumulated set of DDD aggregate member→root bindings
+	// (recorded by the generated Register<Svc> of a member service). The boundary
+	// gate at Serve fails closed if a member resource registers a write method.
+	memberBindings []MemberBinding
 }
 
 // New validates cfg and constructs a Server. It builds the framework
@@ -216,6 +220,12 @@ func (s *Server) Serve(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
+	// F031 DDD boundary gate (fail-closed), beside the authz completeness gate: a
+	// declared aggregate member resource must not register a write-capable standard
+	// method on the transport surface — writes route through the aggregate root.
+	if err := AssertAggregateBoundaries(s.methods, s.memberBindings); err != nil {
+		return err
+	}
 
 	lis, err := net.Listen("tcp", s.cfg.GRPCAddr)
 	if err != nil {
@@ -324,6 +334,18 @@ func (s *Server) AddRules(rules ...authz.MethodRule) {
 func (s *Server) RecordMethods(methods ...string) {
 	s.methods = append(s.methods, methods...)
 }
+
+// RecordMemberBinding records that a service's resource is a DDD aggregate MEMBER
+// owned by a root (with the write methods it registers). The generated
+// Register<Svc> of a member service calls it; the boundary gate
+// [AssertAggregateBoundaries] runs over the accumulated set at Serve (fail-closed:
+// a member that registers a write method does not serve). Call before Serve.
+func (s *Server) RecordMemberBinding(b MemberBinding) {
+	s.memberBindings = append(s.memberBindings, b)
+}
+
+// MemberBindings returns the accumulated DDD aggregate member→root bindings.
+func (s *Server) MemberBindings() []MemberBinding { return s.memberBindings }
 
 // LROStore returns the long-running operation store this server was configured with.
 func (s *Server) LROStore() lro.Store { return s.cfg.LROStore }

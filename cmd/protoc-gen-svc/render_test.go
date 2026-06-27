@@ -191,6 +191,50 @@ func TestRenderSvcFile_emptyMethodList(t *testing.T) {
 	mustNotContain(t, out, "EmptyServiceCRUDHandler")
 }
 
+// memberService is a DDD aggregate MEMBER service (Item owned by Order): it
+// declares the standard methods but, being a member, its writes must be redirected
+// to Unimplemented and a member binding contributed for the boundary gate.
+func memberService() serviceInfo {
+	return serviceInfo{
+		ServiceName: "ItemService",
+		Resource:    "Item",
+		MemberRoot:  "Order",
+		Methods: []methodInfo{
+			{Name: "CreateItem", InputGoIdent: "CreateItemRequest", OutputGoIdent: "Item", Std: stdCreate, ResourceField: "Item"},
+			{Name: "UpdateItem", InputGoIdent: "UpdateItemRequest", OutputGoIdent: "Item", Std: stdUpdate, ResourceField: "Item"},
+			{Name: "GetItem", InputGoIdent: "GetItemRequest", OutputGoIdent: "Item", Std: stdGet},
+			{Name: "ListItems", InputGoIdent: "ListItemsRequest", OutputGoIdent: "ListItemsResponse", Std: stdList, ListItemsField: "Items"},
+		},
+	}
+}
+
+// TestRenderSvcFile_memberWriteRedirection is F031 T6/G-4 + AC-2 (codegen half): a
+// member resource's write methods are emitted as gRPC Unimplemented (route through
+// the root), Get/List still delegate to the repo, and Register<Svc> contributes a
+// server.MemberBinding listing the registered write methods for the boundary gate.
+func TestRenderSvcFile_memberWriteRedirection(t *testing.T) {
+	out := renderSvcFile("orderv1", "x;orderv1", []serviceInfo{memberService()})
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated output is not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+	// Writes redirected to Unimplemented (not delegated to Repo).
+	mustContain(t, out, "func (h *ItemServiceCRUDHandler) CreateItem(")
+	mustContain(t, out, "status.Errorf(codes.Unimplemented")
+	mustContain(t, out, "func (h *ItemServiceCRUDHandler) UpdateItem(")
+	// Reads still delegate to the repo (addressable for reads).
+	mustContain(t, out, "h.Repo.Get(ctx, key)")
+	mustContain(t, out, "h.Repo.List(ctx, persistence.ListOptions{")
+	// The member never calls Repo.Create/Update — those route through the root.
+	mustNotContain(t, out, "h.Repo.Create(ctx,")
+	mustNotContain(t, out, "h.Repo.Update(ctx,")
+	// A member binding is contributed with the write methods for the boundary gate.
+	mustContain(t, out, "s.RecordMemberBinding(server.MemberBinding{")
+	mustContain(t, out, `Resource: "Item",`)
+	mustContain(t, out, `Root:     "Order",`)
+	mustContain(t, out, "ItemService_CreateItem_FullMethodName,")
+	mustContain(t, out, "ItemService_UpdateItem_FullMethodName,")
+}
+
 func mustContain(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
