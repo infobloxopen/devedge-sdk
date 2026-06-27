@@ -87,38 +87,25 @@ func loadStruct(v reflect.Value, sources []Source) error {
 	return nil
 }
 
-// resolve finds the first source that provides a value for key, or falls back
-// to defaultVal. Returns (value, true) if any value was found, ("", false) if
-// neither sources nor a default provided anything.
+// resolve returns the value for key in precedence order: the first source that
+// reports the key as present (ok=true) wins — including a source that returns an
+// explicitly empty value, which correctly overrides later sources and the
+// default. Only when NO source has the key does it fall back to defaultVal.
+//
+// It always returns found=true so the caller always invokes setField. That is
+// safe because defaultVal is ft.Tag.Get("default"), which is "" both for a
+// missing tag and for an explicit `default:""`; setField treats an empty raw
+// value as "leave the field at its zero value" for non-string kinds (so an
+// untagged int is not spuriously zeroed by a malformed parse) and as the empty
+// string for string kinds (the documented `default:""` semantics for fields
+// like OTLPEndpoint/DSN). The distinction between the two cases is therefore
+// immaterial to the result.
 func resolve(key, defaultVal string, sources []Source) (string, bool) {
 	for _, s := range sources {
 		if v, ok := s.Get(key); ok {
 			return v, true
 		}
 	}
-	// No source matched; use default tag if non-empty or if the tag is explicitly "".
-	// We distinguish "tag not present" (handled by caller) from "tag present but empty".
-	// Here defaultVal is always the result of Tag.Get which returns "" for missing tag
-	// too, so we only use it when the tag was explicitly set (checked by caller via
-	// ft.Tag.Lookup("default")). Since we don't have that info here, always return it
-	// if any source was tried or not — the caller already checked hasKey.
-	// Actually: if the `default` tag was set, return it (even if "").
-	// The caller passes defaultVal = ft.Tag.Get("default"). If the field had no
-	// `default:` tag, ft.Tag.Get returns "". We can't distinguish "no tag" from
-	// `default:""` here. To keep things simple: always return defaultVal even if "".
-	// This means a field with no default tag gets "" applied only if it's a string —
-	// for non-string kinds, "" means "no value" and setField will parse "".
-	//
-	// Better approach: return defaultVal only when it is non-empty, OR always return it.
-	// The spec says `default:""` is valid for OTLPEndpoint/DSN to mean "empty string".
-	// So: always return (defaultVal, true) — the field gets set to its default (possibly "").
-	// But that would zero-out int fields when no default is set. Let the caller decide.
-	//
-	// Revised: return (defaultVal, defaultVal != "" || /* tag was present */ true).
-	// Since we always receive defaultVal from Tag.Get("default"), we can't know if it
-	// was present. Callers must pass an explicit sentinel. Instead: always emit (defaultVal, true)
-	// so callers always get a value. For numeric fields with no default tag, the caller
-	// passes defaultVal="" which leads to setField parsing "" — handle that by skipping.
 	return defaultVal, true
 }
 

@@ -32,6 +32,7 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -292,9 +293,21 @@ func main() {
 	//   {{.ServiceUpper}}_OTLP_ENDPOINT — OTel collector      (default: $OTEL_EXPORTER_OTLP_ENDPOINT)
 	//   {{.ServiceUpper}}_DSN          — database DSN          (default: in-memory sqlite)
 	fs := flag.NewFlagSet("{{.BinName}}", flag.ExitOnError)
+	// Register the override flags so config.Flags(fs) can see them. The flag
+	// names match the config keys; config.Flags reads only flags explicitly set
+	// on the command line (it ignores these zero-value defaults), so the
+	// documented precedence (flag > env > .env > struct default) holds. Parse
+	// BEFORE config.Load — config.Flags inspects which flags were set, so the
+	// parse must happen first.
+	fs.String("GRPC_ADDR", "", "gRPC listen address (overrides {{.ServiceUpper}}_GRPC_ADDR)")
+	fs.String("HTTP_ADDR", "", "HTTP gateway address (overrides {{.ServiceUpper}}_HTTP_ADDR)")
+	fs.String("LOG_LEVEL", "", "log level: debug/info/warn/error")
+	fs.String("OTLP_ENDPOINT", "", "OpenTelemetry collector endpoint")
+	fs.String("DSN", "", "database connection string")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		log.Fatalf("{{.BinName}}: flags: %v", err)
+	}
 	var opts config.ServerOptions
-	opts.GRPCAddr = ":{{.GRPCPort}}"
-	opts.HTTPAddr = ":{{.HTTPPort}}"
 	if err := config.Load(&opts,
 		config.Flags(fs),
 		config.Env("{{.ServiceUpper}}_"),
@@ -302,7 +315,6 @@ func main() {
 	); err != nil {
 		log.Fatalf("{{.BinName}}: config: %v", err)
 	}
-	_ = fs.Parse(nil) // parse after Load so flag defaults match opts defaults
 
 	// Observability is wired behind the SDK's OTel seam. otel.Setup installs the
 	// global tracer/meter providers + a W3C propagator; the server's built-in

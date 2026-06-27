@@ -16,8 +16,10 @@ they explicitly opt into the `config/koanf` adapter.
 flags  >  environment  >  file (.env / JSON)  >  default tag
 ```
 
-The first source that returns a non-empty value for a key wins; subsequent sources are not
-consulted for that key.
+The first source that **has** a key wins — *presence*, not non-emptiness. A source that reports a
+key as present with an explicitly empty value (e.g. `MYSVC_DSN=` in the environment, read via
+`os.LookupEnv`) wins over later sources and the `default:` tag; only an *absent* key falls through.
+Subsequent sources are not consulted for a key once a source provides it.
 
 ## Quick start
 
