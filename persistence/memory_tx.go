@@ -94,11 +94,12 @@ func cloneEntity[T any](v T) T {
 }
 
 // deepCopyValue returns a recursively isolated copy of rv: pointers, slices, maps,
-// arrays, and structs are reconstructed so no nested reference is shared with the
-// source. Unexported (un-settable) struct fields are left as the value-copy made by
-// the enclosing Set — they are not deep-copied (reflection cannot set them) but are
-// not mutated in place by handlers either. Scalars and interfaces fall through as a
-// plain value copy.
+// arrays, structs, and the concrete value held by a non-nil interface are
+// reconstructed so no nested reference is shared with the source. Unexported
+// (un-settable) struct fields are left as the value-copy made by the enclosing
+// Set — they are not deep-copied (reflection cannot set them) but are not mutated
+// in place by handlers either. Scalars and nil interfaces fall through as a plain
+// value copy.
 //
 // seen maps an already-copied pointer's address to its copy so a cyclic or
 // shared-pointer graph (a DAG, or a struct that points back at itself) is copied
@@ -154,6 +155,27 @@ func deepCopyValue(rv reflect.Value, seen map[uintptr]reflect.Value) reflect.Val
 			f.Set(deepCopyValue(rv.Field(i), seen))
 		}
 		return cp
+	case reflect.Interface:
+		// An interface field (e.g. a proto `oneof` wrapper, *anypb.Any, or any
+		// any-typed field) holds a concrete dynamic value — frequently a pointer to a
+		// mutable struct. Returning rv unchanged would SHARE that dynamic value with
+		// the source, so an in-place mutation reached through the interface would
+		// survive a rollback — the very leak the deep copy exists to prevent. Unwrap
+		// the concrete value, deep-copy it, and re-wrap it preserving the static
+		// interface type. A nil interface (or one holding an un-copyable kind) falls
+		// through as a plain value copy.
+		if rv.IsNil() {
+			return rv
+		}
+		inner := deepCopyValue(rv.Elem(), seen)
+		// Re-wrap the (possibly copied) concrete value back into the interface type so
+		// the field keeps its declared interface type rather than the concrete type.
+		out := reflect.New(rv.Type()).Elem()
+		if inner.Type().AssignableTo(rv.Type()) {
+			out.Set(inner)
+			return out
+		}
+		return rv // concrete value not assignable back (shouldn't happen) — value copy
 	default:
 		return rv
 	}
