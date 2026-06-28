@@ -191,29 +191,35 @@ owns it — and a "must run, not skip" guard mirroring the existing PG/MySQL/Kaf
 ## Releasing
 
 The release is **synchronized**: `scripts/release.sh vX.Y.Z` (or `make release VERSION=vX.Y.Z`) bumps
-every nested module's `require github.com/infobloxopen/devedge-sdk` to `vX.Y.Z`, bumps the scaffold
-version source, `go mod tidy`s **each module individually**, and tags the root `vX.Y.Z` plus every
-submodule at `<path>/vX.Y.Z` — all on the **one** release commit. Default is a dry run; `--push` does
-it for real.
+every nested module's `require github.com/infobloxopen/devedge-sdk` to `vX.Y.Z` and the scaffold
+version source, then runs a **two-phase, tag-root-first** sequence and tags the root `vX.Y.Z` plus
+every submodule at `<path>/vX.Y.Z`. Default is a dry run; `--push` does it for real; `--validate`
+proves the go.sum mechanic locally (no real tag).
 
-Two load-bearing rules the script encodes (and that any new module must respect):
+Three load-bearing rules the script encodes (and that any new module must respect):
 
 - **Never `go work sync`.** In this nested layout it rewrites/empties the member `require` blocks.
   Tidy each module individually instead.
-- **Tidy needs the shed root resolvable before the tag exists.** The script sets the require to
-  `vX.Y.Z`, adds a *temporary* local `replace` to the working-tree root for the duration of the tidy
-  (because `vX.Y.Z` is not tagged yet), then drops the replace. The committed `go.mod` carries the
-  clean real `require`, which resolves the instant the `vX.Y.Z` tag is pushed.
+- **Tag the root FIRST, then finalize adapter go.sums against it.** An adapter's go.sum must carry the
+  real checksum for `root@vX.Y.Z`, or any `-mod=readonly` build (CI's `GOWORK=off` per-module build, a
+  standalone external consumer) fails with `missing go.sum entry … to verify package … is provided by
+  exactly one module`. The **only** way `go mod tidy` writes that checksum is to resolve `root@vX.Y.Z`
+  from its published source — the **git tag**. A filesystem `replace` to the working tree makes tidy
+  *succeed* but writes **no** go.sum hash for the version, and pushing the tag later does **not**
+  retro-fill a committed go.sum. So the script does **phase 1** — commit the version-var bump + each
+  adapter's `require root vX.Y.Z` (`go mod edit` only), tag root `vX.Y.Z`, **push the root tag** — then
+  **phase 2** — with `root@vX.Y.Z` resolvable from the remote, `GOWORK=off go mod tidy` each adapter so
+  the real hash lands in its go.sum, commit, tag the adapters, push.
+- **The root tag and the adapter tags sit on two different commits.** That is standard and correct for
+  a multi-module repo: each adapter is tagged only *after* its go.sum is complete, so a standalone
+  `GOWORK=off` build at any adapter tag resolves cleanly.
 
-**Why all tags can sit on one commit:** Go resolves `require …devedge-sdk vX.Y.Z` to the tag `vX.Y.Z`
-and `…/observability/otel vX.Y.Z` to `observability/otel/vX.Y.Z`. A tag is just a commit pointer;
-nothing requires the root tag to be on an *earlier* commit. After the release commit, every adapter's
-real require points at a tag that exists on that same commit and contains the shed root — a coherent
-set. **External-resolution caveat:** until the tags are pushed, a `GOWORK=off` build of an adapter
-fails (`missing go.sum entry`) because the required `vX.Y.Z` root is not yet on the remote/proxy —
-expected; local builds keep working via `go.work`. After pushing, the module proxy may take minutes to
-observe the new tags; a brief `go get …@vX.Y.Z` 404 is **proxy lag**, not a release defect (retry or
-use `GOPROXY=direct`).
+**Post-push verification (proxy lag):** after `--push`, confirm an external consumer resolves each
+module — `make release-verify VERSION=vX.Y.Z` does `go get <mod>@vX.Y.Z` for every module. Use the
+**explicit** `@vX.Y.Z`, not `@latest`: the proxy's `@latest` view lags a few minutes behind a fresh
+tag, while an explicit version fetches the tag directly. A brief 404 on an explicit version is proxy
+lag (retry, or prefix `GOPROXY=direct` for an immediate VCS fetch); `GONOSUMCHECK` is **not** needed
+for these public modules.
 
 ## The gates a new module must pass
 

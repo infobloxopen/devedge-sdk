@@ -1,5 +1,5 @@
 .PHONY: build test security-check vet lint tidy generate sync-scaffold-mirrors \
-        build-gowork-off check-graph-isolation release
+        build-gowork-off check-graph-isolation release release-verify
 
 # MODULES is every Go module in this repo (WS-011 / F039 multi-module split). The
 # build/vet/test targets loop over it so each module's gates run; go.work resolves
@@ -107,14 +107,31 @@ lint:
 tidy:
 	@set -e; for m in $(MODULES); do echo "== tidy $$m =="; (cd $$m && go mod tidy); done
 
-# release cuts the SYNCHRONIZED multi-module release (WS-011 / F039). Given a
-# VERSION it bumps every nested module's `require github.com/infobloxopen/devedge-sdk`
-# + the scaffold version vars to that version, tidies each module individually (NEVER
-# `go work sync` — it empties member requires in this nested layout), and tags the
-# root + all six submodules at <path>/VERSION on one commit. Default is a DRY RUN
-# that prints the plan and stages the bumps; pass PUSH=1 for the real run.
-#   make release VERSION=v0.27.0            # dry run (no tags, no push)
-#   make release VERSION=v0.27.0 PUSH=1     # commit, tag all seven, push
+# release cuts the SYNCHRONIZED multi-module release (WS-011 / F039) with TAG-ROOT-
+# FIRST ordering: it bumps the scaffold version source + each adapter's
+# `require github.com/infobloxopen/devedge-sdk` to VERSION, then phase 1 commits +
+# tags + PUSHES the root tag; phase 2 finalizes each adapter's go.sum against that
+# pushed root tag (the real root@VERSION checksum — a filesystem replace would leave
+# it absent and break `-mod=readonly` builds), commits, and tags the adapters. NEVER
+# `go work sync` (it empties member requires in this nested layout). Default is a DRY
+# RUN that prints the two-phase plan + stages the edits; pass PUSH=1 for the real run.
+#   make release VERSION=v0.27.0              # dry run (no commit/tag/push)
+#   make release VERSION=v0.27.0 VALIDATE=1   # local go.sum smoke (no real tag/network)
+#   make release VERSION=v0.27.0 PUSH=1       # the real two-phase release
 release:
-	@test -n "$(VERSION)" || { echo "usage: make release VERSION=vX.Y.Z [PUSH=1]"; exit 2; }
-	./scripts/release.sh $(VERSION) $(if $(PUSH),--push,)
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=vX.Y.Z [PUSH=1|VALIDATE=1]"; exit 2; }
+	./scripts/release.sh $(VERSION) $(if $(PUSH),--push,)$(if $(VALIDATE),--validate,)
+
+# release-verify confirms an EXTERNAL consumer resolves every module at VERSION after
+# a push. Uses the explicit @VERSION (not @latest — the proxy's @latest view lags a
+# few minutes behind a fresh tag); GONOSUMCHECK is not needed (public modules).
+release-verify:
+	@test -n "$(VERSION)" || { echo "usage: make release-verify VERSION=vX.Y.Z"; exit 2; }
+	@set -e; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	cd "$$tmp" && go mod init release-verify >/dev/null 2>&1; \
+	for m in $(MODULES); do \
+	  path="github.com/infobloxopen/devedge-sdk"; [ "$$m" = "." ] || path="$$path/$$m"; \
+	  echo "== go get $$path@$(VERSION) =="; \
+	  GOFLAGS=-mod=mod go get "$$path@$(VERSION)"; \
+	done; \
+	echo "all modules resolved at $(VERSION)"
