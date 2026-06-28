@@ -76,6 +76,21 @@ NESTED_MODULES=(
   "persistence/entrepo"
 )
 
+# Testdata fixtures that CONSUME the SDK at a real version (`require root vX.Y.Z`) AND
+# locally `replace` the adapter modules. When phase 2 bumps the adapters'
+# `require root → vX.Y.Z`, Go's MVS pulls these fixtures up to root@vX.Y.Z too, so
+# their go.mods go stale and `GOWORK=off go test ./...` (what main CI runs) fails with
+# "updates to go.mod needed" until they are re-tidied. Phase 2 does that re-tidy.
+# Inclusion criterion: requires the SDK at a real version (not v0.0.0) and replaces an
+# adapter. testdata/toy is EXCLUDED — it pins the SDK at v0.0.0 via a local replace and
+# uses no adapters, so a version bump never reaches it. Add a fixture here only if it
+# meets the criterion. (These are throwaway modules, NOT part of any tagged module.)
+TESTDATA_FIXTURES=(
+  "testdata/apikey"
+  "testdata/fleet"
+  "testdata/iam"
+)
+
 # The scaffold's single version source: fallbackSDKVersion in model.go. SDKVersion,
 # OTelAdapterVersion, GormtxVersion and EntrepoVersion all resolve from the running
 # binary's build info and fall back to THIS constant, so bumping it bumps them all.
@@ -205,8 +220,9 @@ echo ""
 
 # ---- working-tree safety ----------------------------------------------------
 # Refuse if the tree is dirty in files the release does NOT touch. The files the
-# release legitimately mutates are model.go + the six adapter go.mod/go.sum.
-ALLOWED_DIRTY_RE='^(cmd/go\.(mod|sum)|config/koanf/go\.(mod|sum)|events/kafkabus/go\.(mod|sum)|observability/otel/go\.(mod|sum)|persistence/gormtx/go\.(mod|sum)|persistence/entrepo/go\.(mod|sum)|cmd/devedge-sdk/internal/scaffold/model\.go)$'
+# release legitimately mutates are model.go + the six adapter go.mod/go.sum + the
+# re-tidied testdata fixture go.mod/go.sum (so a dry-run/--push re-run stays clean).
+ALLOWED_DIRTY_RE='^(cmd/go\.(mod|sum)|config/koanf/go\.(mod|sum)|events/kafkabus/go\.(mod|sum)|observability/otel/go\.(mod|sum)|persistence/gormtx/go\.(mod|sum)|persistence/entrepo/go\.(mod|sum)|testdata/(apikey|fleet|iam)/go\.(mod|sum)|cmd/devedge-sdk/internal/scaffold/model\.go)$'
 unexpected="$(git status --porcelain | awk '{print $2}' | grep -Ev "$ALLOWED_DIRTY_RE" || true)"
 if [ -n "$unexpected" ]; then
   red "working tree has unexpected changes (commit/stash them first):"
@@ -231,6 +247,8 @@ echo "   • GOWORK=off go mod tidy each adapter — the real $SDK_PATH@$VERSION
 echo "   • commit the completed adapter go.mod+go.sum"
 echo "   • tag the ${#NESTED_MODULES[@]} adapters on that 2nd commit  ->  push them:"
 for t in "${ADAPTER_TAGS[@]}"; do echo "        $t"; done
+echo "   • re-tidy the ${#TESTDATA_FIXTURES[@]} testdata fixtures (pulled to root@$VERSION by the adapter bump) +"
+echo "     gate each with GOWORK=off go test -run '^\$' ./... -> commit (no tag) so main CI stays green"
 echo ""
 
 # ---- always perform the version-var + require edits (so the diff is reviewable) ----
@@ -300,9 +318,14 @@ for dir in "${NESTED_MODULES[@]}"; do
     # Fetch the real root@VERSION checksum into this adapter's go.sum (NO replace).
     # GOFLAGS=-mod=mod so tidy may write go.mod/go.sum. GOPROXY default first; if the
     # proxy hasn't observed the fresh tag yet, fall back to direct VCS resolution.
+    # The retry MUST also set GOSUMDB=off: GOPROXY=direct fetches the tag straight from
+    # the VCS, but Go still tries to verify the hash against sum.golang.org, which 404s
+    # for a tag the checksum DB hasn't ingested yet — so direct alone still fails. With
+    # GOSUMDB=off the hash is computed from the VCS source and written to go.sum as
+    # normal. (Same combination the --validate path uses; verified against v0.27.0.)
     if ! GOWORK=off GOFLAGS=-mod=mod go mod tidy 2>/dev/null; then
-      yellow "     proxy lag — retrying $dir tidy with GOPROXY=direct"
-      GOWORK=off GOFLAGS=-mod=mod GOPROXY=direct go mod tidy
+      yellow "     proxy lag — retrying $dir tidy with GOPROXY=direct GOSUMDB=off"
+      GOWORK=off GOFLAGS=-mod=mod GOPROXY=direct GOSUMDB=off go mod tidy
     fi
   )
   # Assert the real hash landed before we tag this adapter.
@@ -344,6 +367,46 @@ for t in "${ADAPTER_TAGS[@]}"; do
   git push $PUSH_FLAGS origin "refs/tags/$t"
   green "   pushed $t"
 done
+echo ""
+
+# ═════════════════════════════════════════════════════════════════════════════
+# REAL RUN — PHASE 2 (housekeeping): re-tidy the testdata fixtures so main CI stays
+# green. The adapter `require root` bump pulls these fixtures (which locally replace the
+# adapters) up to root@VERSION via MVS, leaving their go.mods stale. They are throwaway
+# modules — NOT part of any tagged module — so this lands as a follow-on branch commit
+# with NO tag. Local replaces resolve every devedge-sdk module from the working tree,
+# so this step needs no proxy and no pushed tag.
+# ═════════════════════════════════════════════════════════════════════════════
+bold "── PHASE 2 (housekeeping): re-tidying the ${#TESTDATA_FIXTURES[@]} testdata fixtures after the adapter bump ──"
+for fix in "${TESTDATA_FIXTURES[@]}"; do
+  echo "  == $fix =="
+  ( cd "$fix"
+    # tidy brings `require root` up to $VERSION and refreshes the indirect closure.
+    GOWORK=off GOFLAGS=-mod=mod go mod tidy
+  )
+  # Gate with `go test` (NOT go build/vet — test deps differ, and this is exactly what
+  # main CI runs). `-run '^$'` matches no test, so it BUILDS every test binary without
+  # running anything. Default (readonly) mod mode: a still-stale go.mod fails here with
+  # "updates to go.mod needed".
+  if ( cd "$fix" && GOWORK=off go test -run '^$' ./... >/dev/null 2>&1 ); then
+    green "     $fix: GOWORK=off go test -run '^\$' ./... clean"
+  else
+    red   "     $fix: GOWORK=off go test build FAILED after re-tidy — aborting (output follows)"
+    ( cd "$fix" && GOWORK=off go test -run '^$' ./... ) || true
+    exit 1
+  fi
+done
+
+FIXTURE_STAGE=()
+for fix in "${TESTDATA_FIXTURES[@]}"; do FIXTURE_STAGE+=("$fix/go.mod" "$fix/go.sum"); done
+git add -- "${FIXTURE_STAGE[@]}" 2>/dev/null || true
+if git diff --cached --quiet; then
+  yellow "   testdata fixtures already tidy — nothing to commit"
+else
+  git commit -m "release: $VERSION phase 2 — re-tidy testdata fixtures after the adapter bump (WS-011 / F039)"
+  git push origin "$CUR_BRANCH"
+  green "   committed + pushed the testdata re-tidy"
+fi
 echo ""
 green "release $VERSION COMPLETE: root tag on $ROOT_COMMIT, ${#NESTED_MODULES[@]} adapter tags on $ADAPTER_COMMIT"
 echo ""
