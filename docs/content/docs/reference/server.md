@@ -41,6 +41,18 @@ type Config struct {
     // LROStore backs long-running operations (AIP-151). Defaults to an in-memory
     // store (1-hour TTL) when nil.
     LROStore lro.Store
+    // Logger is the structured logger the default chain's middleware.LoggingUnary
+    // writes one record per RPC to (trace-correlated, secret-redacted payloads at
+    // Debug). Defaults to slog.Default() when nil.
+    Logger *slog.Logger
+    // ReadinessChecks is the list of readiness checks the server runs on every
+    // /readyz probe and whenever it drives the gRPC health status. An empty slice
+    // means "always ready". Each check is bounded by a 2s timeout.
+    ReadinessChecks []health.Check
+    // Resilience configures optional resilience policy interceptors inserted into
+    // the default chain. server.New applies a 30-second request timeout when the
+    // zero value is supplied; rate limiting and circuit breaking are opt-in (nil).
+    Resilience ResilienceConfig
 }
 ```
 
@@ -54,6 +66,27 @@ type Config struct {
 | `Interceptors` | no | `nil` | appended **after** the framework chain |
 | `DeduplicationStore` | no | in-memory (10m TTL) | idempotency replay store for `DeduplicateUnary` |
 | `LROStore` | no | in-memory (1h TTL) | long-running operation store (AIP-151) |
+| `Logger` | no | `slog.Default()` | structured logger for `middleware.LoggingUnary`; one record per RPC, trace-correlated with secret-redacted payloads at Debug |
+| `ReadinessChecks` | no | `nil` (always ready) | list of readiness checks run on every `/readyz` probe and gRPC health status; each check is bounded by a 2s timeout; a single failure flips `/readyz` to 503 |
+| `Resilience` | no | 30s request timeout; rate limiting and circuit breaking off | see `ResilienceConfig` below |
+
+### ResilienceConfig
+
+```go
+type ResilienceConfig struct {
+    RequestTimeout   time.Duration
+    PerMethodTimeout map[string]time.Duration
+    RateLimiter      resilience.RateLimiter
+    CircuitBreaker   resilience.CircuitBreaker
+}
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `RequestTimeout` | 30s | bounds every unary handler; set to `resilience.NoTimeout` to disable; zero value → 30s applied by `server.New` |
+| `PerMethodTimeout` | `nil` | per gRPC full-method timeout override (e.g. `"/pkg.Svc/LongOp": 5*time.Minute`); takes precedence over `RequestTimeout`; `resilience.NoTimeout` disables that method's timeout |
+| `RateLimiter` | `nil` (off) | inserted after `TenantIDUnary` to shed excess load with `codes.ResourceExhausted`; use `resilience.NewTokenBucket` or any `resilience.RateLimiter` implementation |
+| `CircuitBreaker` | `nil` (off) | wraps handler invocations just inside the framework chain; plug in `sony/gobreaker`, `afex/hystrix-go`, or any `resilience.CircuitBreaker` implementation |
 
 `DefaultGRPCAddr` is `":9090"`.
 

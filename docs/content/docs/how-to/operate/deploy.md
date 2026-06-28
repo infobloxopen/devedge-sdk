@@ -47,30 +47,55 @@ That is by design (see below).
 
 ## Target 1 — Kubernetes / k3s (Flux GitOps)
 
-The chart is **framework-owned and you never author it.** The canonical chart lives in the SDK and
-is published by the framework to an OCI registry. Your repo carries only:
+The chart is **framework-owned and you never author it.** The canonical chart lives embedded in the
+SDK. The intended publish target is `ghcr.io/infobloxopen/charts/devedge-service`, but **the
+framework does not yet publish the chart to that registry** — it is the planned coordinate, not a
+live one. Until the framework ships a publish step, you must publish the embedded chart to your own
+registry first (see *Publishing the chart yourself* below). Your repo carries only:
 
 - a Flux **`HelmRelease`** that reconciles the chart with your values,
-- an **`OCIRepository`** source pointing at the published chart, and
+- an **`OCIRepository`** source pointing at the chart registry (yours, until the framework
+  publishes its own), and
 - a thin **`values.yaml`** overlay — the only chart input you edit.
 
 The chart renders a `Deployment` (with `livenessProbe` → `/healthz`, `readinessProbe` → `/readyz`,
 the config env, `OTEL_*` export, the DSN as a Secret, and `terminationGracePeriodSeconds`), a
 `Service`, an optional `Ingress`, and resource requests/limits.
 
+### Publishing the chart yourself (required today)
+
+The framework-published chart registry is not yet live. Until it is, extract and push the embedded
+chart to your own OCI registry, then point your `oci-repository.yaml` at it:
+
+```sh
+# 1. Extract the embedded chart (requires devedge-sdk CLI on PATH):
+devedge-sdk chart export --out ./devedge-service
+
+# 2. Package and push to your registry:
+helm package ./devedge-service
+helm push devedge-service-*.tgz oci://<your-registry>/charts
+
+# 3. Update deploy/k8s/oci-repository.yaml spec.url:
+#    url: oci://<your-registry>/charts
+```
+
+Once the framework publishes the chart, update `oci-repository.yaml` to point at
+`oci://ghcr.io/infobloxopen/charts` and remove your private copy.
+
 ### Wire it up
 
-1. Edit `deploy/k8s/values.yaml`: set `image.repository` (and `image.tag` for a pinned release),
+1. Publish the embedded chart to your registry (see above).
+2. Edit `deploy/k8s/values.yaml`: set `image.repository` (and `image.tag` for a pinned release),
    the OTEL collector endpoint, and the DSN (in prod, reference a pre-provisioned Secret via
    `dsn.existingSecret` so the connection string never lands in git).
-2. Point `deploy/k8s/oci-repository.yaml` `spec.url` at your published chart registry.
-3. Apply the overlay as a ConfigMap the `HelmRelease` references:
+3. Point `deploy/k8s/oci-repository.yaml` `spec.url` at your published chart registry.
+4. Apply the overlay as a ConfigMap the `HelmRelease` references:
    ```sh
    kubectl create configmap orders-values -n orders \
      --from-file=values.yaml=deploy/k8s/values.yaml \
      --dry-run=client -o yaml | kubectl apply -f -
    ```
-4. Commit `deploy/k8s/` and let Flux reconcile it.
+5. Commit `deploy/k8s/` and let Flux reconcile it.
 
 ### Why "you never see the chart"
 
@@ -97,8 +122,10 @@ adapter and keeps your local environment shaped like production.
 
 The embedded chart is the single source of truth, consumed two ways:
 
-1. **Prod / GitOps.** A release step publishes the chart to an OCI registry (or a GH Pages Helm
-   repo); the emitted `HelmRelease` + `OCIRepository` reference it by version.
+1. **Prod / GitOps.** The chart is published to an OCI registry; the emitted `HelmRelease` +
+   `OCIRepository` reference it by version. The framework plans to publish to
+   `ghcr.io/infobloxopen/charts/devedge-service`, but **that registry is not yet live** — publish
+   to your own registry today (see *Publishing the chart yourself* above).
 2. **Local / dev.** `de project up --deploy` renders the SAME embedded chart directly
    (`helm template`). One chart, two reconcilers — they cannot drift.
 
