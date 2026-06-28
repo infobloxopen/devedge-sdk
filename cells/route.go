@@ -75,13 +75,41 @@ func (s State) String() string {
 	}
 }
 
+// EventPolicy is the publisher mode for a tenant's outbox during the event
+// plane (L4). At rest a tenant is NORMAL; a move pauses or drains its publisher
+// so no stale-epoch event escapes after the cut.
+type EventPolicy uint8
+
+const (
+	// PolicyNormal publishes to the normal destination at the current EventEpoch.
+	PolicyNormal EventPolicy = iota
+	// PolicyPause stops sending but keeps writing the outbox durably (never
+	// drops): the relay halts; if the backlog grows past a threshold, new tenant
+	// writes are rejected with a retryable error rather than lose events.
+	PolicyPause
+	// PolicyDrainQueue sends to a drain/quarantine destination during a move; the
+	// envelope preserves RouteEpoch/EventEpoch/SourceCell/BarrierID so a replay
+	// can merge by (tenant_id, event_seq).
+	PolicyDrainQueue
+)
+
+// String returns the canonical name of the event policy.
+func (p EventPolicy) String() string {
+	switch p {
+	case PolicyNormal:
+		return "NORMAL"
+	case PolicyPause:
+		return "PAUSE"
+	case PolicyDrainQueue:
+		return "DRAIN_QUEUE"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // TenantRoute is the per-tenant record in the routing table — the single source
 // of truth for where a tenant is served and whether it is moving. Safety derives
 // from RouteEpoch (monotonic, never decreases), not from clocks.
-//
-// Event/data-plane fields (event_epoch, high-watermarks) from the full proposal
-// are intentionally absent from this routing-plane slice (L4/P4) and will be
-// added without breaking this contract.
 type TenantRoute struct {
 	TenantID   string
 	RouteEpoch uint64 // monotonic per tenant; never decreases, even on rollback
@@ -92,6 +120,23 @@ type TenantRoute struct {
 
 	BarrierID    string // identifies the in-progress move barrier
 	BarrierEpoch uint64 // the epoch new work is rejected at while draining
+
+	// Event plane (L4). EventEpoch fences old publishers: a publisher at an
+	// EventEpoch at or below a superseded barrier can never publish NORMAL again.
+	EventPolicy EventPolicy
+	EventEpoch  uint64
+
+	// Data-owning cells (P4). High-watermarks captured at the barrier so the
+	// target can prove it has caught up before the route commits. Zero for
+	// compute-only (shared-DB) cells, where data catch-up is a no-op.
+	SourceDataHWM  uint64
+	SourceEventHWM uint64
+
+	// ControllerClass shards move orchestration like a Kubernetes IngressClass:
+	// a route is driven only by the controller whose class matches. Empty binds
+	// to the default class. Correctness is unaffected — class only decides who
+	// orchestrates; an unclassed/ownerless route simply stays ACTIVE.
+	ControllerClass string
 
 	Deadline     time.Time // liveness deadline for the current move phase (never a safety mechanism)
 	LastOperator string    // audit: who drove the last transition

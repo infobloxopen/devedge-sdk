@@ -126,3 +126,20 @@ func TestSoftDeleteUniqueMixin_HasHook(t *testing.T) {
 
 // Compile-time check that SoftDeleteUniqueMixin implements ent.Mixin.
 var _ ent.Mixin = entrepo.SoftDeleteUniqueMixin{}
+
+// TenantWriteGuardMixin tests — the cross-tenant-write guard hook (cell-based
+// development L3 on the ent path). It is hook-only (adds no field; TenantMixin owns
+// account_id) and rejects an update/delete of another tenant's row.
+
+func TestTenantWriteGuardMixin_HookOnly(t *testing.T) {
+	m := entrepo.TenantWriteGuardMixin{}
+	if len(m.Fields()) != 0 {
+		t.Errorf("TenantWriteGuardMixin must add no field (TenantMixin owns account_id), got %d", len(m.Fields()))
+	}
+	if len(m.Hooks()) == 0 {
+		t.Fatal("TenantWriteGuardMixin must have a mutation hook to reject cross-tenant writes")
+	}
+}
+
+// Compile-time check that TenantWriteGuardMixin implements ent.Mixin.
+var _ ent.Mixin = entrepo.TenantWriteGuardMixin{}

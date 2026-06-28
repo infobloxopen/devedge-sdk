@@ -32,6 +32,19 @@ import (
 // the next pump (the cursor is still behind it); the consumer's per-(event, handler)
 // idempotency marker makes the redelivery a no-op effect.
 //
+// Cell-based development (L4): the relay carries each event's per-tenant EventSeq and
+// EventEpoch onto the published [BusMessage] envelope (via [eventFromRecord]) so a
+// consumer can order/dedup a tenant's events by (AccountID, EventSeq) and fence a
+// superseded epoch after a tenant move. The relay's global forward cursor is deliberately
+// LEFT AS-IS: per-tenant publisher PAUSE / DRAIN_QUEUE enforcement inside the relay (so a
+// moving tenant's events are held or diverted mid-stream) is an explicit later-phase
+// follow-up, NOT done here. For v1 the synchronous gate (L2) + the storage seal (L3) stop
+// new source writes for the brief, budgeted move window, so there are no new source events
+// to pause; the epoch metadata on the envelope plus the idempotent consumer dedup deliver
+// the per-tenant ordering and fencing guarantees without a per-tenant relay engine. The
+// move controller's pause/resume is modeled by the [persistence/gormtx.OutboxEventBarrier]
+// policy + drained check, which the controller waits on before committing a move.
+//
 // Poison / head-of-line: the head event is the oldest un-published event. If Publish to
 // the bus fails, the cursor does not advance (advancing would skip the gap and lose the
 // event — the outbox is write-only, the cursor is the only progress), so the batch stops

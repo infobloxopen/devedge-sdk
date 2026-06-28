@@ -52,6 +52,19 @@ func MigrationModelsFor(useOutbox, useIdempotency bool) []any {
 	return models
 }
 
+// CellMigrationModels returns the FRAMEWORK models for cell-based development: the
+// storage fence (tenant_fence), the per-tenant event-seq allocator (tenant_event_seq),
+// and the publisher-policy table (tenant_event_policy). A service that adopts
+// cell-based development appends these to its module's FrameworkModels (alongside
+// MigrationModelsFor); a service that has not is unaffected (the columns added to the
+// outbox default safely on existing rows, and these tables simply do not exist).
+//
+// They are returned separately from MigrationModelsFor so existing single-module
+// migrations keep their exact framework-table set; the host composes both slices.
+func CellMigrationModels() []any {
+	return []any{&TenantFenceRow{}, &TenantEventSeqRow{}, &TenantEventPolicyRow{}}
+}
+
 // MigrateOptions configures a host-run module migration.
 type MigrateOptions struct {
 	// Namespace is the module's resolved isolation identity. When Schema is set the
@@ -252,6 +265,12 @@ func frameworkBaseTable(m any) (string, bool) {
 		return deadLetterBaseTable, true
 	case *IdemMarker:
 		return idempotencyBaseTable, true
+	case *TenantFenceRow:
+		return fenceBaseTable, true
+	case *TenantEventSeqRow:
+		return eventSeqBaseTable, true
+	case *TenantEventPolicyRow:
+		return eventPolicyBaseTable, true
 	default:
 		return "", false
 	}

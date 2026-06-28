@@ -26,10 +26,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
+	"github.com/infobloxopen/devedge-sdk/cells"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
@@ -55,6 +58,14 @@ type OutboxRow struct {
 	// cursor's primary sort key. It is part of the primary key so PG/MySQL declarative
 	// partitioning on it is legal.
 	CreatedTime time.Time `gorm:"primaryKey;column:created_time;index"`
+
+	// EventSeq is the per-tenant strictly-increasing, gap-free sequence number for
+	// cell-based development; EventEpoch fences the row to the producing route epoch.
+	// Both DEFAULT 0 so existing rows and non-cell-routed services are unaffected. The
+	// store allocates EventSeq (per account_id, in the producing tx) and stamps
+	// EventEpoch from the writer's admitted route epoch when they are left 0 on Append.
+	EventSeq   int64 `gorm:"column:event_seq;default:0"`
+	EventEpoch int64 `gorm:"column:event_epoch;default:0;index"`
 }
 
 // TableName pins the table to "outbox" regardless of struct/package naming.
@@ -139,6 +150,35 @@ func (s *GormOutboxStore) Append(ctx context.Context, rec *persistence.OutboxRec
 	if created.IsZero() {
 		created = s.now()
 	}
+	tx := s.conn(ctx)
+
+	// Cell-based development (L4): allocate the per-tenant event_seq and stamp the
+	// event_epoch INSIDE the producing transaction so the sequence is monotonic per
+	// tenant without a clock and the event carries the epoch it was produced at.
+	eventSeq := rec.EventSeq
+	if eventSeq == 0 && rec.AccountID != "" {
+		// Allocate a per-tenant seq only when the allocator table exists — a service
+		// that has not adopted cell-based development never migrated it, and Append
+		// must stay a plain outbox insert for it (seq stays 0 = unsequenced).
+		has, herr := tableExists(ctx, tx, s.eventSeqTable())
+		if herr != nil {
+			return herr
+		}
+		if has {
+			next, err := s.nextEventSeq(ctx, tx, rec.AccountID)
+			if err != nil {
+				return err
+			}
+			eventSeq = next
+		}
+	}
+	eventEpoch := rec.EventEpoch
+	if eventEpoch == 0 {
+		if tok, ok := cells.AdmissionTokenFromContext(ctx); ok {
+			eventEpoch = int64(tok.RouteEpoch)
+		}
+	}
+
 	row := &OutboxRow{
 		ID:            rec.ID,
 		AccountID:     rec.AccountID,
@@ -147,13 +187,19 @@ func (s *GormOutboxStore) Append(ctx context.Context, rec *persistence.OutboxRec
 		EventType:     rec.EventType,
 		Payload:       rec.Payload,
 		CreatedTime:   created,
+		EventSeq:      eventSeq,
+		EventEpoch:    eventEpoch,
 	}
-	if err := s.conn(ctx).Table(s.table).Create(row).Error; err != nil {
+	if err := tx.Table(s.table).Create(row).Error; err != nil {
 		if ce := persistence.ConstraintError(err); ce != nil {
 			return ce
 		}
 		return fmt.Errorf("append outbox row: %w", err)
 	}
+	// Reflect the allocated/stamped values back to the caller's record so a publisher
+	// can observe the assigned sequence/epoch (e.g. to surface them on the bus event).
+	rec.EventSeq = eventSeq
+	rec.EventEpoch = eventEpoch
 	return nil
 }
 
@@ -195,7 +241,67 @@ func fromOutboxRow(r *OutboxRow) *persistence.OutboxRecord {
 		EventType:     r.EventType,
 		Payload:       r.Payload,
 		CreatedTime:   r.CreatedTime,
+		EventSeq:      r.EventSeq,
+		EventEpoch:    r.EventEpoch,
 	}
+}
+
+// TenantEventSeqRow is the per-tenant event-sequence allocator for cell-based
+// development: one row per tenant holding the NEXT event_seq to hand out. The
+// store increments it inside the producing transaction so a tenant's outbox rows
+// get a strictly-increasing, gap-free sequence without a clock or a global
+// counter. Different tenants are independent rows, so they never contend.
+type TenantEventSeqRow struct {
+	AccountID string `gorm:"primaryKey;column:account_id;type:varchar(255)"`
+	NextSeq   int64  `gorm:"column:next_seq;default:0"`
+}
+
+// TableName pins the allocator table name.
+func (TenantEventSeqRow) TableName() string { return "tenant_event_seq" }
+
+// eventSeqBaseTable is the unqualified event-seq allocator table name.
+const eventSeqBaseTable = "tenant_event_seq"
+
+// nextEventSeq allocates and returns the next per-tenant event_seq inside tx. It
+// upserts the tenant's allocator row, incrementing next_seq atomically and reading
+// the incremented value back, so concurrent producers in serialized transactions
+// observe a gap-free strictly-increasing sequence. The row is read FOR UPDATE on
+// engines that support row locking (skipped on SQLite, where the test path
+// serializes writes) so two concurrent producers cannot read the same seq.
+func (s *GormOutboxStore) nextEventSeq(ctx context.Context, tx *gorm.DB, accountID string) (int64, error) {
+	table := s.eventSeqTable()
+	// Ensure the row exists (NextSeq starts at 0), then bump-and-read under a row lock.
+	if err := tx.Table(table).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&TenantEventSeqRow{AccountID: accountID, NextSeq: 0}).Error; err != nil {
+		return 0, fmt.Errorf("ensure event-seq row for %q: %w", accountID, err)
+	}
+	q := tx.Table(table)
+	if tx.Dialector.Name() != "sqlite" {
+		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	var row TenantEventSeqRow
+	if err := q.Where("account_id = ?", accountID).Take(&row).Error; err != nil {
+		return 0, fmt.Errorf("lock event-seq row for %q: %w", accountID, err)
+	}
+	next := row.NextSeq + 1
+	if err := tx.Table(table).
+		Where("account_id = ?", accountID).
+		Update("next_seq", next).Error; err != nil {
+		return 0, fmt.Errorf("advance event-seq for %q: %w", accountID, err)
+	}
+	return next, nil
+}
+
+// eventSeqTable returns the (possibly namespaced) event-seq allocator table name,
+// matching the namespacing applied to the outbox table. QualifyTable always appends
+// the base name at the end (schema."outbox" or prefix+"outbox"), so swapping the
+// trailing base for the allocator base re-applies the same namespace.
+func (s *GormOutboxStore) eventSeqTable() string {
+	if strings.HasSuffix(s.table, outboxBaseTable) {
+		return s.table[:len(s.table)-len(outboxBaseTable)] + eventSeqBaseTable
+	}
+	return eventSeqBaseTable
 }
 
 // --- sidecar cursor store (the dispatcher's own progress, NEVER the outbox) ---

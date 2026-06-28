@@ -44,6 +44,16 @@ type Event struct {
 	AggregateID   string
 	AccountID     string
 	Payload       []byte
+
+	// EventSeq and EventEpoch are the cell-based-development ordering/fencing
+	// metadata carried from the outbox row onto the published event so a consumer
+	// can order and dedup a tenant's events by (AccountID, EventSeq) and discard a
+	// superseded-epoch event after a tenant move. They are allocated/stamped by the
+	// outbox store inside the producing transaction (left 0 here on Publish); 0
+	// means "unsequenced/unfenced", which is the case for services that have not
+	// adopted cell-based development.
+	EventSeq   int64
+	EventEpoch int64
 }
 
 // Publisher records a domain event. The contract that makes this a transactional

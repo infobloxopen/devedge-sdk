@@ -44,6 +44,21 @@ type OutboxRecord struct {
 	// It is also the primary sort key of the forward cursor — events are read and
 	// delivered in (created_time, id) order, which is commit/created order.
 	CreatedTime time.Time
+
+	// EventSeq is a per-tenant strictly-increasing, gap-free sequence number used by
+	// cell-based development: a downstream consumer orders and dedups a tenant's
+	// events by (AccountID, EventSeq) so a replay across a tenant move merges
+	// deterministically. The producing store allocates it in the SAME transaction as
+	// the business write when it is left 0 on Append (see the backend's outbox store),
+	// so it is monotonic per tenant without a clock. It is backend-neutral here: a
+	// store that does not allocate sequences leaves it 0.
+	EventSeq int64
+	// EventEpoch fences events to the route epoch at which they were produced, so a
+	// consumer can discard an event from a superseded epoch after a tenant moves. The
+	// producing store stamps it from the writer's admitted route epoch when it is left
+	// 0 on Append. 0 means "unfenced" (never cell-routed), which is safe on existing
+	// rows and for services that have not adopted cell-based development.
+	EventEpoch int64
 }
 
 // OutboxCursor is a position in the forward scan of the WRITE-ONLY outbox: the

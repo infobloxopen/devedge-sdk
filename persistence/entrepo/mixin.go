@@ -2,6 +2,7 @@ package entrepo
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"entgo.io/ent"
@@ -166,6 +167,91 @@ func (EtagMixin) Hooks() []ent.Hook {
 				if m.Op().Is(ent.OpCreate | ent.OpUpdate | ent.OpUpdateOne) {
 					if s, ok := m.(etagSetter); ok {
 						s.SetEtag(etag.New())
+					}
+				}
+				return next.Mutate(ctx, m)
+			})
+		},
+	}
+}
+
+// ErrCrossTenantWrite is returned by the TenantWriteGuardMixin hook when a mutation
+// targets a row whose account_id differs from the tenant on the context — a
+// cross-tenant write. It aborts the mutation (and its transaction).
+var ErrCrossTenantWrite = errors.New("entrepo: cross-tenant write rejected")
+
+// tenantGuardMutation is the narrow slice of a generated mutation the
+// TenantWriteGuardMixin hook needs: the operation, and the OLD account_id of the
+// affected row read from the database. Keeping it narrow (vs the full ent.Mutation)
+// makes the guard rule unit-testable without a generated client.
+type tenantGuardMutation interface {
+	Op() ent.Op
+	OldField(ctx context.Context, name string) (ent.Value, error)
+}
+
+// checkTenantWrite is the rule behind TenantWriteGuardMixin: on a row-scoped update
+// or delete, read the affected row's OLD account_id and reject when it differs from
+// ctxTenant (the tenant on the request context). It returns:
+//   - nil to ALLOW (no ctx tenant — not tenant-scoped; or the old value matches; or
+//     the old value cannot be read for a batch op — see the limitation below);
+//   - ErrCrossTenantWrite to REJECT a confirmed cross-tenant single-row write.
+//
+// Limitation: ent's OldField is only defined for the *One operations (UpdateOne /
+// DeleteOne), which is exactly the row-scoped path this guard closes. For batch
+// Update / Delete, OldField returns an error (no single old row); the guard then
+// ALLOWS, relying on the TenantMixin query interceptor to scope the predicate. This
+// closes the common cross-tenant single-row write gap without changing batch
+// semantics.
+func checkTenantWrite(ctx context.Context, m tenantGuardMutation, ctxTenant string) error {
+	if ctxTenant == "" {
+		return nil // not a tenant-scoped request → allow
+	}
+	if !m.Op().Is(ent.OpUpdate | ent.OpUpdateOne | ent.OpDelete | ent.OpDeleteOne) {
+		return nil // creates stamp account_id from ctx; queries are not mutations
+	}
+	old, err := m.OldField(ctx, "account_id")
+	if err != nil {
+		// Batch op (OldField undefined) or the row no longer exists: allow. The
+		// TenantMixin interceptor scopes the read path; we do not block here.
+		return nil
+	}
+	oldTenant, ok := old.(string)
+	if !ok || oldTenant == "" {
+		return nil
+	}
+	if oldTenant != ctxTenant {
+		return ErrCrossTenantWrite
+	}
+	return nil
+}
+
+// TenantWriteGuardMixin is an ent schema mixin whose mutation hook rejects an update
+// or delete of a row that belongs to a DIFFERENT tenant than the one on the request
+// context (via middleware.TenantIDFromContext) — closing the cross-tenant-write gap
+// the read-path TenantMixin interceptor does not cover (interceptors do not run for
+// mutations). It is the ent analogue of the GORM storage write-guard's tenant check.
+//
+// Generated schemas embed this mixin alongside TenantMixin on a tenant-scoped
+// resource. It adds NO field (TenantMixin owns account_id); it is hook-only.
+//
+// Scope note (cell-based development): this mixin closes the CROSS-TENANT-write gap.
+// FULL epoch-fencing on the ent path — reading the shared tenant_fence table to
+// reject a stale-epoch / sealed write the way the GORM write-guard does — is OUT OF
+// SCOPE here and deliberately NOT half-built. An ent data-owning consumer (a later
+// phase) wires the SAME tenant_fence table through the shared *sql.DB (the ent client
+// and the GORM fencer share one database), so the fence is enforced once at the SQL
+// layer for both backends rather than reimplemented as a second ent hook.
+type TenantWriteGuardMixin struct {
+	mixin.Schema
+}
+
+func (TenantWriteGuardMixin) Hooks() []ent.Hook {
+	return []ent.Hook{
+		func(next ent.Mutator) ent.Mutator {
+			return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+				if gm, ok := m.(tenantGuardMutation); ok {
+					if err := checkTenantWrite(ctx, gm, middleware.TenantIDFromContext(ctx)); err != nil {
+						return nil, err
 					}
 				}
 				return next.Mutate(ctx, m)

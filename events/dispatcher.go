@@ -138,7 +138,10 @@ func idempotencyKey(eventID, handlerName string) string {
 	return eventID + "\x1f" + handlerName
 }
 
-// eventFromRecord rebuilds the Event a handler sees from an outbox row.
+// eventFromRecord rebuilds the Event a handler sees from an outbox row. The
+// per-tenant EventSeq and EventEpoch ride along so a consumer can order/dedup a
+// tenant's events by (AccountID, EventSeq) and fence a superseded epoch after a
+// tenant move (cell-based development).
 func eventFromRecord(rec *persistence.OutboxRecord) Event {
 	return Event{
 		ID:            rec.ID,
@@ -147,6 +150,8 @@ func eventFromRecord(rec *persistence.OutboxRecord) Event {
 		AggregateID:   rec.AggregateID,
 		AccountID:     rec.AccountID,
 		Payload:       rec.Payload,
+		EventSeq:      rec.EventSeq,
+		EventEpoch:    rec.EventEpoch,
 	}
 }
 
