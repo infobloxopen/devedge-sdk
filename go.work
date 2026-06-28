@@ -10,7 +10,10 @@ go 1.25.5
 
 use (
 	.
+	./cmd
 	./config/koanf
 	./events/kafkabus
 	./observability/otel
+	./persistence/entrepo
+	./persistence/gormtx
 )

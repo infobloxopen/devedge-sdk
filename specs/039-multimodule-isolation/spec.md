@@ -36,12 +36,16 @@ makes a consumer pull an adapter's deps **only when they `require` that module**
 - **Module dependency direction:** every adapter module **requires the root module** (adapter → core). No
   cycles (core never imports an adapter — now structurally impossible across a module boundary).
 
-### The one real code change — decouple the CLI from ent
-`cmd/devedge-sdk` (root module) currently **imports `entgo.io/ent/cmd/ent`** and calls `entc.Generate(...)`
-during scaffolding — this hard-wires `entgo.io/ent` into the root module's graph. Change the CLI to **invoke
-ent codegen as a subprocess** (`go run entgo.io/ent/cmd/ent …`, or emit a `//go:generate` + run `go generate`
-in the generated module) so the root module no longer imports ent. The ent dep then exists only in the
-generated service's own module (which already requires ent) — exactly where it belongs.
+### The CLI + codegen tooling → their OWN module (owner decision 2026-06-27)
+**Owner call: it is fine for the CLI to import anything (ent, gorm, …) — what must stay light is the
+LIBRARY that downstream consumers/apps import.** `cmd/devedge-sdk` imports `entgo.io/ent/cmd/ent`
+(`entc.Generate`) during scaffolding; if it stayed in the root module, ent would be a root `require` and land
+in every consumer's graph. So **move all of `cmd/` (the CLI + the `protoc-gen-*` plugins) into its own nested
+module** — `github.com/infobloxopen/devedge-sdk/cmd` (the **7th** synchronized module). The CLI then imports
+ent/gorm/anything freely; the root **library** module (what apps import) carries none of it. This **replaces**
+the earlier "run ent codegen as a subprocess" idea — no hack needed; the tooling module is the clean home for
+heavy build-time deps. Install path is unchanged (`go install …/cmd/devedge-sdk@vX.Y.Z` resolves the
+`cmd/vX.Y.Z` tag). What AC-1 (graph isolation) guards is the **library** importing-surface, not the CLI.
 
 ### Tooling, dev loop, releases (synchronized)
 - **`go.work`** at repo root listing all 6 modules → local dev/build/test resolves cross-module references
@@ -98,7 +102,8 @@ generated service's own module (which already requires ent) — exactly where it
   core imports). Add `go.work`, the multi-module Makefile/CI matrix, the `GOWORK=off` per-module build, and
   the AC-1 graph-isolation assertion script. Proves the entire mechanism end-to-end. (1 PR + hardening.)
 - **Phase 1 — the low-risk adapters.** Split **`config/koanf`** + **`events/kafkabus`** (same pattern).
-- **Phase 2 — persistence (the hard part).** Decouple the CLI from ent (subprocess); split
+- **Phase 2 — persistence + tooling (the hard part).** Move `cmd/` (CLI + `protoc-gen-*` plugins) into its
+  own module (the CLI keeps importing ent freely without polluting the library); split
   **`persistence/gormtx`** + **`persistence/entrepo`**; update scaffold `go.mod.tmpl`/`go.mod.ent.tmpl` +
   testdata fixtures + the codegen-emitted requires.
 - **Phase 3 — release + validate.** Root `go.mod` shed-and-tidy; the synchronized **v0.27.0** release across
@@ -110,8 +115,9 @@ generated service's own module (which already requires ent) — exactly where it
 - **T1 [C]** Phase 0 — `observability/otel` nested module + `go.work` + multi-module Makefile/CI matrix +
   `GOWORK=off` per-module build + AC-1/AC-2 graph-isolation assertion script.
 - **T2 [S]** Phase 1 — `config/koanf` + `events/kafkabus` modules.
-- **T3 [C]** Phase 2a — decouple CLI from `entgo.io/ent/cmd/ent` (run ent codegen as a subprocess); Scaffold
-  E2E proves the ent path.
+- **T3 [C]** Phase 2a — move `cmd/` (CLI + `protoc-gen-*`) into its own tooling module (CLI may import
+  ent/gorm freely; keeps them out of the root library graph). Scaffold E2E proves the ent path + the CLI
+  install/version still work.
 - **T4 [C]** Phase 2b — `persistence/gormtx` + `persistence/entrepo` modules; update scaffold go.mod templates
   + testdata fixtures + codegen-emitted requires.
 - **T5 [C]** Phase 3 — root shed/tidy; the synchronized release script (tag-root → bump-adapter-requires →

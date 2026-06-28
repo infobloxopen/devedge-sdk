@@ -8,7 +8,7 @@ require (
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
-	github.com/infobloxopen/devedge-sdk v0.0.0
+	github.com/infobloxopen/devedge-sdk v0.26.1
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
@@ -30,6 +30,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
+	github.com/infobloxopen/devedge-sdk/persistence/entrepo v0.0.0
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -57,3 +58,5 @@ require (
 )
 
 replace github.com/infobloxopen/devedge-sdk => ../..
+
+replace github.com/infobloxopen/devedge-sdk/persistence/entrepo => ../../persistence/entrepo

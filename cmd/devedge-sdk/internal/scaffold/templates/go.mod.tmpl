@@ -7,12 +7,20 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 {{.GRPCGatewayVersion}}
 	github.com/infobloxopen/apis/proto/infoblox/authz {{.AuthzBindingVersion}}
 	github.com/infobloxopen/devedge-sdk {{.SDKVersion}}
+	{{.GormtxModulePath}} {{.GormtxVersion}}
 	{{.OTelAdapterModulePath}} {{.OTelAdapterVersion}}
 	google.golang.org/genproto/googleapis/api {{.GenprotoAPIVersion}}
 	google.golang.org/grpc {{.GRPCVersion}}
 	google.golang.org/protobuf {{.ProtobufVersion}}
 	gorm.io/gorm {{.GormVersion}}
 )
+
+// Persistence (F027 / WS-011 P2): the gorm-backed transaction runner + outbox
+// machinery the generated service wires (gormtx.NewGormTxRunner, the reusable
+// outbox) lives in the SDK's persistence/gormtx adapter, which is its OWN module —
+// so gorm leaves the SDK root library's graph and arrives here only via this
+// require. The direct gorm require above stays (the generated service uses gorm
+// types directly); gormtx brings the adapter.
 
 // Observability (F034 / WS-011): the OTel SDK + exporters live in the SDK's
 // observability/otel adapter, which is its OWN module — the generated main imports

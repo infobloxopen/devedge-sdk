@@ -33,6 +33,11 @@
 #   P1: koanf and franz-go have NO retained back-reference in core (no core dep
 #   transitively requires them), so they must be FULLY absent from a server-only
 #   consumer's go.sum — we assert the stronger claim for both.
+#   P2: gorm and ent are now in their OWN modules (persistence/gormtx,
+#   persistence/entrepo) — and the CLI that imported ent's entc moved to the cmd
+#   module — so the root LIBRARY back-references neither. Like koanf/franz-go, they
+#   must be FULLY absent from a server-only consumer's go.mod AND go.sum (the strong
+#   claim), and arrive only when their adapter module is required (the converse).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,22 +45,30 @@ SDK_PATH="github.com/infobloxopen/devedge-sdk"
 OTEL_MOD="${SDK_PATH}/observability/otel"
 KOANF_MOD="${SDK_PATH}/config/koanf"
 KAFKABUS_MOD="${SDK_PATH}/events/kafkabus"
+GORMTX_MOD="${SDK_PATH}/persistence/gormtx"
+ENTREPO_MOD="${SDK_PATH}/persistence/entrepo"
 
 # Guard fragments that must NOT appear in a server-only consumer's go.mod require
-# list or compiled build closure. Phase 0 covers OTel; P1 adds koanf + franz-go.
+# list or compiled build closure. Phase 0 covers OTel; P1 adds koanf + franz-go;
+# P2 adds gorm + ent (now isolated in persistence/gormtx + persistence/entrepo).
 GOMOD_GUARDS=(
   "go.opentelemetry.io/otel/sdk"
   "go.opentelemetry.io/otel/exporters/"
   "github.com/knadh/koanf"
   "github.com/twmb/franz-go"
+  "gorm.io/gorm"
+  "entgo.io/ent"
 )
 # Fragments that must ALSO be absent from go.sum (no retained core dep
 # back-references them). otel/sdk is intentionally NOT here — see nuance note.
-# koanf + franz-go have no back-reference in core, so they fully leave go.sum.
+# koanf + franz-go + gorm + ent have no back-reference in core, so they fully
+# leave go.sum (the strong claim).
 GOSUM_GUARDS=(
   "go.opentelemetry.io/otel/exporters/"
   "github.com/knadh/koanf"
   "github.com/twmb/franz-go"
+  "gorm.io/gorm"
+  "entgo.io/ent"
 )
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -180,6 +193,27 @@ fi
 
 echo ""
 # ---------------------------------------------------------------------------
+echo "== AC-1c (P2): a server-ONLY consumer is fully free of gorm + ent =="
+# gorm + ent now live in persistence/gormtx + persistence/entrepo (their own
+# modules); the CLI's entc moved to the cmd module. The root library
+# back-references neither, so both must leave a server-only consumer's go.mod AND
+# go.sum entirely — the strong claim. (The GOMOD/GOSUM_GUARDS above already cover
+# gorm.io/gorm + entgo.io/ent for c1; here we add the explicit build-closure proof.)
+assert_absent "server-only go.mod (gorm/ent)" "$c1/go.mod" \
+  "gorm.io/gorm" "entgo.io/ent" || fail=1
+assert_absent "server-only go.sum (gorm/ent)" "$c1/go.sum" \
+  "gorm.io/gorm" "entgo.io/ent" || fail=1
+# Build closure: zero gorm/ent packages compiled.
+if printf '%s\n' "$closure_c1" | grep -qE "gorm.io/gorm|entgo.io/ent"; then
+  red "  LEAK: server-only build closure compiles gorm or ent:"
+  printf '%s\n' "$closure_c1" | grep -E "gorm.io/gorm|entgo.io/ent" | sed 's/^/    /'
+  fail=1
+else
+  green "  OK: server-only build closure compiles ZERO gorm + ent packages"
+fi
+
+echo ""
+# ---------------------------------------------------------------------------
 echo "== AC-2b (P1): adding config/koanf adapter pulls koanf in (opt-in) =="
 c3="$work/koanf-consumer"
 scaffold_consumer "$c3" \
@@ -213,8 +247,42 @@ fi
 assert_present "kafkabus-consumer go.sum" "$c4/go.sum" "github.com/twmb/franz-go" || fail=1
 
 echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-2d (P2): adding persistence/gormtx adapter pulls gorm in (opt-in) =="
+c5="$work/gormtx-consumer"
+scaffold_consumer "$c5" \
+  "	_ \"${GORMTX_MOD}\"" \
+  "require ${GORMTX_MOD} v0.0.0" \
+  "replace ${GORMTX_MOD} => ${REPO_ROOT}/persistence/gormtx"
+closure5="$(cd "$c5" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure5" | grep -q "gorm.io/gorm"; then
+  green "  OK: gormtx-importing consumer COMPILES gorm.io/gorm (dep arrived on opt-in)"
+else
+  red "  MISSING: gormtx-importing consumer does not compile gorm.io/gorm — adapter wiring broken"
+  fail=1
+fi
+assert_present "gormtx-consumer go.sum" "$c5/go.sum" "gorm.io/gorm" || fail=1
+
+echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-2e (P2): adding persistence/entrepo adapter pulls ent in (opt-in) =="
+c6="$work/entrepo-consumer"
+scaffold_consumer "$c6" \
+  "	_ \"${ENTREPO_MOD}\"" \
+  "require ${ENTREPO_MOD} v0.0.0" \
+  "replace ${ENTREPO_MOD} => ${REPO_ROOT}/persistence/entrepo"
+closure6="$(cd "$c6" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure6" | grep -q "entgo.io/ent"; then
+  green "  OK: entrepo-importing consumer COMPILES entgo.io/ent (dep arrived on opt-in)"
+else
+  red "  MISSING: entrepo-importing consumer does not compile entgo.io/ent — adapter wiring broken"
+  fail=1
+fi
+assert_present "entrepo-consumer go.sum" "$c6/go.sum" "entgo.io/ent" || fail=1
+
+echo ""
 if [ "$fail" -ne 0 ]; then
   red "graph-isolation check FAILED"
   exit 1
 fi
-green "graph-isolation check PASSED (AC-1 + AC-2 + AC-1b/AC-2b/AC-2c P1)"
+green "graph-isolation check PASSED (AC-1 + AC-2 + AC-1b/AC-2b/AC-2c P1 + AC-1c/AC-2d/AC-2e P2)"

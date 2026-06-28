@@ -56,11 +56,25 @@ const (
 // SDK + exporters live there, no longer in the root module's graph.
 const otelAdapterModulePath = "github.com/infobloxopen/devedge-sdk/observability/otel"
 
-// resolveOTelAdapterVersion returns the version the generated go.mod requires for
-// the observability/otel adapter module. The adapter is released SYNCHRONIZED with
-// the root SDK (one version per release — F039), so it tracks the resolved SDK
-// version exactly, mirroring how SDKVersion is derived from build info.
+// gormtxModulePath / entrepoModulePath are the import/module paths of the SDK's
+// persistence adapters. As of WS-011 / F039 P2 each is its OWN nested module so
+// gorm (gormtx) and ent (entrepo) leave the root library module's graph — the
+// generated service pulls them ONLY by requiring the adapter its backend uses.
+// The generated code's import statements are unchanged (same subdir paths); only
+// the generated go.mod gains the require (emitted by go.mod.tmpl / go.mod.ent.tmpl).
+const (
+	gormtxModulePath  = "github.com/infobloxopen/devedge-sdk/persistence/gormtx"
+	entrepoModulePath = "github.com/infobloxopen/devedge-sdk/persistence/entrepo"
+)
+
+// resolveOTelAdapterVersion / resolveGormtxVersion / resolveEntrepoVersion return
+// the version the generated go.mod requires for each nested adapter module. Every
+// adapter is released SYNCHRONIZED with the root SDK (one version per release —
+// F039), so each tracks the resolved SDK version exactly, mirroring how SDKVersion
+// is derived from build info.
 func resolveOTelAdapterVersion() string { return resolveSDKVersion() }
+func resolveGormtxVersion() string      { return resolveSDKVersion() }
+func resolveEntrepoVersion() string     { return resolveSDKVersion() }
 
 // Options are the user-supplied inputs to a scaffold.
 type Options struct {
@@ -161,6 +175,14 @@ type Model struct {
 	// synchronized with the SDK version (one release tags all modules).
 	OTelAdapterModulePath string
 	OTelAdapterVersion    string
+	// GormtxModulePath / GormtxVersion and EntrepoModulePath / EntrepoVersion
+	// describe the persistence adapter modules a generated service requires
+	// (WS-011 / F039 P2). The gorm scaffold requires gormtx; the ent scaffold
+	// requires entrepo. Versions are synchronized with the SDK version.
+	GormtxModulePath  string
+	GormtxVersion     string
+	EntrepoModulePath string
+	EntrepoVersion    string
 
 	// DeployTargets are the resolved deploy-target names to render (F038),
 	// validated against the deploy registry in Validate. Empty means no deploy
@@ -277,6 +299,10 @@ func (o Options) Validate() (*Model, error) {
 		OTelAPIVersion:        otelAPIVersion,
 		OTelAdapterModulePath: otelAdapterModulePath,
 		OTelAdapterVersion:    resolveOTelAdapterVersion(),
+		GormtxModulePath:      gormtxModulePath,
+		GormtxVersion:         resolveGormtxVersion(),
+		EntrepoModulePath:     entrepoModulePath,
+		EntrepoVersion:        resolveEntrepoVersion(),
 
 		DeployTargets: deployTargets,
 	}

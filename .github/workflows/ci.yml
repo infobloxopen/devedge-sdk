@@ -18,9 +18,12 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            cmd/go.sum
             config/koanf/go.sum
             events/kafkabus/go.sum
             observability/otel/go.sum
+            persistence/entrepo/go.sum
+            persistence/gormtx/go.sum
             testdata/toy/go.sum
             testdata/apikey/go.sum
             testdata/fleet/go.sum
@@ -153,9 +156,12 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            cmd/go.sum
             config/koanf/go.sum
             events/kafkabus/go.sum
             observability/otel/go.sum
+            persistence/entrepo/go.sum
+            persistence/gormtx/go.sum
             testdata/toy/go.sum
 
       - name: Security gate
@@ -172,9 +178,12 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            cmd/go.sum
             config/koanf/go.sum
             events/kafkabus/go.sum
             observability/otel/go.sum
+            persistence/entrepo/go.sum
+            persistence/gormtx/go.sum
 
       # The TestScaffold_* gates (F028/F029 end-to-end + the make-driven hardening)
       # shell out to a real toolchain — apx (governs the public API surface), buf
