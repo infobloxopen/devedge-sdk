@@ -10,5 +10,7 @@ go 1.25.5
 
 use (
 	.
+	./config/koanf
+	./events/kafkabus
 	./observability/otel
 )

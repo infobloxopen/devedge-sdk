@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # check-graph-isolation.sh — the graph-level dependency-isolation proof for the
-# multi-module split (WS-011 / F039, AC-1 + AC-2).
+# multi-module split (WS-011 / F039, AC-1 + AC-2 + AC-1b/AC-2b for P1).
 #
 # cleancore_test.go proves the *build* is clean (a server-only consumer compiles
 # ZERO OTel-SDK packages). This script proves the *module graph* is clean: a
 # throwaway consumer that requires devedge-sdk and imports ONLY .../server pulls
 # none of the heavy adapter deps into its go.mod require list or its compiled
-# build closure — and the CONVERSE, that adding the observability/otel adapter
-# DOES pull the OTel SDK in. The dep arrives only on opt-in.
+# build closure — and the CONVERSE, that adding each adapter DOES pull its heavy
+# dep in. The dep arrives only on opt-in.
 #
 # It runs against the LOCAL working tree (pre-release): the consumer modules
-# `replace` devedge-sdk (and, for the converse, observability/otel) to this repo,
+# `replace` devedge-sdk (and, for the converse, each adapter module) to this repo,
 # so the check reflects HEAD, not the last published tag. GOWORK=off so the
 # consumer resolves through its own go.mod + replaces, never the repo workspace.
 #
@@ -30,26 +30,32 @@
 #     * exporters: absent from go.mod, build closure AND go.sum;
 #     * otel/sdk : absent from go.mod require list and build closure (compiled
 #                  packages); present in go.sum only via otelgrpc's test require.
-#   P1/P2: a heavy dep that NO retained core dep back-references (koanf,
-#   franz-go, gorm, ent) should leave go.sum too — assert it there. Verify per
-#   family rather than assuming go.sum is clean.
+#   P1: koanf and franz-go have NO retained back-reference in core (no core dep
+#   transitively requires them), so they must be FULLY absent from a server-only
+#   consumer's go.sum — we assert the stronger claim for both.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK_PATH="github.com/infobloxopen/devedge-sdk"
 OTEL_MOD="${SDK_PATH}/observability/otel"
+KOANF_MOD="${SDK_PATH}/config/koanf"
+KAFKABUS_MOD="${SDK_PATH}/events/kafkabus"
 
 # Guard fragments that must NOT appear in a server-only consumer's go.mod require
-# list or compiled build closure (the exporters additionally must not appear in
-# go.sum). Phase 0 covers the OTel adapter; P1/P2 extend this list.
+# list or compiled build closure. Phase 0 covers OTel; P1 adds koanf + franz-go.
 GOMOD_GUARDS=(
   "go.opentelemetry.io/otel/sdk"
   "go.opentelemetry.io/otel/exporters/"
+  "github.com/knadh/koanf"
+  "github.com/twmb/franz-go"
 )
-# Subset of the above that must ALSO be absent from go.sum (no retained core dep
-# back-references them). otel/sdk is intentionally NOT here — see the nuance note.
+# Fragments that must ALSO be absent from go.sum (no retained core dep
+# back-references them). otel/sdk is intentionally NOT here — see nuance note.
+# koanf + franz-go have no back-reference in core, so they fully leave go.sum.
 GOSUM_GUARDS=(
   "go.opentelemetry.io/otel/exporters/"
+  "github.com/knadh/koanf"
+  "github.com/twmb/franz-go"
 )
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -153,8 +159,62 @@ assert_present "otel-consumer go.sum" "$c2/go.sum" \
   "go.opentelemetry.io/otel/sdk" "go.opentelemetry.io/otel/exporters/" || fail=1
 
 echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-1b (P1): a server-ONLY consumer is fully free of koanf + franz-go =="
+# The server-only consumer (c1) was built above; reuse its go.mod + go.sum.
+# koanf and franz-go have no retained back-reference in core, so both must leave
+# go.sum entirely — assert the stronger claim (absent from go.mod AND go.sum).
+assert_absent "server-only go.mod (koanf/franz)" "$c1/go.mod" \
+  "github.com/knadh/koanf" "github.com/twmb/franz-go" || fail=1
+assert_absent "server-only go.sum (koanf/franz)" "$c1/go.sum" \
+  "github.com/knadh/koanf" "github.com/twmb/franz-go" || fail=1
+# Build closure: zero koanf/franz-go packages compiled.
+closure_c1="$(cd "$c1" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure_c1" | grep -qE "knadh/koanf|twmb/franz-go"; then
+  red "  LEAK: server-only build closure compiles koanf or franz-go:"
+  printf '%s\n' "$closure_c1" | grep -E "knadh/koanf|twmb/franz-go" | sed 's/^/    /'
+  fail=1
+else
+  green "  OK: server-only build closure compiles ZERO koanf + franz-go packages"
+fi
+
+echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-2b (P1): adding config/koanf adapter pulls koanf in (opt-in) =="
+c3="$work/koanf-consumer"
+scaffold_consumer "$c3" \
+  "	_ \"${KOANF_MOD}\"" \
+  "require ${KOANF_MOD} v0.0.0" \
+  "replace ${KOANF_MOD} => ${REPO_ROOT}/config/koanf"
+closure3="$(cd "$c3" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure3" | grep -q "knadh/koanf"; then
+  green "  OK: koanf-importing consumer COMPILES knadh/koanf (dep arrived on opt-in)"
+else
+  red "  MISSING: koanf-importing consumer does not compile knadh/koanf — adapter wiring broken"
+  fail=1
+fi
+assert_present "koanf-consumer go.sum" "$c3/go.sum" "github.com/knadh/koanf" || fail=1
+
+echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-2c (P1): adding events/kafkabus adapter pulls franz-go in (opt-in) =="
+c4="$work/kafkabus-consumer"
+scaffold_consumer "$c4" \
+  "	_ \"${KAFKABUS_MOD}\"" \
+  "require ${KAFKABUS_MOD} v0.0.0" \
+  "replace ${KAFKABUS_MOD} => ${REPO_ROOT}/events/kafkabus"
+closure4="$(cd "$c4" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure4" | grep -q "twmb/franz-go"; then
+  green "  OK: kafkabus-importing consumer COMPILES twmb/franz-go (dep arrived on opt-in)"
+else
+  red "  MISSING: kafkabus-importing consumer does not compile twmb/franz-go — adapter wiring broken"
+  fail=1
+fi
+assert_present "kafkabus-consumer go.sum" "$c4/go.sum" "github.com/twmb/franz-go" || fail=1
+
+echo ""
 if [ "$fail" -ne 0 ]; then
   red "graph-isolation check FAILED"
   exit 1
 fi
-green "graph-isolation check PASSED (AC-1 + AC-2)"
+green "graph-isolation check PASSED (AC-1 + AC-2 + AC-1b/AC-2b/AC-2c P1)"
