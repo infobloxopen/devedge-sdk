@@ -52,10 +52,11 @@ import (
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/events"
 {{- end}}
-	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
 	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
-	"github.com/infobloxopen/devedge-sdk/server"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
+
+	svcmodule "{{.Module}}/module"
 
 	entclient "{{.Module}}/gen/ent"
 	_ "{{.Module}}/gen/ent/runtime" // required by ent schema hooks (mixins)
@@ -231,66 +232,60 @@ func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}
 }
 {{- end}}
 
-// newServer builds a fully wired server with the given authorizer, listen
-// addresses, and database DSN. Returns an error (rather than panicking) so tests
-// can assert the fail-closed authz gate. The smoke test passes ":0" for
-// kernel-assigned ports and "" for the DSN (in-memory sqlite).
-func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) (*server.Server, error) {
+// runHost builds the {{.ServiceType}} module over a repo (from dsn) and serves it
+// via servicekit.Run on the given addresses. It returns an error (rather than
+// exiting) so the smoke test can drive it and assert the fail-closed boot gate.
+// ctx owns the serve lifetime; the smoke test cancels it to stop. The module
+// registers the DB-ping readiness check, so /readyz + gRPC health track the
+// database without server-side wiring here.
+//
+// WS-012 P2 (ent backend): migration is ent's client.Schema.Create — already
+// HOST-run process behavior (called here in main, never from a module init). Module
+// DB-namespacing on the ent path is applied at the connection: a composed suite host
+// opens the ent client on entrepo.NamespacedDSN(dsn, ns) so Schema.Create + queries
+// land in the module's Postgres schema (search_path). A standalone host shares its DB
+// with no one, so the DSN is unchanged (bare tables).
+func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) error {
 {{- if .Aggregate}}
 	client, err := newClient()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	// Aggregate + outbox machinery wired out of the box. The flat CRUD handler is
-	// registered below; agg/pub/d are ready for a custom handler that mutates the
-	// {{.Resource}} cluster atomically and reacts across aggregates via the outbox.
-	// They are assigned to _ here so the scaffold compiles and runs before you add
-	// your own handler + dispatch loop.
+	// Aggregate + outbox machinery wired out of the box. agg/pub/d are ready for a
+	// custom handler that mutates the {{.Resource}} cluster atomically and reacts
+	// across aggregates via the outbox; assigned to _ until you add your own
+	// handler + dispatch loop.
 	agg := newAggregate(client)
 	pub, d := newOutbox()
 	_, _, _ = agg, pub, d
 	repo := {{.GoPkg}}.New{{.Resource}}EntRepository(client)
 	// For the DB-ping readiness check, open a stdlib *sql.DB on the same DSN.
-	// This keeps ORM types out of server.Config (AC-5).
 	entDSN := dsn
 	if entDSN == "" {
 		entDSN = "file::memory:?cache=shared&_pragma=foreign_keys(1)"
 	}
 	sqlDB, err := sql.Open("sqlite3", entDSN)
 	if err != nil {
-		return nil, err
+		return err
 	}
 {{- else}}
 	repo, sqlDB, err := newRepository(dsn)
 	if err != nil {
-		return nil, err
+		return err
 	}
 {{- end}}
-	s, err := server.New(server.Config{
-		GRPCAddr:   grpcAddr,
-		HTTPAddr:   httpAddr,
-		Authorizer: authorizer,
+	return servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{svcmodule.Module(repo, sqlDB)},
+		GRPCAddr: grpcAddr,
+		HTTPAddr: httpAddr,
 		// Derive the caller's authz.Principal from request metadata (account-id ->
 		// tenant, groups -> group:<name>). Without it the principal is empty and
 		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
+		Authorizer:    authorizer,
 		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
-		// Structured request logging is on by default (one trace-correlated slog
-		// record per RPC; secret-annotated payload fields redacted at Debug).
-		Logger: slog.Default(),
-		// DB-ping readiness check: the server's /readyz and gRPC health status
-		// flip to unready when the database is unreachable. The check uses the
-		// stdlib PingContext interface — no ORM import enters core.
-		ReadinessChecks: []sdkhealth.Check{sdkhealth.NewDBCheck("db", sqlDB)},
+		Logger:        slog.Default(),
+		Context:       ctx,
 	})
-	if err != nil {
-		return nil, err
-	}
-	// One call: construct the generated default CRUD handler over repo, register it
-	// (gRPC + REST gateway), and contribute the service's authz rules.
-	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {
-		return nil, err
-	}
-	return s, nil
 }
 
 func main() {
@@ -366,12 +361,8 @@ func main() {
 		Verbs:    []authz.Verb{"*"},
 		Resource: "*",
 	})
-	s, err := newServer(authorizer, opts.GRPCAddr, opts.HTTPAddr, opts.DSN)
-	if err != nil {
-		log.Fatalf("{{.BinName}}: init: %v", err)
-	}
 	log.Printf("{{.BinName}}: serving gRPC on %s, HTTP on %s", opts.GRPCAddr, opts.HTTPAddr)
-	if err := s.Serve(ctx); err != nil {
+	if err := runHost(ctx, authorizer, opts.GRPCAddr, opts.HTTPAddr, opts.DSN); err != nil {
 		log.Fatalf("{{.BinName}}: serve: %v", err)
 	}
 }

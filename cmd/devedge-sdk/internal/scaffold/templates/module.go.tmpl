@@ -1,0 +1,99 @@
+// Package module is the importable, composable unit for the {{.BinName}} service
+// (WS-012 composable services). It wraps the GENERATED servicekit.Module —
+// {{.GoPkg}}.{{.ServiceType}}Module, whose Descriptor is the proto facts and
+// whose Register wires the generated CRUD handler onto a shared server — and adds
+// the hand-written extras a host can't derive from the proto (here: the DB
+// readiness check).
+//
+// The SAME module runs two ways with no code change:
+//   - standalone: cmd/{{.BinName}}/main.go opens the DB, builds the repo, and
+//     hands this module to servicekit.Run as the only module;
+//   - composed: a "suite" host (de compose, later phase) hands several modules —
+//     including this one — to servicekit.Run, sharing one server + one process.
+//
+// "Module owns domain, host owns process": this package owns the service's domain
+// wiring (its repository binding, its health check, its descriptor). It does NOT
+// open the database, parse flags/env, start listeners, install signal handlers,
+// or call os.Exit — those are the HOST's job (cmd/{{.BinName}}/main.go).
+package module
+
+import (
+	"context"
+	"embed"
+	"io/fs"
+
+	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
+	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
+
+	{{.GoPkg}} "{{.GoImportPath}}"
+)
+
+// migrationsFS is the module's embedded migration files (WS-012: a module owns its
+// migration FILES; the HOST runs them — host-run, advisory-locked,
+// per-module-namespaced). The host's moduleMigrate runner (cmd/{{.BinName}}/main.go)
+// runs them via gormtx.MigrateModule. This embed is the seam that runner reads; the
+// placeholder keeps `go:embed` valid until the first migration file lands.
+//
+//go:embed migrations
+var migrationsFS embed.FS
+
+// Migrations returns the module's embedded migrations filesystem (rooted at the
+// migrations/ dir), for the later host-run migrator (servicekit.MigrationsFS).
+func Migrations() fs.FS {
+	sub, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		// The migrations dir is embedded at build time, so this cannot fail; return
+		// the whole FS rather than panic in a library.
+		return migrationsFS
+	}
+	return sub
+}
+
+// Module returns the importable servicekit.Module for {{.BinName}}, bound to repo
+// (the domain repository) and sqlDB (used for the DB readiness check). A host
+// registers the returned module on a shared server — standalone or composed.
+func Module(repo persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], sqlDB sdkhealth.Pinger) servicekit.Module {
+	return &{{.ServiceLower}}Module{
+		inner: {{.GoPkg}}.{{.ServiceType}}Module({{.GoPkg}}.{{.ServiceType}}ModuleOptions{Repo: repo}),
+		db:    sqlDB,
+	}
+}
+
+// {{.ServiceLower}}Module decorates the generated module with the hand-written
+// extras: it forwards Descriptor to the generated facts and, in Register, wires
+// the generated CRUD handler AND registers the module's DB readiness check.
+type {{.ServiceLower}}Module struct {
+	inner servicekit.Module
+	db    sdkhealth.Pinger
+}
+
+// Descriptor implements servicekit.Module: the generated proto facts, plus the
+// module's self-describing Database descriptor (WS-012 P2). The module declares its
+// embedded migrations FS and leaves Isolation unset, so a host applies the
+// composition default (schema-preferred). A composed host reads Database to allocate
+// the module's namespace and run its migrations.
+func (m *{{.ServiceLower}}Module) Descriptor() servicekit.Descriptor {
+	d := m.inner.Descriptor()
+	d.Database = servicekit.DatabaseDescriptor{
+		// Isolation unset => host/composition default (schema-preferred).
+		Migrations: Migrations(),
+	}
+	return d
+}
+
+// Register implements servicekit.Module: register the generated CRUD handler on
+// the shared server, then register this module's DB readiness check so the host's
+// /readyz and gRPC health reflect the database's availability.
+func (m *{{.ServiceLower}}Module) Register(ctx context.Context, app *servicekit.App) error {
+	if err := m.inner.Register(ctx, app); err != nil {
+		return err
+	}
+	if m.db != nil {
+		// Module-qualified check name so co-resident modules don't collide.
+		if err := app.Health.Register("{{.BinName}}.db", sdkhealth.NewDBCheck("{{.BinName}}.db", m.db)); err != nil {
+			return err
+		}
+	}
+	return nil
+}

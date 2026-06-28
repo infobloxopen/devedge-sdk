@@ -20,13 +20,14 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
-// outboxPartitionParentDDL is the column list / constraints of the WRITE-ONLY
-// partitioned parent table. created_time is in the primary key because a PostgreSQL
-// partition key must appear in every unique constraint of the partitioned table. F033:
-// there are NO dispatcher-bookkeeping columns (no delivered_time / attempts /
-// leased_until) — the table is written once (Append) and read forward (ReadAfter).
-const outboxPartitionParentDDL = `
-CREATE TABLE IF NOT EXISTS outbox (
+// outboxPartitionParentDDLFmt is the column list / constraints of the WRITE-ONLY
+// partitioned parent table, with the table name as a %s so WS-012 P2 can place it in
+// a module schema (schema."outbox") or prefix it ("ord_outbox"). created_time is in
+// the primary key because a PostgreSQL partition key must appear in every unique
+// constraint of the partitioned table. F033: there are NO dispatcher-bookkeeping
+// columns — the table is written once (Append) and read forward (ReadAfter).
+const outboxPartitionParentDDLFmt = `
+CREATE TABLE IF NOT EXISTS %s (
 	id             varchar(36) NOT NULL,
 	account_id     text,
 	aggregate_type text,
@@ -72,21 +73,48 @@ func partitionName(t time.Time) string {
 // error so a caller does not silently get an unpartitioned table believing it is
 // partitioned.
 func EnsureOutboxPartitions(ctx context.Context, db *gorm.DB, from, until time.Time) error {
+	return EnsureOutboxPartitionsNS(ctx, db, persistence.DatabaseNamespace{}, from, until)
+}
+
+// EnsureOutboxPartitionsNS is the WS-012 P2 namespace-aware form of
+// [EnsureOutboxPartitions]: it builds the partitioned parent + monthly partitions for
+// the module's namespaced outbox table (schema."outbox" under schema isolation,
+// "prefix_outbox" under prefix isolation) so a co-resident module's partitioned
+// outbox does not collide. The zero namespace reproduces the historical bare
+// "outbox" behavior exactly.
+//
+// Under SCHEMA isolation the bare "outbox" name resolves into the module schema via
+// the db's search_path, so passing the schema namespace and routing search_path are
+// equivalent; this function uses the qualified name explicitly so it is correct even
+// without search_path on db.
+func EnsureOutboxPartitionsNS(ctx context.Context, db *gorm.DB, ns persistence.DatabaseNamespace, from, until time.Time) error {
 	if until.Before(from) {
 		from, until = until, from
 	}
 	switch db.Dialector.Name() {
 	case "postgres":
-		if err := db.WithContext(ctx).Exec(outboxPartitionParentDDL).Error; err != nil {
+		parent := ns.QualifyTable(outboxBaseTable)
+		if ns.Schema != "" {
+			if err := db.WithContext(ctx).Exec(fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %q", ns.Schema)).Error; err != nil {
+				return fmt.Errorf("create schema %q for partitioned outbox: %w", ns.Schema, err)
+			}
+		}
+		if err := db.WithContext(ctx).Exec(fmt.Sprintf(outboxPartitionParentDDLFmt, parent)).Error; err != nil {
 			return fmt.Errorf("create partitioned outbox parent: %w", err)
 		}
 		for m := monthStart(from); !m.After(monthStart(until)); m = addMonth(m) {
-			if err := ensureMonthlyPartition(ctx, db, m); err != nil {
+			if err := ensureMonthlyPartition(ctx, db, ns, m); err != nil {
 				return err
 			}
 		}
 		return nil
 	case "mysql":
+		// Prefix-namespaced MySQL partitioning is not threaded through the MySQL DDL
+		// in P2 (MySQL schema isolation == separate database == dedicated-required,
+		// which needs no in-DB qualification). The bare-name path is unchanged.
+		if ns.TablePrefix != "" {
+			return fmt.Errorf("gormtx: prefix-namespaced MySQL outbox partitioning is not supported (use dedicated-required); module %q", ns.ModuleID)
+		}
 		return ensureMySQLOutboxPartitions(ctx, db, from, until)
 	default:
 		return fmt.Errorf("gormtx: EnsureOutboxPartitions supports postgres and mysql, got %q", db.Dialector.Name())
@@ -94,18 +122,23 @@ func EnsureOutboxPartitions(ctx context.Context, db *gorm.DB, from, until time.T
 }
 
 // ensureMonthlyPartition attaches one monthly child partition covering
-// [monthStart, nextMonth) if it does not already exist.
-func ensureMonthlyPartition(ctx context.Context, db *gorm.DB, month time.Time) error {
+// [monthStart, nextMonth) if it does not already exist. The partition is a child of
+// the module's namespaced parent; the child name is itself namespaced so two modules'
+// monthly partitions do not collide.
+func ensureMonthlyPartition(ctx context.Context, db *gorm.DB, ns persistence.DatabaseNamespace, month time.Time) error {
 	month = monthStart(month)
 	next := addMonth(month)
+	parent := ns.QualifyTable(outboxBaseTable)
+	child := ns.QualifyTable(partitionName(month))
 	ddl := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS %s PARTITION OF outbox FOR VALUES FROM ('%s') TO ('%s')`,
-		partitionName(month),
+		`CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
+		child,
+		parent,
 		month.Format("2006-01-02 15:04:05-07"),
 		next.Format("2006-01-02 15:04:05-07"),
 	)
 	if err := db.WithContext(ctx).Exec(ddl).Error; err != nil {
-		return fmt.Errorf("create outbox partition %s: %w", partitionName(month), err)
+		return fmt.Errorf("create outbox partition %s: %w", child, err)
 	}
 	return nil
 }
@@ -147,35 +180,73 @@ func (s *GormOutboxStore) dropPGPartitionsBefore(ctx context.Context, t time.Tim
 	cutoff := monthStart(t)
 	// For a monthly RANGE partition created by EnsureOutboxPartitions the name encodes
 	// the month, so derive each partition's [from, upper) window from its name rather
-	// than parsing the catalog bound expression. List the partitions of "outbox" via
-	// the inheritance catalog.
+	// than parsing the catalog bound expression. List the partitions of the store's
+	// (possibly namespaced) outbox parent via the inheritance catalog. WS-012 P2: scope
+	// the parent lookup by schema (parentSchema/parentRelname) so one module's drop does
+	// not touch another module's identically-monthly partition in a different schema.
+	parentSchema, parentRelname, childPrefix := s.partitionLookup()
 	var children []string
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT c.relname
 		FROM pg_inherits i
-		JOIN pg_class c   ON c.oid = i.inhrelid
-		JOIN pg_class p   ON p.oid = i.inhparent
-		WHERE p.relname = 'outbox'
-	`).Scan(&children).Error
+		JOIN pg_class c     ON c.oid = i.inhrelid
+		JOIN pg_class p     ON p.oid = i.inhparent
+		JOIN pg_namespace n ON n.oid = p.relnamespace
+		WHERE p.relname = ? AND (? = '' OR n.nspname = ?)
+	`, parentRelname, parentSchema, parentSchema).Scan(&children).Error
 	if err != nil {
 		return 0, fmt.Errorf("list outbox partitions: %w", err)
 	}
 	dropped := 0
 	for _, child := range children {
-		upper, ok := partitionUpperBound(child)
+		upper, ok := partitionUpperBoundPrefixed(child, childPrefix)
 		if !ok {
 			continue // not a name we manage; leave it alone
 		}
 		// Drop only if the partition's whole window is strictly older than the cutoff
 		// month (upper bound <= cutoff month start means [from, upper) is entirely before t).
 		if !upper.After(cutoff) {
-			if err := s.db.WithContext(ctx).Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", child)).Error; err != nil {
-				return dropped, fmt.Errorf("drop outbox partition %s: %w", child, err)
+			qualified := child
+			if parentSchema != "" {
+				qualified = parentSchema + "." + child
+			}
+			if err := s.db.WithContext(ctx).Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", qualified)).Error; err != nil {
+				return dropped, fmt.Errorf("drop outbox partition %s: %w", qualified, err)
 			}
 			dropped++
 		}
 	}
 	return dropped, nil
+}
+
+// partitionLookup decomposes the store's resolved outbox table name into the schema
+// (empty for none), the unqualified parent relname, and the child-name prefix used
+// under prefix isolation. For "schema.outbox" -> ("schema","outbox",""); for
+// "ord_outbox" -> ("","ord_outbox","ord_"); for "outbox" -> ("","outbox","").
+func (s *GormOutboxStore) partitionLookup() (schema, relname, childPrefix string) {
+	t := s.table
+	for i := 0; i < len(t); i++ {
+		if t[i] == '.' {
+			return t[:i], t[i+1:], ""
+		}
+	}
+	// No schema dot: prefix isolation if the name extends the base, else bare.
+	if t != outboxBaseTable && len(t) > len(outboxBaseTable) && t[len(t)-len(outboxBaseTable):] == outboxBaseTable {
+		return "", t, t[:len(t)-len(outboxBaseTable)]
+	}
+	return "", t, ""
+}
+
+// partitionUpperBoundPrefixed parses a (possibly prefixed) partition name back to its
+// exclusive upper bound. It strips childPrefix before parsing the outbox_pYYYY_MM form.
+func partitionUpperBoundPrefixed(name, childPrefix string) (time.Time, bool) {
+	if childPrefix != "" {
+		if len(name) < len(childPrefix) || name[:len(childPrefix)] != childPrefix {
+			return time.Time{}, false
+		}
+		name = name[len(childPrefix):]
+	}
+	return partitionUpperBound(name)
 }
 
 // partitionUpperBound parses a partition name of the form outbox_pYYYY_MM produced by
@@ -204,18 +275,26 @@ func partitionUpperBound(name string) (time.Time, bool) {
 // it never touches the dispatch path and never issues a per-row DELETE on the
 // PostgreSQL partitioned table — retention is whole-partition drops.
 func RunRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRetention, window time.Duration) (dropped int, err error) {
+	return RunRetentionNS(ctx, db, persistence.DatabaseNamespace{}, store, window)
+}
+
+// RunRetentionNS is the WS-012 P2 namespace-aware form of [RunRetention]: it rolls
+// the forward partition window of the MODULE's namespaced outbox parent (not the bare
+// "outbox") before dropping aged partitions, so a composed host's per-module
+// retention task targets the right table. The zero namespace reproduces RunRetention.
+func RunRetentionNS(ctx context.Context, db *gorm.DB, ns persistence.DatabaseNamespace, store persistence.OutboxRetention, window time.Duration) (dropped int, err error) {
 	if window <= 0 {
 		window = 30 * 24 * time.Hour
 	}
 	now := time.Now().UTC()
 	// Roll the window forward: make sure this month and next month have partitions so
 	// appends never hit a missing-partition error at a month boundary. Only meaningful
-	// on the partitioning dialects (PostgreSQL, MySQL); EnsureOutboxPartitions errors
+	// on the partitioning dialects (PostgreSQL, MySQL); EnsureOutboxPartitionsNS errors
 	// on other dialects, which we tolerate for the dev backend (it has no partitions to
 	// ensure).
 	if db != nil {
 		if name := db.Dialector.Name(); name == "postgres" || name == "mysql" {
-			if eerr := EnsureOutboxPartitions(ctx, db, now, addMonth(now)); eerr != nil {
+			if eerr := EnsureOutboxPartitionsNS(ctx, db, ns, now, addMonth(now)); eerr != nil {
 				return 0, fmt.Errorf("ensure forward partitions: %w", eerr)
 			}
 		}

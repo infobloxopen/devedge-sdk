@@ -39,13 +39,39 @@ func (IdemMarker) TableName() string { return "idempotency_markers" }
 // with the same *gorm.DB the handler's GormTxRunner uses, so Record's marker
 // insert binds to the handler's transaction and commits with the handler's
 // aggregate write.
+//
+// WS-012 P2: the marker table name is RESOLVED from a
+// persistence.DatabaseNamespace (WithIdempotencyNamespace), so two co-resident
+// modules sharing one database get isolated idempotency_markers tables and a
+// duplicate key in one module never blocks the other. The zero namespace yields
+// the bare "idempotency_markers", so single-module behavior is unchanged.
 type GormIdempotencyStore struct {
-	db *gorm.DB
+	db    *gorm.DB
+	table string
 }
 
-// NewGormIdempotencyStore returns a GORM-backed IdempotencyStore over db.
-func NewGormIdempotencyStore(db *gorm.DB) *GormIdempotencyStore {
-	return &GormIdempotencyStore{db: db}
+// idempotencyBaseTable is the unqualified marker table name (IdemMarker.TableName).
+const idempotencyBaseTable = "idempotency_markers"
+
+// IdempotencyOption configures a GormIdempotencyStore.
+type IdempotencyOption func(*GormIdempotencyStore)
+
+// WithIdempotencyNamespace qualifies the marker table per a module's
+// persistence.DatabaseNamespace (WS-012 P2). The zero namespace leaves the bare name.
+func WithIdempotencyNamespace(ns persistence.DatabaseNamespace) IdempotencyOption {
+	return func(s *GormIdempotencyStore) {
+		s.table = ns.QualifyTable(idempotencyBaseTable)
+	}
+}
+
+// NewGormIdempotencyStore returns a GORM-backed IdempotencyStore over db. Without
+// a WithIdempotencyNamespace option it uses the bare "idempotency_markers" table.
+func NewGormIdempotencyStore(db *gorm.DB, opts ...IdempotencyOption) *GormIdempotencyStore {
+	s := &GormIdempotencyStore{db: db, table: idempotencyBaseTable}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // conn resolves the transaction-scoped *gorm.DB when ctx carries one (so Record
@@ -64,7 +90,7 @@ func (s *GormIdempotencyStore) conn(ctx context.Context) *gorm.DB {
 // on Seen — the in-tx Record below is the real exactly-once guard.
 func (s *GormIdempotencyStore) Seen(ctx context.Context, key string) (bool, error) {
 	var count int64
-	if err := s.db.WithContext(ctx).Model(&IdemMarker{}).
+	if err := s.db.WithContext(ctx).Table(s.table).Model(&IdemMarker{}).
 		Where("key = ?", key).
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("idempotency seen %q: %w", key, err)
@@ -79,7 +105,7 @@ func (s *GormIdempotencyStore) Seen(ctx context.Context, key string) (bool, erro
 // duplicate effect back — the side effect runs exactly once even under a
 // double-delivery (F032 AC-2).
 func (s *GormIdempotencyStore) Record(ctx context.Context, key string) error {
-	if err := s.conn(ctx).Create(&IdemMarker{Key: key}).Error; err != nil {
+	if err := s.conn(ctx).Table(s.table).Create(&IdemMarker{Key: key}).Error; err != nil {
 		if ce := persistence.ConstraintError(err); errors.Is(ce, persistence.ErrConflict) {
 			return events.ErrAlreadyApplied
 		}

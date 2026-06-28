@@ -1,0 +1,28 @@
+# {{.BinName}} migrations
+
+This directory holds the **{{.BinName}} module's** schema migration files. The
+module *owns* its migration files; a **host** runs them (WS-012 composable
+services). The `module/module.go` `//go:embed migrations` directive embeds this
+directory so a host can run these migrations under a per-module advisory lock with
+per-module namespacing.
+
+**Migration is host-run (WS-012 P2).** `cmd/{{.BinName}}/main.go` passes a
+`servicekit.MigrationRunner` (`moduleMigrate`) to `servicekit.Run`, which calls it —
+once, before the module registers — with the module's allocated `DatabaseNamespace`.
+The runner (`gormtx.MigrateModule`) acquires a per-module advisory lock (Postgres),
+creates the module's schema (or applies its table prefix), AutoMigrates the domain
+models plus the SDK framework tables (outbox / idempotency / dispatcher sidecars)
+**into the module namespace**, and stamps the module's own `schema_migrations` table.
+A module **never** runs migrations from `init()`, never assumes it owns the whole DB,
+and never creates a cross-module foreign key.
+
+For a **standalone** host the module shares its database with no one, so its
+namespace is a zero (bare-table) namespace and tables are unqualified — unchanged
+from a non-composable service. When this service is composed into a **suite** host
+(`de compose`), that host declares a shared engine and each module gets its own
+schema/prefix — the SAME runner, no module change.
+
+This README is also the placeholder that keeps the `//go:embed migrations` valid
+before the first migration file lands. Add migration files here (e.g.
+`0001_init.up.sql` / `0001_init.down.sql`) as your schema evolves; the host-run
+migrator reads them through the embedded `Migrations()` FS.

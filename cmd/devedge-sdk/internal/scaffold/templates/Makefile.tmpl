@@ -96,7 +96,7 @@ test: | gen
 # code change), e.g. `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 make run`.
 # With no endpoint set the exporter no-ops, so this runs with zero overhead.
 run: | gen
-	go run ./server
+	go run ./cmd/{{.BinName}}
 
 # apx governs the PUBLIC proto surface. Run these locally BEFORE pushing — CI runs
 # the same gates (see .github/workflows/apx-release.yml).

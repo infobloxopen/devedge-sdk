@@ -56,9 +56,13 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		facts[string(m.GoIdent.GoName)] = messageResourceFacts(m)
 	}
 
+	// protoPackage is the proto package (e.g. "orders.v1"); its first segment is
+	// the module ID the generated servicekit.Module reports (e.g. "orders").
+	protoPackage := string(f.Desc.Package())
+
 	var services []serviceInfo
 	for _, s := range f.Services {
-		svc := serviceInfo{ServiceName: s.GoName}
+		svc := serviceInfo{ServiceName: s.GoName, ProtoPackage: protoPackage}
 		// Resolve the resource type the service operates on from its standard
 		// method shapes (the resource message field on Create/Update requests, the
 		// return type of Create/Get, the repeated field on the List response).

@@ -1,29 +1,24 @@
-// Command {{.BinName}} runs the {{.ServiceType}}.
+// Command {{.BinName}} is the STANDALONE host for the {{.ServiceType}} module
+// (WS-012 composable services). main() is a HOST, not the service: it owns
+// process behavior — flags/env/config, the database connection, observability,
+// signal handling — and hands the service's importable {{.Module}}/module unit to
+// servicekit.Run, which builds the ONE shared server, registers the module, and
+// serves under the fail-closed boot gate.
 //
-// The server is wired by construction:
-//   - server.New configures the gRPC + HTTP-gateway stack and the authz interceptor;
-//   - {{.GoPkg}}.Register{{.ServiceType}}WithRepository wires the GENERATED default CRUD
-//     handler over the generated GORM repository — no hand-written handler — and
-//     contributes the service's authz rules to the server;
-//   - server.Serve asserts at boot that every registered RPC has an authz rule
-//     (fail-closed) and refuses to start otherwise.
+// The SAME module also composes into a multi-service "suite" binary by handing it
+// (plus others) to servicekit.Run from a different host — no change to the module.
 //
 // This file is hand-owned (NOT generated). It owns the environment wiring (open
 // the DB, migrate, construct the repository, choose the authorizer/principal);
-// the handler + rule wiring are generated. To add custom (non-CRUD) logic, embed
-// {{.GoPkg}}.{{.ServiceType}}CRUDHandler, override the methods you change, and
-// register it with {{.GoPkg}}.Register{{.ServiceType}}(s, h).
+// the module's domain wiring (handler + rules + descriptor + health) lives in the
+// importable module/ package. To change service logic, edit the proto + the
+// module/ package, not this host.
 {{- if .Aggregate}}
 //
-// {{.Resource}} is a DDD aggregate ROOT (it owns {{.Member}} members). This file
-// additionally wires the aggregate + transactional-outbox machinery out of the box:
-//   - a gormtx.GormTxRunner makes a root+members Save one transaction;
-//   - a persistence.AggregateRepository loads/saves the whole {{.Resource}} cluster
-//     atomically over the generated Load{{.Resource}}AggregateGorm graph-load primitive;
-//   - an events.Publisher + events.Dispatcher form a transactional outbox so a
-//     change to {{.Resource}} can react onto another aggregate by eventual consistency.
-//
-// See newAggregate / newOutbox below; both are constructed in newServer.
+// {{.Resource}} is a DDD aggregate ROOT (it owns {{.Member}} members). newDB
+// additionally migrates the transactional-outbox + idempotency tables so a custom
+// handler can react across aggregates by eventual consistency (see the module/
+// package + the SDK aggregate/outbox seams).
 {{- end}}
 package main
 
@@ -47,13 +42,12 @@ import (
 {{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/events"
 {{- end}}
-	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
 	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
-{{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
-{{- end}}
-	"github.com/infobloxopen/devedge-sdk/server"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
+
+	svcmodule "{{.Module}}/module"
 
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
@@ -61,47 +55,55 @@ import (
 // version is the service version stamped onto every span/metric (OTel resource
 // service.version). Override at build time with -ldflags "-X main.version=...".
 var version = "0.0.0-dev"
-
 {{- if .Aggregate}}
 
-// newDB opens the database and migrates the aggregate's models plus the reusable
-// SDK outbox + idempotency tables. SQLite (pure-Go, no CGo) keeps the scaffold
-// runnable out of the box; swap the dialector for postgres/mysql in production.
-func newDB() (*gorm.DB, error) {
-	// Silence GORM's default logger: it writes every SQL statement and an ANSI
-	// "record not found" line for each miss, which floods test/dev output. Use
-	// logger.Default.LogMode(logger.Warn) to surface slow queries/errors only, or
-	// pass a logger.Interface adapter to route through your structured logger.
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+// newDB opens the database. SQLite (pure-Go, no CGo) keeps the host runnable out of
+// the box; swap the dialector for postgres/mysql in production. The MIGRATION (the
+// aggregate's models PLUS the reusable SDK outbox + idempotency tables) is run
+// separately, host-owned and per-module-namespaced (see moduleMigrate).
+func newDB(dsn string) (*gorm.DB, error) {
+	if dsn == "" {
+		dsn = "file::memory:?cache=shared"
+	}
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(
-		&{{.GoPkg}}.{{.Resource}}Model{},
-		&{{.GoPkg}}.{{.Member}}Model{},
-		&gormtx.OutboxRow{},          // the WRITE-ONLY outbox table
-		&gormtx.OutboxCursorRow{},    // the dispatcher's forward-cursor sidecar
-		&gormtx.OutboxDeadLetterRow{}, // the dispatcher's poison dead-letter sidecar
-		&gormtx.IdemMarker{},
-	); err != nil {
-		return nil, err
-	}
 	return db, nil
 }
 
-// newAggregate wires the SDK's backend-neutral persistence.AggregateRepository
-// over the generated GORM repositories: Load uses the generated graph-load
-// primitive Load{{.Resource}}AggregateGorm, and Save tracks {{.Member}} (member)
-// mutations against the stored cluster — adds/updates/removes through the
-// generated {{.Member}}Repository — all inside ONE gormtx.GormTxRunner
-// transaction, bumping the {{.Resource}} (root) etag on any member change.
+// moduleMigrate is the HOST's per-module migration runner (WS-012 P2): host-run,
+// advisory-locked (Postgres), per-module-namespaced. servicekit.Run calls it once
+// per module — BEFORE the module registers — with the module's allocated
+// DatabaseNamespace. It AutoMigrates the aggregate's domain models AND the reusable
+// SDK framework tables (write-only outbox, the dispatcher's cursor + dead-letter
+// sidecars, idempotency markers) INTO the module namespace, so a composed suite host
+// gives each module its OWN isolated framework tables — they never collide. A
+// standalone host shares its DB with no one, so the namespace is a zero (bare-table)
+// namespace and behavior is unchanged.
 //
-// The service's standard CRUD still runs over the flat {{.Resource}} repository;
-// this aggregate repository is the seam for a custom handler that mutates the whole
-// {{.Resource}} cluster atomically (embed the generated CRUDHandler and override the
-// methods that need it).
+// A module owns its migration FILES (module/migrations); never runs them from
+// init(); never assumes it owns the whole DB. The host runs them here.
+func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
+	return func(ctx context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		return gormtx.MigrateModule(ctx, db, gormtx.MigrateOptions{
+			Namespace: ns,
+			DomainModels: []any{
+				&{{.GoPkg}}.{{.Resource}}Model{},
+				&{{.GoPkg}}.{{.Member}}Model{},
+			},
+			FrameworkModels:  gormtx.MigrationModelsFor(true /*outbox*/, true /*idempotency*/),
+			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
+		})
+	}
+}
+
+// newAggregate wires the SDK's backend-neutral persistence.AggregateRepository
+// over the generated GORM repositories so a custom handler can mutate the whole
+// {{.Resource}} cluster atomically. It is ready-but-unused scaffolding (assigned
+// to _ in runHost) until you add a custom handler + dispatch loop.
 func newAggregate(db *gorm.DB) *persistence.GenericAggregateRepository[*{{.GoPkg}}.{{.Resource}}, string] {
 	roots := {{.GoPkg}}.New{{.Resource}}Repository(db)
 	members := {{.GoPkg}}.New{{.Member}}Repository(db)
@@ -114,8 +116,6 @@ func newAggregate(db *gorm.DB) *persistence.GenericAggregateRepository[*{{.GoPkg
 			return {{.GoPkg}}.Load{{.Resource}}AggregateGorm(ctx, db, root.GetId())
 		},
 		SaveMembers: func(ctx context.Context, root *{{.GoPkg}}.{{.Resource}}) (bool, error) {
-			// Member-mutation tracking: diff the incoming members against what is
-			// stored (loaded fresh inside the tx) and apply adds/updates/removes.
 			stored, err := {{.GoPkg}}.Load{{.Resource}}AggregateGorm(ctx, db, root.GetId())
 			if err != nil {
 				return false, err
@@ -157,137 +157,140 @@ func newAggregate(db *gorm.DB) *persistence.GenericAggregateRepository[*{{.GoPkg
 	})
 }
 
-// newOutbox wires the F032/F033 transactional-outbox seam over the reusable SDK GORM
-// stores: a Publisher records a domain event in the SAME transaction as the aggregate
-// change that emitted it (call pub.Publish inside the GormTxRunner's Atomically). The
-// outbox table is WRITE-ONLY — the producer's transactional INSERT and retention's
-// DROP PARTITION are the only writes. The Dispatcher consumes it as a FORWARD CURSOR
-// for same-DB cross-aggregate reactions: it reads events in order, runs the handlers
-// you Subscribe — each in its OWN transaction (eventual consistency across aggregates)
-// — and advances its position in a SIDECAR (GormOutboxCursorStore), never touching the
-// outbox rows. The GormIdempotencyStore makes delivery exactly-once. Run ONE dispatcher
-// instance per service; wire reactions with d.Subscribe(...) and run d.Poll(ctx, ...)
-// (or d.RunOnce on a tick) from a background goroutine.
-//
-// Cross-server delivery (publishing to message queues) is OUT OF SCOPE for the SDK: an
-// external project tails the write-only outbox via the persistence.OutboxCDCConsumer
-// seam (WAL/Debezium → queues). The in-process dispatcher here is for same-DB reactions.
+// newOutbox wires the transactional-outbox seam over the reusable SDK GORM
+// stores. Ready-but-unused scaffolding (assigned to _ in runHost) until you wire
+// reactions with d.Subscribe(...) and run d.Poll(ctx, ...) from a goroutine.
 func newOutbox(db *gorm.DB) (events.Publisher, *events.Dispatcher) {
 	tx := gormtx.NewGormTxRunner(db)
 	store := gormtx.NewGormOutboxStore(db)
 	cursors := gormtx.NewGormOutboxCursorStore(db)
 	pub := events.NewOutboxPublisher(store)
 	d := events.NewDispatcher(store, cursors, tx, gormtx.NewGormIdempotencyStore(db))
-	// Example: react to your aggregate's events here.
-	//   d.Subscribe("{{.ResourceSnake}}.changed", "my-reaction", func(ctx context.Context, evt events.Event) error { ... })
 	return pub, d
 }
 
 // runRetention drops aged outbox data WITHOUT per-row deletes (whole-partition
 // drops on a partitioned SQL backend; a windowed delete on the sqlite dev
 // backend). The SDK owns no cron loop: schedule this from your own scheduler.
-// retentionWindow is how long events are kept before they age out — keep it longer
-// than the dispatcher could ever fall behind, so a partition is dropped only once it
-// is both older than the window AND fully behind the dispatch cursor.
+// Ready-but-unused scaffolding (referenced via _ in runHost).
 func runRetention(ctx context.Context, db *gorm.DB, store persistence.OutboxRetention, retentionWindow time.Duration) (int, error) {
 	return gormtx.RunRetention(ctx, db, store, retentionWindow)
 }
+
+// runHost wires the aggregate + outbox machinery and serves the module via
+// servicekit.Run. agg/pub/d are ready-but-unused (assigned to _) until you add a
+// custom handler + dispatch loop.
+func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) error {
+	db, err := newDB(dsn)
+	if err != nil {
+		return err
+	}
+	agg := newAggregate(db)
+	pub, d := newOutbox(db)
+	_, _, _ = agg, pub, d
+	_ = runRetention // ready-but-unused; schedule from your own loop
+	repo := {{.GoPkg}}.New{{.Resource}}Repository(db)
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	return servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{svcmodule.Module(repo, sqlDB)},
+		GRPCAddr: grpcAddr,
+		HTTPAddr: httpAddr,
+		// Standalone host: no shared DB declared, so the module's namespace is
+		// zero-qualification (bare tables, unchanged). The migration runs host-owned
+		// (Migrate); composing into a suite host namespaces the SAME runner per module.
+		Migrate:       moduleMigrate(db),
+		Authorizer:    authorizer,
+		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+		Logger:        slog.Default(),
+		Context:       ctx,
+	})
+}
 {{- else}}
 
-// newRepository opens the database, migrates the generated model, and returns
-// both the generated GORM repository and the underlying *gorm.DB (used to
-// register a DB-ping readiness check). dsn is the connection string; when empty
-// it defaults to an in-memory SQLite database. SQLite (pure-Go, no CGo) keeps
-// the scaffold runnable out of the box; swap the dialector for postgres/mysql in
-// production.
+// newRepository opens the database and returns the generated GORM repository plus
+// the underlying *gorm.DB. dsn is the connection string; empty defaults to
+// in-memory SQLite (pure-Go, no CGo) so the host runs out of the box — swap the
+// dialector for postgres/mysql in production. Opening the DB is HOST process
+// behavior; the MIGRATION is run separately, host-owned (see moduleMigrate).
 func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], *gorm.DB, error) {
 	if dsn == "" {
 		dsn = "file::memory:?cache=shared"
 	}
-	// Silence GORM's default logger: it writes every SQL statement and an ANSI
-	// "record not found" line for each miss, which floods test/dev output. Use
-	// logger.Default.LogMode(logger.Warn) to surface slow queries/errors only, or
-	// pass a logger.Interface adapter to route through your structured logger.
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := db.AutoMigrate(&{{.GoPkg}}.{{.Resource}}Model{}); err != nil {
-		return nil, nil, err
-	}
 	return {{.GoPkg}}.New{{.Resource}}Repository(db), db, nil
 }
-{{- end}}
 
-// newServer builds a fully wired server with the given authorizer, listen
-// addresses, and database DSN. Returns an error (rather than panicking) so tests
-// can assert the fail-closed authz gate. The smoke test passes ":0" for
-// kernel-assigned ports and "" for the DSN (in-memory sqlite).
-func newServer(authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) (*server.Server, error) {
-{{- if .Aggregate}}
-	db, err := newDB()
-	if err != nil {
-		return nil, err
+// moduleMigrate is the HOST's per-module migration runner (WS-012 P2): host-run,
+// advisory-locked (Postgres), per-module-namespaced. servicekit.Run calls it once
+// per module — BEFORE the module registers — with the module's allocated
+// DatabaseNamespace. A standalone single-module host shares its DB with no one, so
+// its namespace is a zero (bare-table) namespace and the tables are unqualified,
+// exactly as before; the SAME runner namespaces the tables per-module when this
+// module is composed into a multi-module "suite" host that shares one database.
+//
+// A module owns its migration FILES (module/migrations); never runs them from
+// init(); never assumes it owns the whole DB. The host runs them here.
+func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
+	return func(ctx context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		return gormtx.MigrateModule(ctx, db, gormtx.MigrateOptions{
+			Namespace:    ns,
+			DomainModels: []any{&{{.GoPkg}}.{{.Resource}}Model{}},
+			// SQLite (the dev default) needs no advisory lock — one process; Postgres
+			// keeps the lock so two hosts booting the same composition serialize.
+			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
+		})
 	}
-	// Aggregate + outbox machinery wired out of the box. The flat CRUD handler is
-	// registered below; agg/pub/d/runRetention are ready for a custom handler that
-	// mutates the {{.Resource}} cluster atomically and reacts across aggregates via
-	// the outbox. They are assigned to _ here so the scaffold compiles and runs
-	// before you add your own handler + dispatch loop.
-	agg := newAggregate(db)
-	pub, d := newOutbox(db)
-	_, _, _ = agg, pub, d
-	_ = runRetention
-	repo := {{.GoPkg}}.New{{.Resource}}Repository(db)
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, err
-	}
-{{- else}}
+}
+
+// runHost builds the module over a repo (from dsn) and serves it via
+// servicekit.Run, which runs the host-owned migration (moduleMigrate) before the
+// module registers, then serves under the fail-closed boot gate. It returns an
+// error (rather than exiting) so the smoke test can drive it. ctx owns the serve
+// lifetime; the smoke test cancels it to stop.
+func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) error {
 	repo, gormDB, err := newRepository(dsn)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	sqlDB, err := gormDB.DB()
 	if err != nil {
-		return nil, err
+		return err
 	}
-{{- end}}
-	s, err := server.New(server.Config{
-		GRPCAddr:   grpcAddr,
-		HTTPAddr:   httpAddr,
-		Authorizer: authorizer,
+	return servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{svcmodule.Module(repo, sqlDB)},
+		GRPCAddr: grpcAddr,
+		HTTPAddr: httpAddr,
+		// Standalone host: this module shares its database with no other, so no
+		// HostConfig.Database is set and the module's namespace is zero-qualification
+		// (bare tables, unchanged). The migration still runs host-owned (Migrate).
+		// When this service is composed into a "suite" host (de compose), THAT host
+		// declares a shared engine and each module gets its own schema/prefix — the
+		// SAME moduleMigrate runner namespaces accordingly, no module change.
+		Migrate: moduleMigrate(gormDB),
 		// Derive the caller's authz.Principal from request metadata (account-id ->
 		// tenant, groups -> group:<name>). Without it the principal is empty and
 		// every call is denied. Swap for a verified-token PrincipalFunc in prod.
+		Authorizer:    authorizer,
 		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
-		// Structured request logging is on by default (one trace-correlated slog
-		// record per RPC; secret-annotated payload fields redacted at Debug).
-		Logger: slog.Default(),
-		// DB-ping readiness check: the server's /readyz and gRPC health status
-		// flip to unready when the database is unreachable. The check uses the
-		// stdlib PingContext interface — no ORM import enters core.
-		ReadinessChecks: []sdkhealth.Check{sdkhealth.NewDBCheck("db", sqlDB)},
+		Logger:        slog.Default(),
+		Context:       ctx,
 	})
-	if err != nil {
-		return nil, err
-	}
-	// One call: construct the generated default CRUD handler over repo, register it
-	// (gRPC + REST gateway), and contribute the service's authz rules.
-	if err := {{.GoPkg}}.Register{{.ServiceType}}WithRepository(s, repo); err != nil {
-		return nil, err
-	}
-	return s, nil
 }
+{{- end}}
 
 func main() {
 	// Graceful shutdown: cancel ctx on SIGTERM (k8s pod termination) or Ctrl-C so
-	// server.Serve returns and runs its graceful gRPC/HTTP drain, the readiness
-	// loop stops, and the deferred OTel flush below runs before exit. The
-	// chart's terminationGracePeriodSeconds / compose's stop_grace_period give
-	// this drain its time budget.
+	// servicekit.Run -> server.Serve returns and runs its graceful gRPC/HTTP drain,
+	// then the deferred OTel flush runs before exit. The HOST owns signals — a
+	// module never installs a handler or calls os.Exit.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
@@ -301,12 +304,10 @@ func main() {
 	//   {{.ServiceUpper}}_OTLP_ENDPOINT — OTel collector      (default: $OTEL_EXPORTER_OTLP_ENDPOINT)
 	//   {{.ServiceUpper}}_DSN          — database DSN          (default: in-memory sqlite)
 	fs := flag.NewFlagSet("{{.BinName}}", flag.ExitOnError)
-	// Register the override flags so config.Flags(fs) can see them. The flag
-	// names match the config keys; config.Flags reads only flags explicitly set
-	// on the command line (it ignores these zero-value defaults), so the
-	// documented precedence (flag > env > .env > struct default) holds. Parse
-	// BEFORE config.Load — config.Flags inspects which flags were set, so the
-	// parse must happen first.
+	// Register the override flags so config.Flags(fs) can see them. The flag names
+	// match the config keys; config.Flags reads only flags explicitly set on the
+	// command line, so the documented precedence (flag > env > .env > default)
+	// holds. Parse BEFORE config.Load — config.Flags inspects which flags were set.
 	fs.String("GRPC_ADDR", "", "gRPC listen address (overrides {{.ServiceUpper}}_GRPC_ADDR)")
 	fs.String("HTTP_ADDR", "", "HTTP gateway address (overrides {{.ServiceUpper}}_HTTP_ADDR)")
 	fs.String("LOG_LEVEL", "", "log level: debug/info/warn/error")
@@ -328,8 +329,6 @@ func main() {
 	// global tracer/meter providers + a W3C propagator; the server's built-in
 	// otelgrpc/otelhttp instrumentation then emits per-RPC spans + RED metrics and
 	// one end-to-end trace across the REST gateway hop, with no per-handler code.
-	// OTLPEndpoint comes from config ({{.ServiceUpper}}_OTLP_ENDPOINT); when empty it
-	// honours $OTEL_EXPORTER_OTLP_ENDPOINT, no-opping cleanly if that is also unset.
 	shutdown, err := otel.Setup(ctx, otel.Config{
 		ServiceName:    "{{.BinName}}",
 		ServiceVersion: version,
@@ -345,7 +344,7 @@ func main() {
 	}()
 
 	// Dev authorizer: grants the "admin" group every verb on every resource in any
-	// tenant. Paired with grpcauthz.DevPrincipalFunc (wired in newServer), a caller
+	// tenant. Paired with grpcauthz.DevPrincipalFunc (wired in runHost), a caller
 	// is authorized when it sends `account-id: <tenant>` and `groups: admin`; anyone
 	// else fails closed (PermissionDenied). Replace BOTH the grant and the
 	// PrincipalFunc with a real policy + verified-token func in production.
@@ -355,12 +354,8 @@ func main() {
 		Verbs:    []authz.Verb{"*"},
 		Resource: "*",
 	})
-	s, err := newServer(authorizer, opts.GRPCAddr, opts.HTTPAddr, opts.DSN)
-	if err != nil {
-		log.Fatalf("{{.BinName}}: init: %v", err)
-	}
 	log.Printf("{{.BinName}}: serving gRPC on %s, HTTP on %s", opts.GRPCAddr, opts.HTTPAddr)
-	if err := s.Serve(ctx); err != nil {
+	if err := runHost(ctx, authorizer, opts.GRPCAddr, opts.HTTPAddr, opts.DSN); err != nil {
 		log.Fatalf("{{.BinName}}: serve: %v", err)
 	}
 }

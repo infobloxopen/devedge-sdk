@@ -57,8 +57,11 @@ func TestScaffold_GORM_BuildsAndPasses(t *testing.T) {
 		"proto/orders/v1/orders.proto",
 		"proto/infoblox/authz/v1/authz.proto",
 		"proto/infoblox/field/v1/field.proto",
-		"server/main.go",
-		"server/orders_smoke_test.go",
+		// WS-012 composable shape: importable module/ unit + thin cmd/<svc> host.
+		"module/module.go",
+		"module/migrations/README.md",
+		"cmd/orders/main.go",
+		"cmd/orders/orders_smoke_test.go",
 		".github/workflows/apx-release.yml",
 	} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
@@ -115,8 +118,11 @@ func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 		"proto/orders/v1/orders.proto",
 		"proto/infoblox/authz/v1/authz.proto",
 		"proto/infoblox/field/v1/field.proto",
-		"server/main.go",
-		"server/orders_smoke_test.go",
+		// WS-012 composable shape: importable module/ unit + thin cmd/<svc> host.
+		"module/module.go",
+		"module/migrations/README.md",
+		"cmd/orders/main.go",
+		"cmd/orders/orders_smoke_test.go",
 		".github/workflows/apx-release.yml",
 	} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
@@ -205,7 +211,7 @@ func TestScaffold_GORM_Aggregate_BuildsAndPasses(t *testing.T) {
 	}
 
 	// The generated main wires the aggregate + outbox machinery (gated on aggregate).
-	mainGo := readFile(t, filepath.Join(target, "server/main.go"))
+	mainGo := readFile(t, filepath.Join(target, "cmd/orders/main.go"))
 	for _, want := range []string{
 		"gormtx.NewGormTxRunner(db)",
 		"persistence.NewGenericAggregateRepository",
@@ -264,7 +270,7 @@ func TestScaffold_ENT_Aggregate_BuildsAndPasses(t *testing.T) {
 
 	// ent aggregate main wires the generated NewEntTxRunner + AggregateRepository +
 	// the (dev-store) outbox. It must stay gorm-free.
-	mainGo := readFile(t, filepath.Join(target, "server/main.go"))
+	mainGo := readFile(t, filepath.Join(target, "cmd/orders/main.go"))
 	for _, want := range []string{
 		"ordersv1.NewEntTxRunner(client)",
 		"persistence.NewGenericAggregateRepository",
@@ -329,8 +335,9 @@ func TestScaffold_GORM_AuthzGateRegression(t *testing.T) {
 	injectLocalReplace(t, target, sdkDir)
 	generate(t, target, pluginBin)
 
-	// The smoke test calls newServer, which must now fail at Register (boot gate).
-	cmd := exec.Command("go", "test", "./server/", "-run", "TestSmoke")
+	// The smoke test drives runHost -> servicekit.Run -> server.Serve, whose
+	// fail-closed union completeness gate must now reject the orphan method at boot.
+	cmd := exec.Command("go", "test", "./cmd/orders/", "-run", "TestSmoke")
 	cmd.Dir = target
 	combined, err := cmd.CombinedOutput()
 	if err == nil {
