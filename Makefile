@@ -1,5 +1,5 @@
 .PHONY: build test security-check vet lint tidy generate sync-scaffold-mirrors \
-        build-gowork-off check-graph-isolation
+        build-gowork-off check-graph-isolation release
 
 # MODULES is every Go module in this repo (WS-011 / F039 multi-module split). The
 # build/vet/test targets loop over it so each module's gates run; go.work resolves
@@ -106,3 +106,15 @@ lint:
 
 tidy:
 	@set -e; for m in $(MODULES); do echo "== tidy $$m =="; (cd $$m && go mod tidy); done
+
+# release cuts the SYNCHRONIZED multi-module release (WS-011 / F039). Given a
+# VERSION it bumps every nested module's `require github.com/infobloxopen/devedge-sdk`
+# + the scaffold version vars to that version, tidies each module individually (NEVER
+# `go work sync` — it empties member requires in this nested layout), and tags the
+# root + all six submodules at <path>/VERSION on one commit. Default is a DRY RUN
+# that prints the plan and stages the bumps; pass PUSH=1 for the real run.
+#   make release VERSION=v0.27.0            # dry run (no tags, no push)
+#   make release VERSION=v0.27.0 PUSH=1     # commit, tag all seven, push
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=vX.Y.Z [PUSH=1]"; exit 2; }
+	./scripts/release.sh $(VERSION) $(if $(PUSH),--push,)
