@@ -1,6 +1,6 @@
 # 030 — Composable Services: importable Module + executable Host (`servicekit`)
 
-**Status**: P1 + P2 + P3 implemented. P4–P6 planned.
+**Status**: P1 + P2 + P3 + P5 implemented. P4 + P6 planned.
 **Initiative**: WS-012 (cross-repo proposal: development-hub `specs/composable-services-proposal.md`).
 **Decisions (ratified P0):** package `servicekit` in the ROOT module; generated Module via
 `protoc-gen-svc`; static composition only (no Go plugins); one shared `server.Server`;
@@ -430,3 +430,66 @@ ONLY genuinely new code — relay/consumer/bus/breaker/health/config primitives 
   (degraded + fail-host), config layering, boot validation (all Docker-free).
 - `testdata/iam/iamv1/ws012_events_pg_test.go` (new) — real-Postgres composed-host event-flow
   proof (Docker-gated; clean skip without Docker).
+
+## P5 — Composition test harness (`servicekittest`)
+
+**Shipped 2026-06-28.**
+
+Adds a `servicekittest` package in the ROOT module (importable alongside
+`servicekit`) with three exported surfaces:
+
+### `AssertModule(t, m servicekit.Module, opts ...ModuleOptions)`
+
+Per-module contract test (no Docker required). Assertions:
+1. `Descriptor()` non-zero: ID non-empty, at least one method.
+2. `Descriptor()` **stable**: two calls return equal values (ID, version, method count).
+3. `ValidateDescriptors` passes for the module alone.
+4. Module registers into a fresh host with a pre-cancelled context — asserting no
+   listener startup, no `os.Exit`, clean registration + server union gate.
+5. If `ModuleOptions.MigrationRunner` is non-nil: runner is called with the module's
+   resolved namespace (asserting migrations load without error).
+
+`ModuleOptions.DBEngine` (default `"sqlite"`, prefix-only isolation) allows
+testing the migration path with any in-process DB before real Postgres.
+
+### `AssertComposition(t, modules []servicekit.Module, opts ...CompositionOptions)`
+
+Composition smoke test. Assertions:
+1. `ValidateModules` passes (unique IDs, no conflicts, coherent event graph).
+2. `servicekit.Run` boots: all modules register, union completeness gate passes.
+3. If `CompositionOptions.Migrate` + `Database` are set: per-module migrations run.
+4. `WaitForReady` (optional): harness dials the gRPC port until the host accepts
+   (drives full lifecycle through migrations + boot gate).
+5. Clean shutdown after assertions.
+
+Docker note: the harness does NOT start Docker. The caller supplies a working
+`Migrate` + `Database` from their testcontainers setup and calls
+`startPostgres(t)` → `t.Skip` before invoking `AssertComposition` if Docker is
+unavailable (mirroring the `pgtest_test.go` pattern).
+
+### `AssertCompatible(t, modules []servicekit.Module, host HostRequires)`
+
+Pure version-range compatibility check (no DB, no network). Validates each
+module's `Requires{SDK, Go, Postgres}` against the host runtime. Implements the
+zero-dependency `>=X.Y.Z` range form the SDK uses. Also exported as
+`CompatibleModules(modules, host) []error` (non-`*testing.T` form for `de compose
+tidy` P4).
+
+### Acceptance tests
+
+- `servicekittest/servicekittest_test.go` — harness unit tests with in-process
+  fakes: AssertModule, AssertComposition (in-process + event graph), AssertCompatible,
+  CompatibleModules, version comparison table.
+- `testdata/toy/ws012_p5_test.go` — `AssertModule` against the real generated
+  `WidgetServiceModule` (RUNS + PASSES; no Docker).
+- `testdata/iam/iamv1/ws012_p5_pg_test.go` — `AssertComposition` against two iam
+  fixture modules (pub + sub) on real Postgres (RUNS + PASSES with Docker; SKIPs
+  cleanly without). Also includes in-process `AssertComposition` variants and
+  `AssertCompatible` usage.
+
+### Files added
+
+- `servicekittest/servicekittest.go` — package implementation
+- `servicekittest/servicekittest_test.go` — harness unit tests
+- `testdata/toy/ws012_p5_test.go` — toy AssertModule acceptance proof
+- `testdata/iam/iamv1/ws012_p5_pg_test.go` — iam AssertComposition acceptance proof
