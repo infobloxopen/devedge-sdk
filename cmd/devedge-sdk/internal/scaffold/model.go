@@ -28,7 +28,7 @@ const (
 // this constant only ever sets the INITIAL pin — but a stale value would still
 // pin a new project to an old SDK, so keep it aligned with the latest released
 // SDK tag (bump on every release).
-const fallbackSDKVersion = "v0.18.0"
+const fallbackSDKVersion = "v0.26.1"
 
 // Pinned dependency versions for the generated go.mod. These mirror the versions
 // the SDK's own testdata modules build against; `go mod tidy` reconciles indirects.
@@ -46,11 +46,21 @@ const (
 	fieldBindingVersion  = "v1.0.0-alpha.1"
 	// Observability (F034): the OTel API the generated main pulls through the SDK's
 	// observability/otel adapter + server seam. Kept in lockstep with the SDK's own
-	// go.mod (API v1.x, contrib v0.x); `go mod tidy` reconciles the SDK/exporter
-	// indirects. The adapter itself ships INSIDE the devedge-sdk module, so the
-	// generated project needs no separate adapter require.
+	// go.mod (API v1.x, contrib v0.x).
 	otelAPIVersion = "v1.44.0"
 )
+
+// otelAdapterModulePath is the import/module path of the SDK's observability/otel
+// adapter. As of WS-011 / F039 it is its OWN nested module, so the generated main
+// (which imports it to call otel.Setup) must `require` it explicitly — the OTel
+// SDK + exporters live there, no longer in the root module's graph.
+const otelAdapterModulePath = "github.com/infobloxopen/devedge-sdk/observability/otel"
+
+// resolveOTelAdapterVersion returns the version the generated go.mod requires for
+// the observability/otel adapter module. The adapter is released SYNCHRONIZED with
+// the root SDK (one version per release — F039), so it tracks the resolved SDK
+// version exactly, mirroring how SDKVersion is derived from build info.
+func resolveOTelAdapterVersion() string { return resolveSDKVersion() }
 
 // Options are the user-supplied inputs to a scaffold.
 type Options struct {
@@ -146,6 +156,11 @@ type Model struct {
 	ModerncSQLiteVersion  string
 	FieldBindingVersion   string
 	OTelAPIVersion        string
+	// OTelAdapterModulePath / OTelAdapterVersion describe the observability/otel
+	// nested module the generated go.mod requires (WS-011 / F039). The version is
+	// synchronized with the SDK version (one release tags all modules).
+	OTelAdapterModulePath string
+	OTelAdapterVersion    string
 
 	// DeployTargets are the resolved deploy-target names to render (F038),
 	// validated against the deploy registry in Validate. Empty means no deploy
@@ -260,6 +275,8 @@ func (o Options) Validate() (*Model, error) {
 		ModerncSQLiteVersion:  moderncSQLiteVersion,
 		FieldBindingVersion:   fieldBindingVersion,
 		OTelAPIVersion:        otelAPIVersion,
+		OTelAdapterModulePath: otelAdapterModulePath,
+		OTelAdapterVersion:    resolveOTelAdapterVersion(),
 
 		DeployTargets: deployTargets,
 	}

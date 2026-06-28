@@ -36,9 +36,13 @@ func TestMirrorsMatchSDKSource(t *testing.T) {
 	}
 }
 
+// sdkModuleDir returns the ROOT devedge-sdk module dir. It names the module
+// explicitly: the repo is a multi-module workspace (WS-011), and under go.work a
+// bare `go list -m -f {{.Dir}}` prints a line per workspace module, so the root
+// must be queried by path to get just its tree.
 func sdkModuleDir(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/infobloxopen/devedge-sdk").Output()
 	if err != nil {
 		t.Fatalf("locate SDK module dir: %v", err)
 	}

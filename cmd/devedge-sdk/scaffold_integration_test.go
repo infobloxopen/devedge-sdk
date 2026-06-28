@@ -601,16 +601,23 @@ func requireTools(t *testing.T, names ...string) {
 	}
 }
 
-// sdkModuleDir returns the devedge-sdk module root (two levels up from this
-// package, cmd/devedge-sdk).
+// sdkModuleDir returns the ROOT devedge-sdk module dir. It names the module
+// explicitly (not a bare `go list -m`): the repo is now a multi-module workspace
+// (WS-011), and under go.work a bare `go list -m -f {{.Dir}}` prints a line per
+// workspace module, so querying the root module by path is the only reliable way
+// to get just the root tree.
 func sdkModuleDir(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", sdkModulePath).Output()
 	if err != nil {
 		t.Fatalf("locate SDK module dir: %v", err)
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// sdkModulePath is the root SDK module path (the import path of its top-level
+// packages). The nested adapter modules live UNDER it (e.g. observability/otel).
+const sdkModulePath = "github.com/infobloxopen/devedge-sdk"
 
 // buildSDKPlugins builds the SDK codegen plugins from this checkout into a temp
 // bin dir, so buf generate exercises HEAD.
@@ -627,6 +634,13 @@ func buildSDKPlugins(t *testing.T, sdkDir string) string {
 	return bin
 }
 
+// injectLocalReplace points the generated project's SDK requires at THIS
+// checkout so the E2E exercises HEAD, not the module proxy. It replaces both the
+// root module AND every nested adapter module the generated go.mod now requires
+// (WS-011: the generated main imports .../observability/otel, which is its own
+// module — its require must resolve to this working tree too, exactly as the root
+// does). Real scaffolds emit no replace. Each nested module lives at <sdkDir>/<rel>
+// where <rel> is its module path minus the root prefix.
 func injectLocalReplace(t *testing.T, target, sdkDir string) {
 	t.Helper()
 	f, err := os.OpenFile(filepath.Join(target, "go.mod"), os.O_APPEND|os.O_WRONLY, 0o644)
@@ -634,9 +648,21 @@ func injectLocalReplace(t *testing.T, target, sdkDir string) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if _, err := f.WriteString("\nreplace github.com/infobloxopen/devedge-sdk => " + sdkDir + "\n"); err != nil {
+	repl := "\nreplace " + sdkModulePath + " => " + sdkDir + "\n"
+	for _, rel := range nestedAdapterModules {
+		repl += "replace " + sdkModulePath + "/" + rel + " => " + filepath.Join(sdkDir, rel) + "\n"
+	}
+	if _, err := f.WriteString(repl); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// nestedAdapterModules lists the SDK's nested adapter modules (paths relative to
+// the root module path) that a generated service may require. As P1/P2 split out
+// config/koanf, events/kafkabus, persistence/* — add them here so the E2E keeps
+// resolving every required adapter module locally.
+var nestedAdapterModules = []string{
+	"observability/otel",
 }
 
 // makeTarget runs the generated project's REAL `make <args...>` target in target,

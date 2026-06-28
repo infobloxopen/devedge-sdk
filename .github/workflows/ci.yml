@@ -18,25 +18,46 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            observability/otel/go.sum
             testdata/toy/go.sum
             testdata/apikey/go.sum
             testdata/fleet/go.sum
             testdata/iam/go.sum
 
-      - name: Build
+      # build/vet/test loop over every module in the repo (root + observability/otel
+      # + future adapters) via the committed go.work — the multi-module matrix.
+      - name: Build (all modules, go.work)
         run: make build
 
-      - name: Vet
+      - name: Vet (all modules, go.work)
         run: make vet
 
-      - name: Unit tests
+      - name: Unit tests (all modules, go.work)
         run: make test
 
+      # GOWORK=off per-module build: catches a published module missing a `require`
+      # that go.work would otherwise silently satisfy from the working tree (the
+      # go.work-masking failure mode in the spec). The root builds with real requires
+      # only; a nested adapter resolves its root require to the working tree via a
+      # transient, reverted replace (pre-release the published root still contains the
+      # adapter subtree — see the Makefile target).
+      - name: Build with workspace disabled (GOWORK=off, real requires)
+        run: make build-gowork-off
+
+      # The graph-level isolation proof (AC-1/AC-2): a server-only consumer's module
+      # graph is free of the OTel SDK + exporters; adding the observability/otel
+      # adapter pulls them in. Network-touching (temp consumer + go mod tidy).
+      - name: Graph-isolation check (AC-1/AC-2)
+        run: make check-graph-isolation
+
+      # testdata/* are standalone consumer modules with their own go.mod + a `replace`
+      # to the SDK; they are deliberately NOT workspace members, so GOWORK=off (or the
+      # workspace rejects their directory).
       - name: Integration tests (toy fixture)
-        run: cd testdata/toy && go test ./...
+        run: cd testdata/toy && GOWORK=off go test ./...
 
       - name: Integration tests (apikey fixture)
-        run: cd testdata/apikey && go test ./...
+        run: cd testdata/apikey && GOWORK=off go test ./...
 
       # The fleet + iam fixtures carry the Phase-2 PostgreSQL validation tests
       # (TestPG_*). They start a postgres:16 container via testcontainers and SKIP
@@ -44,14 +65,14 @@ jobs:
       # daemon, so the PG tests RUN here (proving the aggregate / CAS / cascade /
       # outbox machinery on the real production engine), under -race.
       - name: Integration tests (fleet fixture — ent/gorm aggregate, CAS, cascade on Postgres)
-        run: cd testdata/fleet && go test -race ./...
+        run: cd testdata/fleet && GOWORK=off go test -race ./...
 
       # The iam fixture also carries the F033 Phase-2 MySQL validation (TestMySQL_*):
       # the append-only partitioned outbox + drop-partition retention proven on real
       # MySQL 8 via testcontainers (the second engine the F033 directive names). They
       # SKIP cleanly without Docker but RUN on ubuntu-latest.
       - name: Integration tests (iam fixture — outbox/events exactly-once on Postgres + MySQL)
-        run: cd testdata/iam && go test -race ./...
+        run: cd testdata/iam && GOWORK=off go test -race ./...
 
       # Guard against the PG tests silently SKIPPING in CI (e.g. if Docker stopped
       # being available on the runner). They must RUN, not skip — that is the whole
@@ -61,7 +82,7 @@ jobs:
           set -euo pipefail
           for mod in fleet iam; do
             echo "== ${mod}: TestPG_ must run, not skip =="
-            out="$(cd "testdata/${mod}" && go test -run '^TestPG_' -v ./... 2>&1)"
+            out="$(cd "testdata/${mod}" && GOWORK=off go test -run '^TestPG_' -v ./... 2>&1)"
             echo "$out"
             if echo "$out" | grep -q -- '--- SKIP: TestPG_'; then
               echo "::error::Postgres validation tests SKIPPED in ${mod} — Docker/testcontainers unavailable on the runner. Phase-2 PG validation did not run."
@@ -79,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "== iam: TestMySQL_ must run, not skip =="
-          out="$(cd testdata/iam && go test -run '^TestMySQL_' -v ./... 2>&1)"
+          out="$(cd testdata/iam && GOWORK=off go test -run '^TestMySQL_' -v ./... 2>&1)"
           echo "$out"
           if echo "$out" | grep -q -- '--- SKIP: TestMySQL_'; then
             echo "::error::MySQL validation tests SKIPPED in iam — Docker/testcontainers unavailable on the runner. Phase-2 MySQL validation did not run."
@@ -98,7 +119,7 @@ jobs:
       # under redelivery, and single-relay-under-the-lock all asserted. They SKIP cleanly
       # without Docker but RUN on ubuntu-latest.
       - name: Integration tests (iam fixture — Kafka event-bus on Redpanda)
-        run: cd testdata/iam && go test -run '^TestKafka_' ./...
+        run: cd testdata/iam && GOWORK=off go test -run '^TestKafka_' ./...
 
       # Guard against the Kafka tests silently SKIPPING in CI. The Phase-2 Kafka
       # production-path proof must RUN, not skip — fail the job if any TestKafka_ reports
@@ -107,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "== iam: TestKafka_ must run, not skip =="
-          out="$(cd testdata/iam && go test -run '^TestKafka_' -v ./... 2>&1)"
+          out="$(cd testdata/iam && GOWORK=off go test -run '^TestKafka_' -v ./... 2>&1)"
           echo "$out"
           if echo "$out" | grep -q -- '--- SKIP: TestKafka_'; then
             echo "::error::Kafka (Redpanda) validation tests SKIPPED in iam — Docker/testcontainers unavailable on the runner. Phase-2 Kafka validation did not run."
@@ -129,6 +150,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            observability/otel/go.sum
             testdata/toy/go.sum
 
       - name: Security gate
@@ -143,7 +165,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.sum
+            observability/otel/go.sum
 
       # The TestScaffold_* gates (F028/F029 end-to-end + the make-driven hardening)
       # shell out to a real toolchain — apx (governs the public API surface), buf
