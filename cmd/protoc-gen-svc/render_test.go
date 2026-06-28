@@ -150,6 +150,67 @@ func TestRenderSvcFile_customRPCUnimplemented(t *testing.T) {
 	mustNotContain(t, out, "RegisterReportServiceWithRepository")
 	// No persistence import when no service has a CRUD handler.
 	mustNotContain(t, out, "devedge-sdk/persistence")
+	// No servicekit Module for a custom-only service (its Register has no
+	// Register<Svc>WithRepository to wrap).
+	mustNotContain(t, out, "devedge-sdk/servicekit")
+	mustNotContain(t, out, "func ReportServiceModule(")
+}
+
+// TestRenderSvcFile_module verifies the WS-012 P1 servicekit.Module surface: a
+// CRUD service gets <Svc>ModuleOptions, a <Svc>Module(opts) constructor, and an
+// impl whose Descriptor reports the proto facts and whose Register wraps the
+// existing Register<Svc>WithRepository. The generated Module does NOT replace
+// Register<Svc> / Register<Svc>WithRepository.
+func TestRenderSvcFile_module(t *testing.T) {
+	svc := crudService()
+	svc.ProtoPackage = "apikey.v1"
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{svc})
+
+	// servicekit import + Options struct.
+	mustContain(t, out, "github.com/infobloxopen/devedge-sdk/servicekit")
+	mustContain(t, out, "type APIKeyServiceModuleOptions struct {")
+	mustContain(t, out, "Repo persistence.Repository[*APIKey, string]")
+
+	// Constructor returns a servicekit.Module.
+	mustContain(t, out, "func APIKeyServiceModule(opts APIKeyServiceModuleOptions) servicekit.Module {")
+
+	// Descriptor: module ID from the proto package's first segment; methods from
+	// the FullMethod constants; AuthzRules referencing the generated table;
+	// module-qualified resource name (snake-cased).
+	mustContain(t, out, "func (m *aPIKeyServiceModule) Descriptor() servicekit.Descriptor {")
+	mustContain(t, out, `ID: "apikey"`)
+	mustContain(t, out, "APIKeyService_CreateAPIKey_FullMethodName,")
+	mustContain(t, out, "AuthzRules: APIKeyServiceAuthzRules,")
+	mustContain(t, out, `Resources: []servicekit.ResourceDescriptor{{Name: "apikey.api_key"}}`)
+
+	// Register wraps the existing WithRepository over the shared server — it does
+	// NOT reimplement registration.
+	mustContain(t, out, "func (m *aPIKeyServiceModule) Register(_ context.Context, app *servicekit.App) error {")
+	mustContain(t, out, "return RegisterAPIKeyServiceWithRepository(app.Server, m.opts.Repo)")
+
+	// The Module wraps, not replaces: the existing entry points are still present.
+	mustContain(t, out, "func RegisterAPIKeyService(s *server.Server, srv APIKeyServiceServer) error")
+	mustContain(t, out, "func RegisterAPIKeyServiceWithRepository(s *server.Server, repo persistence.Repository[*APIKey, string]) error")
+
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("module output not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+}
+
+// TestSnakeIdent covers the resource-name snake conversion used in the module's
+// module-qualified resource descriptor (acronym handling matters: APIKey).
+func TestSnakeIdent(t *testing.T) {
+	cases := map[string]string{
+		"Order":  "order",
+		"APIKey": "api_key",
+		"Book":   "book",
+		"IAMRole": "iam_role",
+	}
+	for in, want := range cases {
+		if got := snakeIdent(in); got != want {
+			t.Errorf("snakeIdent(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // TestRenderSvcFile_mixedStdAndCustom verifies a service with standard methods

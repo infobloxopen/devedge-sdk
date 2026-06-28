@@ -47,8 +47,12 @@ func renderTemplates(dir string, m *Model) error {
 		{"buf.yaml.tmpl", "buf.yaml", 0o644},
 		{bufGenTemplate(m.Backend), "buf.gen.yaml", 0o644},
 		{goModTemplate(m.Backend), "go.mod", 0o644},
-		{mainTemplate(m.Backend), filepath.Join("server", "main.go"), 0o644},
-		{"smoke_test.go.tmpl", filepath.Join("server", m.ServiceLower+"_smoke_test.go"), 0o644},
+		// WS-012 composable shape: the importable module/ unit + a thin cmd/<svc>
+		// host (a standalone go run ./cmd/<svc> behaves exactly as before).
+		{"module.go.tmpl", filepath.Join("module", "module.go"), 0o644},
+		{"migrations.README.md.tmpl", filepath.Join("module", "migrations", "README.md"), 0o644},
+		{mainTemplate(m.Backend), filepath.Join("cmd", m.BinName, "main.go"), 0o644},
+		{"smoke_test.go.tmpl", filepath.Join("cmd", m.BinName, m.ServiceLower+"_smoke_test.go"), 0o644},
 		{"Makefile.tmpl", "Makefile", 0o644},
 		{"README.md.tmpl", "README.md", 0o644},
 		{"ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), 0o644},

@@ -8,7 +8,10 @@ import (
 // serviceInfo describes a proto service for code generation.
 type serviceInfo struct {
 	ServiceName string
-	Methods     []methodInfo
+	// ProtoPackage is the proto package (e.g. "orders.v1"); its first segment is
+	// the servicekit module ID the generated Module() reports.
+	ProtoPackage string
+	Methods      []methodInfo
 	// Resource is the Go type name of the API resource the service manages (the
 	// repository element type). Empty when no resource is detectable, in which
 	// case no default CRUD handler is generated for the service.
@@ -23,6 +26,20 @@ type serviceInfo struct {
 
 // isMember reports whether the service's resource is a DDD aggregate member.
 func (s serviceInfo) isMember() bool { return s.MemberRoot != "" }
+
+// moduleID is the servicekit module ID for the service: the first segment of the
+// proto package (e.g. "orders.v1" -> "orders"). Falls back to a lower-cased
+// service name when the package is unknown (defensive; real protos always have a
+// package). It is the stable, unique key the host validates and namespaces on.
+func (s serviceInfo) moduleID() string {
+	if s.ProtoPackage != "" {
+		if i := strings.IndexByte(s.ProtoPackage, '.'); i > 0 {
+			return s.ProtoPackage[:i]
+		}
+		return s.ProtoPackage
+	}
+	return strings.ToLower(s.ServiceName)
+}
 
 // hasStdMethods reports whether the service has at least one detected standard
 // method (so a default CRUD handler is worth generating).
@@ -128,9 +145,13 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 
 	needPersistence := false
 	needStatus := false
+	needServicekit := false
 	for _, svc := range services {
 		if svc.hasStdMethods() {
 			needPersistence = true
+			// A service with a generated CRUD/repo path also gets a servicekit
+			// Module() wrapper (its Register goes through Register<Svc>WithRepository).
+			needServicekit = true
 		}
 		if svc.isMember() && svc.hasWriteMethods() {
 			// A member service redirects its write methods to gRPC Unimplemented.
@@ -151,6 +172,9 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/server\"\n")
+	if needServicekit {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/servicekit\"\n")
+	}
 	b.WriteString(")\n\n")
 
 	for _, svc := range services {
@@ -158,6 +182,9 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 		if svc.hasStdMethods() {
 			renderCRUDHandler(&b, svc)
 			renderHandlerConstructors(&b, svc)
+			// The servicekit Module: a thin, generated wrapper over
+			// Register<Svc>WithRepository whose Descriptor is the proto facts.
+			renderModule(&b, svc)
 		}
 	}
 
@@ -322,4 +349,111 @@ func renderHandlerConstructors(b *strings.Builder, svc serviceInfo) {
 		svc.ServiceName, res)
 	fmt.Fprintf(b, "\treturn Register%s(s, New%sHandler(repo))\n", svc.ServiceName, svc.ServiceName)
 	b.WriteString("}\n\n")
+}
+
+// renderModule emits the servicekit composition surface (WS-012 P1): a
+// <Svc>ModuleOptions struct carrying the hand-written parts the generator can't
+// know, a <Svc>Module(opts) constructor, and the implementing type whose
+// Descriptor() is the proto facts and whose Register wraps the existing
+// Register<Svc>WithRepository over the shared server. The Module is a THIN,
+// generated wrapper over the primitives — it does not replace Register<Svc> /
+// Register<Svc>WithRepository, which a standalone main may still call directly.
+//
+// Only emitted for a service with a generated repo/CRUD path (hasStdMethods), so
+// the Module's Register has a Register<Svc>WithRepository to call. The
+// hand-written extras (custom health checks, event handlers, jobs, handler
+// overrides, config schema) attach via the Options callback as later phases add
+// the corresponding registries.
+func renderModule(b *strings.Builder, svc serviceInfo) {
+	res := svc.Resource
+	typ := lowerFirst(svc.ServiceName) + "Module" // unexported impl type
+
+	// Options: the hand-written parts. P1 carries the repository (required for the
+	// CRUD Register path). Later phases extend this struct (health/events/jobs/
+	// handler override) without changing the Module() contract.
+	fmt.Fprintf(b, "// %sModuleOptions are the hand-written parts the generated %sModule needs that\n", svc.ServiceName, svc.ServiceName)
+	b.WriteString("// the generator cannot derive from the proto. P1 carries the repository the\n")
+	b.WriteString("// module's CRUD path registers over; later phases add custom health checks,\n")
+	b.WriteString("// event handlers, background jobs, and handler overrides here.\n")
+	fmt.Fprintf(b, "type %sModuleOptions struct {\n", svc.ServiceName)
+	b.WriteString("\t// Repo is the persistence repository the module's generated CRUD handler\n")
+	b.WriteString("\t// registers over (via Register" + svc.ServiceName + "WithRepository). Required.\n")
+	fmt.Fprintf(b, "\tRepo persistence.Repository[*%s, string]\n", res)
+	b.WriteString("}\n\n")
+
+	// Constructor.
+	fmt.Fprintf(b, "// %sModule returns the importable servicekit.Module for %s: an introspectable\n", svc.ServiceName, svc.ServiceName)
+	b.WriteString("// unit a host (standalone or composed) can register on a shared server. Its\n")
+	b.WriteString("// Descriptor is populated from the proto facts; its Register wraps the existing\n")
+	fmt.Fprintf(b, "// Register%sWithRepository over the host's shared server.\n", svc.ServiceName)
+	fmt.Fprintf(b, "func %sModule(opts %sModuleOptions) servicekit.Module {\n", svc.ServiceName, svc.ServiceName)
+	fmt.Fprintf(b, "\treturn &%s{opts: opts}\n", typ)
+	b.WriteString("}\n\n")
+
+	// Impl type.
+	fmt.Fprintf(b, "type %s struct {\n", typ)
+	fmt.Fprintf(b, "\topts %sModuleOptions\n", svc.ServiceName)
+	b.WriteString("}\n\n")
+
+	// Descriptor().
+	fmt.Fprintf(b, "// Descriptor implements servicekit.Module: the static proto facts for %s.\n", svc.ServiceName)
+	fmt.Fprintf(b, "func (m *%s) Descriptor() servicekit.Descriptor {\n", typ)
+	b.WriteString("\treturn servicekit.Descriptor{\n")
+	fmt.Fprintf(b, "\t\tID: %q,\n", svc.moduleID())
+	b.WriteString("\t\tMethods: []string{\n")
+	for _, mth := range svc.Methods {
+		fmt.Fprintf(b, "\t\t\t%s_%s_FullMethodName,\n", svc.ServiceName, mth.Name)
+	}
+	b.WriteString("\t\t},\n")
+	// AuthzRules: reference the rules table protoc-gen-devedge-authz emits in the
+	// same package — single source of truth, no duplication.
+	fmt.Fprintf(b, "\t\tAuthzRules: %sAuthzRules,\n", svc.ServiceName)
+	// Resources: the module-qualified resource name (module-qualified so two
+	// co-resident modules never collide on a bare resource name, §5.7).
+	fmt.Fprintf(b, "\t\tResources: []servicekit.ResourceDescriptor{{Name: %q}},\n", svc.moduleID()+"."+snakeIdent(res))
+	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
+
+	// Register().
+	fmt.Fprintf(b, "// Register implements servicekit.Module: wire %s onto the shared server via\n", svc.ServiceName)
+	fmt.Fprintf(b, "// the existing Register%sWithRepository (gRPC + REST gateway + authz rules).\n", svc.ServiceName)
+	fmt.Fprintf(b, "func (m *%s) Register(_ context.Context, app *servicekit.App) error {\n", typ)
+	fmt.Fprintf(b, "\treturn Register%sWithRepository(app.Server, m.opts.Repo)\n", svc.ServiceName)
+	b.WriteString("}\n\n")
+}
+
+// lowerFirst lower-cases the first letter of s (PascalCase -> camelCase) for the
+// unexported Module impl type name.
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// snakeIdent converts a PascalCase/camelCase Go identifier to snake_case for the
+// module-qualified resource name (e.g. "APIKey" -> "api_key", "Order" -> "order").
+func snakeIdent(s string) string {
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		isUpper := r >= 'A' && r <= 'Z'
+		if isUpper && i > 0 {
+			prev := runes[i-1]
+			prevLower := prev >= 'a' && prev <= 'z'
+			prevDigit := prev >= '0' && prev <= '9'
+			// Underscore at a lower/digit -> upper boundary, or at the end of an
+			// acronym run (XXy -> the last X starts a new word).
+			nextLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+			if prevLower || prevDigit || nextLower {
+				b.WriteByte('_')
+			}
+		}
+		if isUpper {
+			b.WriteRune(r - 'A' + 'a')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

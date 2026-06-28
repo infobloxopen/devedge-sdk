@@ -139,9 +139,11 @@ func TestMainTemplate_GracefulShutdown(t *testing.T) {
 			if strings.Contains(s, "ctx := context.Background()") {
 				t.Error("rendered main.go still uses a non-cancellable context.Background() for Serve (no graceful shutdown)")
 			}
-			// Serve must run on the signal-derived ctx.
-			if !strings.Contains(s, "s.Serve(ctx)") {
-				t.Error("rendered main.go must call s.Serve(ctx) so the signal cancellation drives shutdown")
+			// The host must run on the signal-derived ctx so cancellation drives the
+			// servicekit.Run -> server.Serve graceful shutdown (WS-012: main hands ctx
+			// to runHost, which threads it into servicekit.HostConfig.Context).
+			if !strings.Contains(s, "runHost(ctx,") {
+				t.Error("rendered main.go must call runHost(ctx, ...) so the signal cancellation drives shutdown")
 			}
 		})
 	}

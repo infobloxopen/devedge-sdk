@@ -11,6 +11,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
 )
 
 // RegisterWidgetService wires srv into the server's gRPC handler and HTTP gateway,
@@ -96,4 +97,55 @@ func NewWidgetServiceHandler(repo persistence.Repository[*Widget, string]) *Widg
 // pair instead when you need to wrap/override the default handler.
 func RegisterWidgetServiceWithRepository(s *server.Server, repo persistence.Repository[*Widget, string]) error {
 	return RegisterWidgetService(s, NewWidgetServiceHandler(repo))
+}
+
+// WidgetServiceModuleOptions are the hand-written parts the generated WidgetServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type WidgetServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterWidgetServiceWithRepository). Required.
+	Repo persistence.Repository[*Widget, string]
+}
+
+// WidgetServiceModule returns the importable servicekit.Module for WidgetService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterWidgetServiceWithRepository over the host's shared server.
+func WidgetServiceModule(opts WidgetServiceModuleOptions) servicekit.Module {
+	return &widgetServiceModule{opts: opts}
+}
+
+type widgetServiceModule struct {
+	opts WidgetServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for WidgetService.
+func (m *widgetServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "toy",
+		Methods: []string{
+			WidgetService_CreateWidget_FullMethodName,
+			WidgetService_GetWidget_FullMethodName,
+			WidgetService_ListWidgets_FullMethodName,
+			WidgetService_UpdateWidget_FullMethodName,
+			WidgetService_DeleteWidget_FullMethodName,
+			WidgetService_ArchiveWidget_FullMethodName,
+			WidgetService_BatchGetWidgets_FullMethodName,
+			WidgetService_BatchDeleteWidgets_FullMethodName,
+			WidgetService_BatchUpdateWidgets_FullMethodName,
+			WidgetService_ProcessWidget_FullMethodName,
+			WidgetService_GetOperationStatus_FullMethodName,
+			WidgetService_CancelWidgetOperation_FullMethodName,
+		},
+		AuthzRules: WidgetServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "toy.widget"}},
+	}
+}
+
+// Register implements servicekit.Module: wire WidgetService onto the shared server via
+// the existing RegisterWidgetServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *widgetServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterWidgetServiceWithRepository(app.Server, m.opts.Repo)
 }

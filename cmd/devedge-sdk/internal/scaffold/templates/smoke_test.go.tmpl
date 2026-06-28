@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -16,62 +17,75 @@ import (
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
 
-// devGrant is the dev authorization grant the smoke tests boot the server with:
-// the "admin" group may do everything in any tenant. It mirrors the grant in
-// main.go and, paired with grpcauthz.DevPrincipalFunc (wired in newServer), is
-// satisfied by a caller that sends `account-id: <tenant>` + `groups: admin`.
+// devGrant is the dev authorization grant the smoke tests boot the host with: the
+// "admin" group may do everything in any tenant. It mirrors the grant in main.go
+// and, paired with grpcauthz.DevPrincipalFunc (wired in runHost), is satisfied by
+// a caller that sends `account-id: <tenant>` + `groups: admin`.
 func devGrant() authz.Grant {
 	return authz.Grant{Tenant: "*", Subjects: []string{"group:admin"}, Verbs: []authz.Verb{"*"}, Resource: "*"}
 }
 
-// startServer boots a generated server on kernel-assigned ports (":0") and
-// returns a connected client. The server is torn down via t.Cleanup.
+// startServer boots the STANDALONE host (the same runHost main uses) on a
+// kernel-assigned port and returns a connected client. The host is torn down via
+// t.Cleanup. This exercises the composable shape end-to-end: runHost builds the
+// module/ unit and hands it to servicekit.Run.
 func startServer(t *testing.T) {{.GoPkg}}.{{.ServiceType}}Client {
 	t.Helper()
-	// ":0" => kernel-assigned ports, so the test never collides with a real
-	// listener or another test run. "" => in-memory sqlite (the scaffold default).
-	s, err := newServer(authz.NewDevAuthorizer(devGrant()), ":0", ":0", "")
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
+	addr := freeLoopbackAddr(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	// Serve runs the fail-closed authz completeness gate before it binds: if any
-	// registered RPC lacks an authz rule, Serve returns the gate error here (and
-	// never binds), so surface it instead of letting the client dial ":0".
+	// runHost -> servicekit.Run -> server.Serve runs the fail-closed authz
+	// completeness gate before it binds: a registered RPC missing an authz rule
+	// makes Serve return the gate error here (and never binds), so surface it
+	// instead of letting the client dial a dead addr.
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- s.Serve(ctx) }()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-serveErr:
-			t.Fatalf("server failed to start: %v", err)
-		default:
-		}
-		if a := s.GRPCAddr(); a != "" && a != ":0" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	addr := s.GRPCAddr()
-	if addr == "" || addr == ":0" {
-		t.Fatal("server did not bind gRPC address within 2s")
-	}
+	go func() { serveErr <- runHost(ctx, authz.NewDevAuthorizer(devGrant()), addr, "", "") }()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial %q: %v", addr, err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return {{.GoPkg}}.New{{.ServiceType}}Client(conn)
+	client := {{.GoPkg}}.New{{.ServiceType}}Client(conn)
+
+	// Wait until the host is serving (any reply, including a denied/NotFound,
+	// proves the listener is up); fail fast if runHost errored at the boot gate.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-serveErr:
+			t.Fatalf("host failed to start: %v", err)
+		default:
+		}
+		pctx, pcancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		_, perr := client.Get{{.Resource}}(metadata.NewOutgoingContext(pctx, metadata.Pairs("account-id", "probe")), &{{.GoPkg}}.Get{{.Resource}}Request{Id: "probe"})
+		pcancel()
+		if status.Code(perr) != codes.Unavailable {
+			return client
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("host did not start serving within 5s")
+	return nil
 }
 
-// TestSmoke boots the generated server and runs one tenant-scoped CRUD
-// round-trip over gRPC: Create -> Get -> List -> Update -> Delete ->
-// Get(NotFound). It proves the scaffold builds, boots, authz-gates, and
-// persists with zero hand-edits to generated code (F028 AC-007).
+// freeLoopbackAddr binds :0 on loopback, reads the assigned port, closes the
+// listener, and returns the addr for runHost to bind.
+func freeLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := lis.Addr().String()
+	_ = lis.Close()
+	return addr
+}
+
+// TestSmoke boots the generated host and runs one tenant-scoped CRUD round-trip
+// over gRPC: Create -> Get -> List -> Update -> Delete -> Get(NotFound). It proves
+// the scaffold builds, boots, authz-gates, and persists with zero hand-edits.
 func TestSmoke(t *testing.T) {
 	client := startServer(t)
 
@@ -127,10 +141,9 @@ func TestSmoke(t *testing.T) {
 	}
 }
 
-// TestSmoke_DeniedForUnknownPrincipal proves the authz gate fails closed: a
-// caller that does NOT present the granted identity (no groups:admin) is denied
-// with PermissionDenied, even though the RPC is declared. This is the negative
-// counterpart to TestSmoke — together they show authz is enforced, not bypassed.
+// TestSmoke_DeniedForUnknownPrincipal proves the authz gate fails closed: a caller
+// that does NOT present the granted identity (no groups:admin) is denied with
+// PermissionDenied, even though the RPC is declared.
 func TestSmoke_DeniedForUnknownPrincipal(t *testing.T) {
 	client := startServer(t)
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
 )
 
 // RegisterAccountService wires srv into the server's gRPC handler and HTTP gateway,
@@ -76,6 +77,48 @@ func RegisterAccountServiceWithRepository(s *server.Server, repo persistence.Rep
 	return RegisterAccountService(s, NewAccountServiceHandler(repo))
 }
 
+// AccountServiceModuleOptions are the hand-written parts the generated AccountServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type AccountServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterAccountServiceWithRepository). Required.
+	Repo persistence.Repository[*Account, string]
+}
+
+// AccountServiceModule returns the importable servicekit.Module for AccountService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterAccountServiceWithRepository over the host's shared server.
+func AccountServiceModule(opts AccountServiceModuleOptions) servicekit.Module {
+	return &accountServiceModule{opts: opts}
+}
+
+type accountServiceModule struct {
+	opts AccountServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for AccountService.
+func (m *accountServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "iam",
+		Methods: []string{
+			AccountService_GetAccount_FullMethodName,
+			AccountService_ListAccounts_FullMethodName,
+			AccountService_CreateAccount_FullMethodName,
+		},
+		AuthzRules: AccountServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.account"}},
+	}
+}
+
+// Register implements servicekit.Module: wire AccountService onto the shared server via
+// the existing RegisterAccountServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *accountServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterAccountServiceWithRepository(app.Server, m.opts.Repo)
+}
+
 // RegisterUserService wires srv into the server's gRPC handler and HTTP gateway,
 // records its methods, and contributes UserServiceAuthzRules to the server. The
 // boot-time authz completeness gate runs at server.Serve over the accumulated
@@ -137,6 +180,48 @@ func NewUserServiceHandler(repo persistence.Repository[*User, string]) *UserServ
 // pair instead when you need to wrap/override the default handler.
 func RegisterUserServiceWithRepository(s *server.Server, repo persistence.Repository[*User, string]) error {
 	return RegisterUserService(s, NewUserServiceHandler(repo))
+}
+
+// UserServiceModuleOptions are the hand-written parts the generated UserServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type UserServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterUserServiceWithRepository). Required.
+	Repo persistence.Repository[*User, string]
+}
+
+// UserServiceModule returns the importable servicekit.Module for UserService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterUserServiceWithRepository over the host's shared server.
+func UserServiceModule(opts UserServiceModuleOptions) servicekit.Module {
+	return &userServiceModule{opts: opts}
+}
+
+type userServiceModule struct {
+	opts UserServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for UserService.
+func (m *userServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "iam",
+		Methods: []string{
+			UserService_GetUser_FullMethodName,
+			UserService_ListUsers_FullMethodName,
+			UserService_CreateUser_FullMethodName,
+		},
+		AuthzRules: UserServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.user"}},
+	}
+}
+
+// Register implements servicekit.Module: wire UserService onto the shared server via
+// the existing RegisterUserServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *userServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterUserServiceWithRepository(app.Server, m.opts.Repo)
 }
 
 // RegisterGroupService wires srv into the server's gRPC handler and HTTP gateway,
@@ -202,6 +287,48 @@ func RegisterGroupServiceWithRepository(s *server.Server, repo persistence.Repos
 	return RegisterGroupService(s, NewGroupServiceHandler(repo))
 }
 
+// GroupServiceModuleOptions are the hand-written parts the generated GroupServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type GroupServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterGroupServiceWithRepository). Required.
+	Repo persistence.Repository[*Group, string]
+}
+
+// GroupServiceModule returns the importable servicekit.Module for GroupService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterGroupServiceWithRepository over the host's shared server.
+func GroupServiceModule(opts GroupServiceModuleOptions) servicekit.Module {
+	return &groupServiceModule{opts: opts}
+}
+
+type groupServiceModule struct {
+	opts GroupServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for GroupService.
+func (m *groupServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "iam",
+		Methods: []string{
+			GroupService_GetGroup_FullMethodName,
+			GroupService_ListGroups_FullMethodName,
+			GroupService_CreateGroup_FullMethodName,
+		},
+		AuthzRules: GroupServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.group"}},
+	}
+}
+
+// Register implements servicekit.Module: wire GroupService onto the shared server via
+// the existing RegisterGroupServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *groupServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterGroupServiceWithRepository(app.Server, m.opts.Repo)
+}
+
 // RegisterMembershipService wires srv into the server's gRPC handler and HTTP gateway,
 // records its methods, and contributes MembershipServiceAuthzRules to the server. The
 // boot-time authz completeness gate runs at server.Serve over the accumulated
@@ -265,6 +392,47 @@ func RegisterMembershipServiceWithRepository(s *server.Server, repo persistence.
 	return RegisterMembershipService(s, NewMembershipServiceHandler(repo))
 }
 
+// MembershipServiceModuleOptions are the hand-written parts the generated MembershipServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type MembershipServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterMembershipServiceWithRepository). Required.
+	Repo persistence.Repository[*Membership, string]
+}
+
+// MembershipServiceModule returns the importable servicekit.Module for MembershipService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterMembershipServiceWithRepository over the host's shared server.
+func MembershipServiceModule(opts MembershipServiceModuleOptions) servicekit.Module {
+	return &membershipServiceModule{opts: opts}
+}
+
+type membershipServiceModule struct {
+	opts MembershipServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for MembershipService.
+func (m *membershipServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "iam",
+		Methods: []string{
+			MembershipService_GetMembership_FullMethodName,
+			MembershipService_ListMemberships_FullMethodName,
+		},
+		AuthzRules: MembershipServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.membership"}},
+	}
+}
+
+// Register implements servicekit.Module: wire MembershipService onto the shared server via
+// the existing RegisterMembershipServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *membershipServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterMembershipServiceWithRepository(app.Server, m.opts.Repo)
+}
+
 // RegisterApiKeyService wires srv into the server's gRPC handler and HTTP gateway,
 // records its methods, and contributes ApiKeyServiceAuthzRules to the server. The
 // boot-time authz completeness gate runs at server.Serve over the accumulated
@@ -326,4 +494,46 @@ func NewApiKeyServiceHandler(repo persistence.Repository[*ApiKey, string]) *ApiK
 // pair instead when you need to wrap/override the default handler.
 func RegisterApiKeyServiceWithRepository(s *server.Server, repo persistence.Repository[*ApiKey, string]) error {
 	return RegisterApiKeyService(s, NewApiKeyServiceHandler(repo))
+}
+
+// ApiKeyServiceModuleOptions are the hand-written parts the generated ApiKeyServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type ApiKeyServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterApiKeyServiceWithRepository). Required.
+	Repo persistence.Repository[*ApiKey, string]
+}
+
+// ApiKeyServiceModule returns the importable servicekit.Module for ApiKeyService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterApiKeyServiceWithRepository over the host's shared server.
+func ApiKeyServiceModule(opts ApiKeyServiceModuleOptions) servicekit.Module {
+	return &apiKeyServiceModule{opts: opts}
+}
+
+type apiKeyServiceModule struct {
+	opts ApiKeyServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for ApiKeyService.
+func (m *apiKeyServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "iam",
+		Methods: []string{
+			ApiKeyService_GetApiKey_FullMethodName,
+			ApiKeyService_ListApiKeys_FullMethodName,
+			ApiKeyService_CreateApiKey_FullMethodName,
+		},
+		AuthzRules: ApiKeyServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.api_key"}},
+	}
+}
+
+// Register implements servicekit.Module: wire ApiKeyService onto the shared server via
+// the existing RegisterApiKeyServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *apiKeyServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterApiKeyServiceWithRepository(app.Server, m.opts.Repo)
 }

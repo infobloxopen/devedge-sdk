@@ -1,0 +1,15 @@
+# {{.BinName}} migrations
+
+This directory holds the **{{.BinName}} module's** schema migration files. The
+module *owns* its migration files; a **host** runs them (WS-012 composable
+services). The `module/module.go` `//go:embed migrations` directive embeds this
+directory so a later composed host can run these migrations under a per-module
+advisory lock with per-module namespacing.
+
+P1 keeps the standalone host migrating via the ORM in `cmd/{{.BinName}}/main.go`,
+so this directory may stay empty until you adopt host-run migrations. This README
+is also the placeholder that keeps the `//go:embed migrations` valid before the
+first migration file lands.
+
+Add migration files here (e.g. `0001_init.up.sql` / `0001_init.down.sql`) as your
+schema evolves.

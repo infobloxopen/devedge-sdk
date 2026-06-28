@@ -11,6 +11,7 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
 )
 
 // RegisterAPIKeyService wires srv into the server's gRPC handler and HTTP gateway,
@@ -84,4 +85,47 @@ func NewAPIKeyServiceHandler(repo persistence.Repository[*APIKey, string]) *APIK
 // pair instead when you need to wrap/override the default handler.
 func RegisterAPIKeyServiceWithRepository(s *server.Server, repo persistence.Repository[*APIKey, string]) error {
 	return RegisterAPIKeyService(s, NewAPIKeyServiceHandler(repo))
+}
+
+// APIKeyServiceModuleOptions are the hand-written parts the generated APIKeyServiceModule needs that
+// the generator cannot derive from the proto. P1 carries the repository the
+// module's CRUD path registers over; later phases add custom health checks,
+// event handlers, background jobs, and handler overrides here.
+type APIKeyServiceModuleOptions struct {
+	// Repo is the persistence repository the module's generated CRUD handler
+	// registers over (via RegisterAPIKeyServiceWithRepository). Required.
+	Repo persistence.Repository[*APIKey, string]
+}
+
+// APIKeyServiceModule returns the importable servicekit.Module for APIKeyService: an introspectable
+// unit a host (standalone or composed) can register on a shared server. Its
+// Descriptor is populated from the proto facts; its Register wraps the existing
+// RegisterAPIKeyServiceWithRepository over the host's shared server.
+func APIKeyServiceModule(opts APIKeyServiceModuleOptions) servicekit.Module {
+	return &aPIKeyServiceModule{opts: opts}
+}
+
+type aPIKeyServiceModule struct {
+	opts APIKeyServiceModuleOptions
+}
+
+// Descriptor implements servicekit.Module: the static proto facts for APIKeyService.
+func (m *aPIKeyServiceModule) Descriptor() servicekit.Descriptor {
+	return servicekit.Descriptor{
+		ID: "apikey",
+		Methods: []string{
+			APIKeyService_CreateAPIKey_FullMethodName,
+			APIKeyService_GetAPIKey_FullMethodName,
+			APIKeyService_ListAPIKeys_FullMethodName,
+			APIKeyService_DeleteAPIKey_FullMethodName,
+		},
+		AuthzRules: APIKeyServiceAuthzRules,
+		Resources:  []servicekit.ResourceDescriptor{{Name: "apikey.api_key"}},
+	}
+}
+
+// Register implements servicekit.Module: wire APIKeyService onto the shared server via
+// the existing RegisterAPIKeyServiceWithRepository (gRPC + REST gateway + authz rules).
+func (m *aPIKeyServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	return RegisterAPIKeyServiceWithRepository(app.Server, m.opts.Repo)
 }

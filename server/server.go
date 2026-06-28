@@ -551,6 +551,15 @@ func (s *Server) RecordMethods(methods ...string) {
 	s.methods = append(s.methods, methods...)
 }
 
+// AddReadinessCheck appends a readiness check to the server's accumulated set
+// (Config.ReadinessChecks seeds it). The /readyz endpoint and the gRPC health
+// loop read the live set on every probe, so a check contributed after New — e.g.
+// by a servicekit module's HealthRegistry during composed-host registration — is
+// aggregated like any configured check. Call before Serve.
+func (s *Server) AddReadinessCheck(checks ...sdkhealth.Check) {
+	s.cfg.ReadinessChecks = append(s.cfg.ReadinessChecks, checks...)
+}
+
 // RecordMemberBinding records that a service's resource is a DDD aggregate MEMBER
 // owned by a root (with the write methods it registers). The generated
 // Register<Svc> of a member service calls it; the boundary gate
