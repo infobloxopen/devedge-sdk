@@ -142,6 +142,7 @@ RequestID → ErrorMapper → TenantID → grpcauthz (fail-closed) → FieldMask
 | [`events`](./events) | Domain events via a **transactional outbox** — `Publisher`/`Bus`/idempotency, an in-memory bus, and a [Kafka](./events/kafkabus) bus, for safe cross-aggregate reactions. |
 | [`secret`](./secret) | Secret-at-rest `Encryptor`: AES-256-GCM + HMAC for dev, HashiCorp Vault Transit for prod. |
 | [`lro`](./lro) | AIP-151/152 long-running operations: `Store`, `Manager`, `Operation`, cancellation. |
+| [`cells`](./cells) | Cell-based routing (isolation, not load balancing): a tenant→cell `RoutingTable` + watch-fed `Router` with a fail-safe default cell, an epoch-fenced `GateRegistry` admission barrier, and gRPC/HTTP middleware that rejects calls for a tenant mid-move. |
 | [`seccheck`](./seccheck) | Static + dynamic security assertions you run in CI (see [Security model](#security-model)). |
 
 Full API reference for every package: **[Reference docs ↗](https://infobloxopen.github.io/devedge-sdk/docs/reference/)**.
