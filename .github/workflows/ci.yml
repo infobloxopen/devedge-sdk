@@ -18,14 +18,17 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            config/koanf/go.sum
+            events/kafkabus/go.sum
             observability/otel/go.sum
             testdata/toy/go.sum
             testdata/apikey/go.sum
             testdata/fleet/go.sum
             testdata/iam/go.sum
 
-      # build/vet/test loop over every module in the repo (root + observability/otel
-      # + future adapters) via the committed go.work — the multi-module matrix.
+      # build/vet/test loop over every module in the repo (root + config/koanf +
+      # events/kafkabus + observability/otel + future adapters) via the committed
+      # go.work — the multi-module matrix.
       - name: Build (all modules, go.work)
         run: make build
 
@@ -150,6 +153,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            config/koanf/go.sum
+            events/kafkabus/go.sum
             observability/otel/go.sum
             testdata/toy/go.sum
 
@@ -167,6 +172,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            config/koanf/go.sum
+            events/kafkabus/go.sum
             observability/otel/go.sum
 
       # The TestScaffold_* gates (F028/F029 end-to-end + the make-driven hardening)
