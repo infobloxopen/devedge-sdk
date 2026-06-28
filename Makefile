@@ -5,7 +5,7 @@
 # build/vet/test targets loop over it so each module's gates run; go.work resolves
 # the cross-module references locally. As adapters split out (config/koanf,
 # events/kafkabus, persistence/*), append each new module dir here.
-MODULES := . config/koanf events/kafkabus observability/otel
+MODULES := . cmd config/koanf events/kafkabus observability/otel persistence/entrepo persistence/gormtx
 
 # Regenerate protobuf Go bindings (the authz annotation + the authzpb test fixture)
 # and the <Service>AuthzRules tables. Requires buf + protoc-gen-go on PATH; the

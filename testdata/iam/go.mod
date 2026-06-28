@@ -57,6 +57,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
 	github.com/infobloxopen/devedge-sdk/events/kafkabus v0.0.0
+	github.com/infobloxopen/devedge-sdk/persistence/entrepo v0.0.0
+	github.com/infobloxopen/devedge-sdk/persistence/gormtx v0.0.0
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.9.2 // indirect
@@ -114,3 +116,7 @@ require (
 replace github.com/infobloxopen/devedge-sdk => ../..
 
 replace github.com/infobloxopen/devedge-sdk/events/kafkabus => ../../events/kafkabus
+
+replace github.com/infobloxopen/devedge-sdk/persistence/gormtx => ../../persistence/gormtx
+
+replace github.com/infobloxopen/devedge-sdk/persistence/entrepo => ../../persistence/entrepo

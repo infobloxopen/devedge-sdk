@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	entgo.io/ent v0.14.6
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
-	github.com/infobloxopen/devedge-sdk v0.0.0
+	github.com/infobloxopen/devedge-sdk v0.26.1
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2
 	github.com/testcontainers/testcontainers-go v0.43.0
@@ -52,6 +52,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/infobloxopen/devedge-sdk/persistence/entrepo v0.0.0
+	github.com/infobloxopen/devedge-sdk/persistence/gormtx v0.0.0
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.9.2 // indirect
@@ -115,3 +117,7 @@ require (
 )
 
 replace github.com/infobloxopen/devedge-sdk => ../..
+
+replace github.com/infobloxopen/devedge-sdk/persistence/gormtx => ../../persistence/gormtx
+
+replace github.com/infobloxopen/devedge-sdk/persistence/entrepo => ../../persistence/entrepo

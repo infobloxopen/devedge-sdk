@@ -3,15 +3,18 @@ module {{.Module}}
 go 1.25
 
 // ent backend: the persistence layer is the generated ent schema/client + the
-// generated New{{.Resource}}EntRepository adapter (F027). There is NO gorm
-// dependency here — the engine deps that appear are ent + a pure-Go SQLite
-// driver, kept in THIS module's go.mod only (never the SDK's, never the proto).
+// generated New{{.Resource}}EntRepository adapter (F027), which lives in the SDK's
+// persistence/entrepo module (WS-011 P2 — ent leaves the SDK root library's graph
+// and arrives here only via that require). There is NO gorm dependency here — the
+// engine deps that appear are ent + a pure-Go SQLite driver, kept in THIS module's
+// go.mod only (never the SDK root's, never the proto).
 require (
 	entgo.io/ent {{.EntVersion}}
 	github.com/grpc-ecosystem/grpc-gateway/v2 {{.GRPCGatewayVersion}}
 	github.com/infobloxopen/apis/proto/infoblox/authz {{.AuthzBindingVersion}}
 	github.com/infobloxopen/apis/proto/infoblox/field {{.FieldBindingVersion}}
 	github.com/infobloxopen/devedge-sdk {{.SDKVersion}}
+	{{.EntrepoModulePath}} {{.EntrepoVersion}}
 	{{.OTelAdapterModulePath}} {{.OTelAdapterVersion}}
 	google.golang.org/genproto/googleapis/api {{.GenprotoAPIVersion}}
 	google.golang.org/grpc {{.GRPCVersion}}

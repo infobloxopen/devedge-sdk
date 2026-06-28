@@ -661,8 +661,15 @@ func injectLocalReplace(t *testing.T, target, sdkDir string) {
 // the root module path) that a generated service may require. As P1/P2 split out
 // config/koanf, events/kafkabus, persistence/* — add them here so the E2E keeps
 // resolving every required adapter module locally.
+//
+// P2: every generated service requires a persistence adapter (gorm → gormtx, ent
+// → entrepo). Both are listed so injectLocalReplace adds a local replace for each;
+// a replace for a module the generated go.mod does not require is harmless (Go
+// ignores an unused replace), so listing both keeps the helper backend-agnostic.
 var nestedAdapterModules = []string{
 	"observability/otel",
+	"persistence/gormtx",
+	"persistence/entrepo",
 }
 
 // makeTarget runs the generated project's REAL `make <args...>` target in target,
