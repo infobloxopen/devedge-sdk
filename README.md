@@ -189,18 +189,28 @@ engine-neutral: **no OPA, no ORM, no policy-model types** — those belong in ad
 
 ## Building from source
 
+This repo is a **multi-module workspace** (WS-011 / F039): the dep-light root library plus six
+nested modules (`cmd`, `config/koanf`, `events/kafkabus`, `observability/otel`, `persistence/gormtx`,
+`persistence/entrepo`). A committed `go.work` resolves the cross-module references locally; the
+build/vet/test targets loop over every module (the `MODULES` list in the Makefile).
+
 ```bash
-make build            # go build ./...
-make test             # unit tests (root module)
-make vet              # go vet ./...
-make lint             # golangci-lint if installed, else go vet
-make generate         # rebuild plugins + regenerate after any .proto change
-make security-check   # run the seccheck assertions
+make build                 # build every module (via go.work)
+make test                  # unit tests across every module
+make vet                   # go vet across every module
+make lint                  # golangci-lint if installed, else go vet
+make build-gowork-off      # build each module with the workspace OFF (real requires only)
+make check-graph-isolation # prove a server-only consumer's graph is free of the heavy adapter deps
+make generate              # rebuild plugins + regenerate after any .proto change
+make security-check        # run the seccheck assertions
+make release VERSION=vX.Y.Z   # synchronized multi-module release (dry run; PUSH=1 to publish)
 ```
 
-`testdata/toy`, `testdata/apikey`, and `testdata/fleet` are separate modules with their own
-integration tests — run them with `cd testdata/<name> && go test ./...`. See [AGENTS.md](./AGENTS.md)
-for the full contributor guide.
+`testdata/toy`, `testdata/apikey`, `testdata/fleet`, and `testdata/iam` are separate consumer modules
+with their own integration tests, deliberately NOT in `go.work` — run them with
+`cd testdata/<name> && GOWORK=off go test ./...`. To carve a future heavy component into its own
+isolated module, follow the [Adding an Isolated Module](docs/content/docs/explanation/adding-an-isolated-module.md)
+checklist. See [AGENTS.md](./AGENTS.md) for the full contributor guide.
 
 ## License
 
