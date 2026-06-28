@@ -17,12 +17,14 @@
 // otel, kafka) stay in the optional adapter sub-modules, so the core stays
 // dependency-light.
 //
-// This is the P1 surface (WS-012): the contract, descriptor types, registry
-// INTERFACES, and a minimal [Run] for the standalone single-module (and
-// trivially N-module) path. Backend namespacing (P2), host-owned per-module
-// relays, config prefix layering, bulkheads, and failure policy (P3) land later;
-// see specs/030-composable-services. The extension points where P3 enriches the
-// host are marked with `P3:` comments in run.go.
+// P1 shipped the contract, descriptor types, registry INTERFACES, and a minimal
+// [Run]. P2 (this surface) made the DB axis real: [DatabaseNamespace] +
+// [IsolationPolicy] (aliasing the persistence types), a real [DatabaseRegistry] that
+// allocates a per-module schema/prefix, and host-run, advisory-locked,
+// per-module-namespaced migration wired into [Run] via [HostConfig.Migrate]. Still
+// P3 (inert + marked `P3:` in run.go): host-owned per-module event relays, config
+// prefix layering, per-module metrics, in-process bulkheads, and failure policy. See
+// specs/030-composable-services.
 package servicekit
 
 import (
@@ -30,6 +32,7 @@ import (
 	"log/slog"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
 
@@ -159,25 +162,27 @@ type DatabaseDescriptor struct {
 	Migrations MigrationsFS
 }
 
-// IsolationPolicy is the database module-namespacing policy (P2). The shared-DB
-// default is schema-preferred (Postgres schema, prefix fallback). P1 only
-// carries the constant set; enforcement is P2.
-type IsolationPolicy string
+// IsolationPolicy is the database module-namespacing policy (P2). It is an ALIAS of
+// persistence.IsolationPolicy — the single source of truth shared with the gormtx/
+// entrepo adapters that honor it — so the contract type and the enforcement type are
+// the same. The shared-DB default is schema-preferred (Postgres schema, prefix
+// fallback).
+type IsolationPolicy = persistence.IsolationPolicy
 
 const (
 	// IsolationUnset defers to the composition/host default (schema-preferred).
-	IsolationUnset IsolationPolicy = ""
+	IsolationUnset = persistence.IsolationUnset
 	// IsolationSchemaRequired demands a Postgres schema per module (fails on
-	// prefix-only engines). P2.
-	IsolationSchemaRequired IsolationPolicy = "schema-required"
-	// IsolationSchemaPreferred uses a schema where available, else a table
-	// prefix. The default in P2. P2.
-	IsolationSchemaPreferred IsolationPolicy = "schema-preferred"
-	// IsolationPrefixRequired uses a table prefix on every engine. P2.
-	IsolationPrefixRequired IsolationPolicy = "prefix-required"
-	// IsolationDedicatedRequired demands a separate DB/DSN per module (full
-	// fault isolation). P2.
-	IsolationDedicatedRequired IsolationPolicy = "dedicated-required"
+	// prefix-only engines).
+	IsolationSchemaRequired = persistence.IsolationSchemaRequired
+	// IsolationSchemaPreferred uses a schema where available, else a table prefix.
+	// The default.
+	IsolationSchemaPreferred = persistence.IsolationSchemaPreferred
+	// IsolationPrefixRequired uses a table prefix on every engine.
+	IsolationPrefixRequired = persistence.IsolationPrefixRequired
+	// IsolationDedicatedRequired demands a separate DB/DSN per module (full fault
+	// isolation).
+	IsolationDedicatedRequired = persistence.IsolationDedicatedRequired
 )
 
 // MigrationsFS is the minimal read-only filesystem a module exposes its

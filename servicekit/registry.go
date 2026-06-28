@@ -4,6 +4,7 @@ import (
 	"io/fs"
 
 	"github.com/infobloxopen/devedge-sdk/health"
+	"github.com/infobloxopen/devedge-sdk/persistence"
 )
 
 // fsFS is the read-only filesystem shape a module exposes migrations through.
@@ -31,37 +32,27 @@ type ConfigProvider interface {
 	Load(dst any) error
 }
 
-// DatabaseRegistry resolves a module's namespaced persistence handle. The P2
-// DatabaseNamespace allocation (schema/prefix, host-run migrations) plugs in
-// behind this interface; P1's implementation performs no namespacing.
+// DatabaseRegistry resolves a module's namespaced persistence handle (WS-012 P2).
+// The host's [DatabaseRegistry] allocates a [DatabaseNamespace] (schema/prefix +
+// migration table) per module from the host's engine + the module's
+// DatabaseDescriptor, applying the [IsolationPolicy] (schema-preferred by default).
+// The module then constructs its namespaced stores/repo from that identity (the
+// gormtx With*Namespace options / entrepo NamespacedDSN), and the host runs the
+// module's migrations under a per-module advisory lock (see [MigrationRunner]).
 type DatabaseRegistry interface {
 	// Namespace returns the resolved database namespace identity for the module
-	// with the given descriptor. P1 returns the module ID with no isolation
-	// applied; P2 fills in the schema/prefix/migration-table and runs migrations.
+	// with the given descriptor. The real registry resolves schema/prefix/migration
+	// table from the host engine + policy; a single-module / unshared-DB host yields
+	// a zero-qualification namespace (behavior unchanged from a non-composable service).
 	Namespace(moduleID string, db DatabaseDescriptor) (DatabaseNamespace, error)
 }
 
 // DatabaseNamespace is the resolved isolation identity for a module's data — the
-// second axis beneath tenant (account_id) scoping. P2 makes the gormtx/entrepo
-// repository + outbox/idempotency table naming honor it; P1 only carries the
-// resolved value (no enforcement).
-type DatabaseNamespace struct {
-	// ModuleID is the owning module's ID.
-	ModuleID string
-	// Engine is the database engine (e.g. "postgres"). Empty in P1.
-	Engine string
-	// Schema is the Postgres schema the module's tables live in (e.g. "orders").
-	// Empty when prefix isolation is used or in P1.
-	Schema string
-	// TablePrefix is the table-name prefix for prefix isolation (e.g. "ord_").
-	// Empty when schema isolation is used or in P1.
-	TablePrefix string
-	// MigrationTable is the module's own migration-state table name. Empty in P1.
-	MigrationTable string
-	// Role is the DB role the module connects as (for per-module grants). Empty
-	// in P1.
-	Role string
-}
+// second axis beneath tenant (account_id) scoping. It is an ALIAS of
+// persistence.DatabaseNamespace, the single source of truth honored by the gormtx/
+// entrepo repository + outbox/idempotency table naming. A module reads its namespace
+// from [App.DB] in Register and passes it to its store constructors.
+type DatabaseNamespace = persistence.DatabaseNamespace
 
 // EventRegistry registers a module's outbox relay and event handlers with the
 // host. In P3 the host starts exactly one relay + one consumer per module outbox

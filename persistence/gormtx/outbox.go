@@ -63,9 +63,17 @@ func (OutboxRow) TableName() string { return "outbox" }
 // GormOutboxStore is the GORM/SQL-backed persistence.OutboxStore and
 // persistence.OutboxRetention. It is WRITE-ONLY: Append inserts (through the ctx tx)
 // and ReadAfter scans forward; nothing mutates a row.
+//
+// WS-012 P2: the store's table name is RESOLVED at construction from a
+// persistence.DatabaseNamespace, not taken from the model's pinned TableName, so
+// two co-resident modules sharing one database get isolated outbox tables
+// (orders.outbox vs billing.outbox under schema isolation; ord_outbox vs
+// bil_outbox under prefix isolation). The zero namespace yields the historical
+// bare "outbox", so a single-module service is unchanged.
 type GormOutboxStore struct {
-	db  *gorm.DB
-	now func() time.Time
+	db    *gorm.DB
+	now   func() time.Time
+	table string // resolved (possibly namespaced) outbox table name
 }
 
 // OutboxOption configures a GormOutboxStore.
@@ -80,11 +88,27 @@ func withOutboxNow(now func() time.Time) OutboxOption {
 	}
 }
 
+// WithOutboxNamespace qualifies the store's outbox table per a module's
+// persistence.DatabaseNamespace (WS-012 P2). With a Schema set, the table is
+// "schema.outbox" (reached via search_path or an explicit schema); with a
+// TablePrefix set, it is "prefix"+"outbox". The zero namespace leaves the bare
+// "outbox" name, so existing single-module services are unaffected.
+func WithOutboxNamespace(ns persistence.DatabaseNamespace) OutboxOption {
+	return func(s *GormOutboxStore) {
+		s.table = ns.QualifyTable(outboxBaseTable)
+	}
+}
+
+// outboxBaseTable is the unqualified outbox table name (OutboxRow.TableName).
+const outboxBaseTable = "outbox"
+
 // NewGormOutboxStore returns a GORM-backed write-only OutboxStore over db. Construct it
 // with the same *gorm.DB the New<R>Repository constructors and GormTxRunner use, so
-// Append resolves the same transaction handle they bind to.
+// Append resolves the same transaction handle they bind to. Without a
+// WithOutboxNamespace option the store uses the bare "outbox" table (single-module
+// behavior, unchanged).
 func NewGormOutboxStore(db *gorm.DB, opts ...OutboxOption) *GormOutboxStore {
-	s := &GormOutboxStore{db: db, now: time.Now}
+	s := &GormOutboxStore{db: db, now: time.Now, table: outboxBaseTable}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -124,7 +148,7 @@ func (s *GormOutboxStore) Append(ctx context.Context, rec *persistence.OutboxRec
 		Payload:       rec.Payload,
 		CreatedTime:   created,
 	}
-	if err := s.conn(ctx).Create(row).Error; err != nil {
+	if err := s.conn(ctx).Table(s.table).Create(row).Error; err != nil {
 		if ce := persistence.ConstraintError(err); ce != nil {
 			return ce
 		}
@@ -146,7 +170,7 @@ func (s *GormOutboxStore) ReadAfter(ctx context.Context, cursor persistence.Outb
 	if limit <= 0 {
 		limit = 100
 	}
-	q := s.db.WithContext(ctx).Model(&OutboxRow{})
+	q := s.db.WithContext(ctx).Table(s.table).Model(&OutboxRow{})
 	if !cursor.IsZero() {
 		q = q.Where("created_time > ? OR (created_time = ? AND id > ?)", cursor.CreatedTime, cursor.CreatedTime, cursor.ID)
 	}
@@ -219,22 +243,58 @@ func (OutboxDeadLetterRow) TableName() string { return "outbox_dead_letter" }
 // GormOutboxCursorStore is the GORM-backed persistence.OutboxCursorStore sidecar for
 // the in-process dispatcher. It is DISTINCT from the write-only outbox: all dispatcher
 // progress (cursor position, head-failure count, dead-letters) lives in its own tables.
+//
+// WS-012 P2: its two table names are RESOLVED from a persistence.DatabaseNamespace
+// (WithCursorNamespace), so two co-resident modules get isolated dispatcher
+// sidecars and never share one cursor row. The zero namespace yields the bare
+// names, so single-module behavior is unchanged.
 type GormOutboxCursorStore struct {
-	db  *gorm.DB
-	now func() time.Time
+	db              *gorm.DB
+	now             func() time.Time
+	cursorTable     string
+	deadLetterTable string
+}
+
+// cursorBaseTable / deadLetterBaseTable are the unqualified sidecar table names.
+const (
+	cursorBaseTable     = "outbox_dispatch_cursor"
+	deadLetterBaseTable = "outbox_dead_letter"
+)
+
+// CursorOption configures a GormOutboxCursorStore.
+type CursorOption func(*GormOutboxCursorStore)
+
+// WithCursorNamespace qualifies the dispatcher's cursor + dead-letter tables per a
+// module's persistence.DatabaseNamespace (WS-012 P2). The zero namespace leaves
+// the bare names.
+func WithCursorNamespace(ns persistence.DatabaseNamespace) CursorOption {
+	return func(s *GormOutboxCursorStore) {
+		s.cursorTable = ns.QualifyTable(cursorBaseTable)
+		s.deadLetterTable = ns.QualifyTable(deadLetterBaseTable)
+	}
 }
 
 // NewGormOutboxCursorStore returns a GORM-backed cursor sidecar over db. AutoMigrate
-// &OutboxCursorRow{} and &OutboxDeadLetterRow{} so the sidecar tables exist.
-func NewGormOutboxCursorStore(db *gorm.DB) *GormOutboxCursorStore {
-	return &GormOutboxCursorStore{db: db, now: time.Now}
+// &OutboxCursorRow{} and &OutboxDeadLetterRow{} so the sidecar tables exist (or,
+// under a namespace, create them in the module schema / with the module prefix).
+func NewGormOutboxCursorStore(db *gorm.DB, opts ...CursorOption) *GormOutboxCursorStore {
+	s := &GormOutboxCursorStore{
+		db:              db,
+		now:             time.Now,
+		cursorTable:     cursorBaseTable,
+		deadLetterTable: deadLetterBaseTable,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // LoadCursor implements persistence.OutboxCursorStore: return the saved position +
 // head-failure count for name (zero/0 if never saved).
 func (s *GormOutboxCursorStore) LoadCursor(ctx context.Context, name string) (persistence.OutboxCursor, int, error) {
 	var row OutboxCursorRow
-	err := s.db.WithContext(ctx).Where("name = ?", name).First(&row).Error
+	err := s.db.WithContext(ctx).Table(s.cursorTable).Where("name = ?", name).First(&row).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return persistence.OutboxCursor{}, 0, nil
@@ -254,7 +314,7 @@ func (s *GormOutboxCursorStore) SaveCursor(ctx context.Context, name string, cur
 		HeadFailures: headFailures,
 	}
 	// Upsert on the primary key (name): insert the first time, update thereafter.
-	err := s.db.WithContext(ctx).Save(&row).Error
+	err := s.db.WithContext(ctx).Table(s.cursorTable).Save(&row).Error
 	if err != nil {
 		return fmt.Errorf("save cursor %q: %w", name, err)
 	}
@@ -272,7 +332,7 @@ func (s *GormOutboxCursorStore) DeadLetter(ctx context.Context, name string, rec
 		CreatedTime: rec.CreatedTime,
 		RecordedAt:  s.now(),
 	}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table(s.deadLetterTable).Create(&row).Error; err != nil {
 		return fmt.Errorf("dead-letter %s: %w", rec.ID, err)
 	}
 	return nil

@@ -238,6 +238,13 @@ func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}
 // ctx owns the serve lifetime; the smoke test cancels it to stop. The module
 // registers the DB-ping readiness check, so /readyz + gRPC health track the
 // database without server-side wiring here.
+//
+// WS-012 P2 (ent backend): migration is ent's client.Schema.Create — already
+// HOST-run process behavior (called here in main, never from a module init). Module
+// DB-namespacing on the ent path is applied at the connection: a composed suite host
+// opens the ent client on entrepo.NamespacedDSN(dsn, ns) so Schema.Create + queries
+// land in the module's Postgres schema (search_path). A standalone host shares its DB
+// with no one, so the DSN is unchanged (bare tables).
 func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) error {
 {{- if .Aggregate}}
 	client, err := newClient()

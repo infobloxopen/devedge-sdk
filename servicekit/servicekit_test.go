@@ -168,6 +168,148 @@ func cancelledCtx() context.Context {
 	return ctx
 }
 
+// --- WS-012 P2: DB namespace allocation + host-run migration wiring ---
+
+// TestRun_AllocatesNamespaceAndRunsMigration proves the P2 host wiring: with a
+// shared Database engine declared, Run allocates a per-module DatabaseNamespace
+// (schema-preferred -> Postgres schema) and calls the host's MigrationRunner once
+// per module, BEFORE the module registers, with that namespace.
+func TestRun_AllocatesNamespaceAndRunsMigration(t *testing.T) {
+	type call struct {
+		schema   string
+		moduleID string
+	}
+	var calls []call
+	migrate := func(_ context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		calls = append(calls, call{schema: ns.Schema, moduleID: ns.ModuleID})
+		return nil
+	}
+
+	err := servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{ordersModule(nil), billingModule(nil)},
+		GRPCAddr: ":0",
+		Context:  cancelledCtx(),
+		Database: &servicekit.DatabaseConfig{Engine: "postgres", DefaultIsolation: servicekit.IsolationSchemaPreferred},
+		Migrate:  migrate,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 migration calls, got %d (%+v)", len(calls), calls)
+	}
+	if calls[0].moduleID != "orders" || calls[0].schema != "orders" {
+		t.Errorf("first migration call = %+v, want orders/orders", calls[0])
+	}
+	if calls[1].moduleID != "billing" || calls[1].schema != "billing" {
+		t.Errorf("second migration call = %+v, want billing/billing", calls[1])
+	}
+}
+
+// TestRun_NoDatabase_RunsMigrationWithZeroNamespace proves the standalone path:
+// with no HostConfig.Database the runner still runs (host-run migration), but the
+// namespace is zero-qualification (bare tables) — behavior unchanged.
+func TestRun_NoDatabase_RunsMigrationWithZeroNamespace(t *testing.T) {
+	var gotNS servicekit.DatabaseNamespace
+	called := false
+	migrate := func(_ context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		called = true
+		gotNS = ns
+		return nil
+	}
+	if err := servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{ordersModule(nil)},
+		GRPCAddr: ":0",
+		Context:  cancelledCtx(),
+		Migrate:  migrate,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !called {
+		t.Fatal("migration runner should run even without HostConfig.Database")
+	}
+	if !gotNS.IsZero() {
+		t.Errorf("namespace should be zero-qualification (bare tables), got %+v", gotNS)
+	}
+	if gotNS.ModuleID != "orders" {
+		t.Errorf("namespace ModuleID = %q, want orders", gotNS.ModuleID)
+	}
+}
+
+// TestRun_MigrationError_Propagates proves a failed host-run migration aborts boot
+// (the module never registers, the host never serves).
+func TestRun_MigrationError_Propagates(t *testing.T) {
+	boom := errors.New("migrate boom")
+	var registered bool
+	migrate := func(_ context.Context, _ servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		return boom
+	}
+	err := servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{ordersModule(&registered)},
+		GRPCAddr: ":0",
+		Context:  cancelledCtx(),
+		Database: &servicekit.DatabaseConfig{Engine: "postgres"},
+		Migrate:  migrate,
+	})
+	if err == nil || !errors.Is(err, boom) {
+		t.Fatalf("Run should propagate migration error; got %v", err)
+	}
+	if registered {
+		t.Error("module must NOT register when its migration failed")
+	}
+}
+
+// TestApp_DBNamespace_ResolvesPerModule proves a module can read its allocated
+// namespace from app.DB in Register (the seam it uses to build namespaced stores).
+func TestApp_DBNamespace_ResolvesPerModule(t *testing.T) {
+	var resolved servicekit.DatabaseNamespace
+	probe := probeModule{id: "orders", onRegister: func(app *servicekit.App) {
+		ns, err := app.DB.Namespace("orders", servicekit.DatabaseDescriptor{})
+		if err != nil {
+			t.Errorf("app.DB.Namespace: %v", err)
+		}
+		resolved = ns
+	}}
+	if err := servicekit.Run(servicekit.HostConfig{
+		Modules:  []servicekit.Module{probe},
+		GRPCAddr: ":0",
+		Context:  cancelledCtx(),
+		Database: &servicekit.DatabaseConfig{Engine: "postgres", DefaultIsolation: servicekit.IsolationSchemaPreferred},
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if resolved.Schema != "orders" {
+		t.Errorf("resolved schema = %q, want orders", resolved.Schema)
+	}
+}
+
+// probeModule is a Module whose Register runs a probe callback (so a test can
+// inspect the App the host hands it). It records one public method so the boot gate
+// passes.
+type probeModule struct {
+	id         string
+	onRegister func(app *servicekit.App)
+}
+
+func (m probeModule) Descriptor() servicekit.Descriptor {
+	method := "/" + m.id + ".v1.Svc/Noop"
+	return servicekit.Descriptor{
+		ID:         m.id,
+		Methods:    []string{method},
+		AuthzRules: []authz.MethodRule{{Method: method, Public: true}},
+	}
+}
+
+func (m probeModule) Register(_ context.Context, app *servicekit.App) error {
+	method := "/" + m.id + ".v1.Svc/Noop"
+	app.Server.RecordMethods(method)
+	app.Server.AddRules(authz.MethodRule{Method: method, Public: true})
+	if m.onRegister != nil {
+		m.onRegister(app)
+	}
+	return nil
+}
+
 // --- descriptor validation ---
 
 func TestValidateModules_OK(t *testing.T) {

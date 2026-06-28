@@ -44,9 +44,7 @@ import (
 {{- end}}
 	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
-{{- if .Aggregate}}
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
-{{- end}}
 	"github.com/infobloxopen/devedge-sdk/servicekit"
 
 	svcmodule "{{.Module}}/module"
@@ -59,9 +57,10 @@ import (
 var version = "0.0.0-dev"
 {{- if .Aggregate}}
 
-// newDB opens the database and migrates the aggregate's models plus the reusable
-// SDK outbox + idempotency tables. SQLite (pure-Go, no CGo) keeps the host
-// runnable out of the box; swap the dialector for postgres/mysql in production.
+// newDB opens the database. SQLite (pure-Go, no CGo) keeps the host runnable out of
+// the box; swap the dialector for postgres/mysql in production. The MIGRATION (the
+// aggregate's models PLUS the reusable SDK outbox + idempotency tables) is run
+// separately, host-owned and per-module-namespaced (see moduleMigrate).
 func newDB(dsn string) (*gorm.DB, error) {
 	if dsn == "" {
 		dsn = "file::memory:?cache=shared"
@@ -72,17 +71,33 @@ func newDB(dsn string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(
-		&{{.GoPkg}}.{{.Resource}}Model{},
-		&{{.GoPkg}}.{{.Member}}Model{},
-		&gormtx.OutboxRow{},           // the WRITE-ONLY outbox table
-		&gormtx.OutboxCursorRow{},     // the dispatcher's forward-cursor sidecar
-		&gormtx.OutboxDeadLetterRow{}, // the dispatcher's poison dead-letter sidecar
-		&gormtx.IdemMarker{},
-	); err != nil {
-		return nil, err
-	}
 	return db, nil
+}
+
+// moduleMigrate is the HOST's per-module migration runner (WS-012 P2): host-run,
+// advisory-locked (Postgres), per-module-namespaced. servicekit.Run calls it once
+// per module — BEFORE the module registers — with the module's allocated
+// DatabaseNamespace. It AutoMigrates the aggregate's domain models AND the reusable
+// SDK framework tables (write-only outbox, the dispatcher's cursor + dead-letter
+// sidecars, idempotency markers) INTO the module namespace, so a composed suite host
+// gives each module its OWN isolated framework tables — they never collide. A
+// standalone host shares its DB with no one, so the namespace is a zero (bare-table)
+// namespace and behavior is unchanged.
+//
+// A module owns its migration FILES (module/migrations); never runs them from
+// init(); never assumes it owns the whole DB. The host runs them here.
+func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
+	return func(ctx context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		return gormtx.MigrateModule(ctx, db, gormtx.MigrateOptions{
+			Namespace: ns,
+			DomainModels: []any{
+				&{{.GoPkg}}.{{.Resource}}Model{},
+				&{{.GoPkg}}.{{.Member}}Model{},
+			},
+			FrameworkModels:  gormtx.MigrationModelsFor(true /*outbox*/, true /*idempotency*/),
+			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
+		})
+	}
 }
 
 // newAggregate wires the SDK's backend-neutral persistence.AggregateRepository
@@ -180,9 +195,13 @@ func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAdd
 		return err
 	}
 	return servicekit.Run(servicekit.HostConfig{
-		Modules:       []servicekit.Module{svcmodule.Module(repo, sqlDB)},
-		GRPCAddr:      grpcAddr,
-		HTTPAddr:      httpAddr,
+		Modules:  []servicekit.Module{svcmodule.Module(repo, sqlDB)},
+		GRPCAddr: grpcAddr,
+		HTTPAddr: httpAddr,
+		// Standalone host: no shared DB declared, so the module's namespace is
+		// zero-qualification (bare tables, unchanged). The migration runs host-owned
+		// (Migrate); composing into a suite host namespaces the SAME runner per module.
+		Migrate:       moduleMigrate(db),
 		Authorizer:    authorizer,
 		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 		Logger:        slog.Default(),
@@ -191,15 +210,11 @@ func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAdd
 }
 {{- else}}
 
-// newRepository opens the database, migrates the generated model, and returns the
-// generated GORM repository plus the underlying *gorm.DB (for the DB-ping
-// readiness check the module registers). dsn is the connection string; empty
-// defaults to in-memory SQLite (pure-Go, no CGo) so the host runs out of the box —
-// swap the dialector for postgres/mysql in production.
-//
-// WS-012: opening the DB is HOST process behavior; the module owns its migration
-// FILES (module/migrations) and, in a later phase, a composed host runs them. P1
-// keeps the standalone host AutoMigrating here so behavior is unchanged.
+// newRepository opens the database and returns the generated GORM repository plus
+// the underlying *gorm.DB. dsn is the connection string; empty defaults to
+// in-memory SQLite (pure-Go, no CGo) so the host runs out of the box — swap the
+// dialector for postgres/mysql in production. Opening the DB is HOST process
+// behavior; the MIGRATION is run separately, host-owned (see moduleMigrate).
 func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], *gorm.DB, error) {
 	if dsn == "" {
 		dsn = "file::memory:?cache=shared"
@@ -210,16 +225,36 @@ func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := db.AutoMigrate(&{{.GoPkg}}.{{.Resource}}Model{}); err != nil {
-		return nil, nil, err
-	}
 	return {{.GoPkg}}.New{{.Resource}}Repository(db), db, nil
 }
 
+// moduleMigrate is the HOST's per-module migration runner (WS-012 P2): host-run,
+// advisory-locked (Postgres), per-module-namespaced. servicekit.Run calls it once
+// per module — BEFORE the module registers — with the module's allocated
+// DatabaseNamespace. A standalone single-module host shares its DB with no one, so
+// its namespace is a zero (bare-table) namespace and the tables are unqualified,
+// exactly as before; the SAME runner namespaces the tables per-module when this
+// module is composed into a multi-module "suite" host that shares one database.
+//
+// A module owns its migration FILES (module/migrations); never runs them from
+// init(); never assumes it owns the whole DB. The host runs them here.
+func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
+	return func(ctx context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+		return gormtx.MigrateModule(ctx, db, gormtx.MigrateOptions{
+			Namespace:    ns,
+			DomainModels: []any{&{{.GoPkg}}.{{.Resource}}Model{}},
+			// SQLite (the dev default) needs no advisory lock — one process; Postgres
+			// keeps the lock so two hosts booting the same composition serialize.
+			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
+		})
+	}
+}
+
 // runHost builds the module over a repo (from dsn) and serves it via
-// servicekit.Run on the given addresses. It returns an error (rather than
-// exiting) so the smoke test can drive it and assert the fail-closed boot gate.
-// ctx owns the serve lifetime; the smoke test cancels it to stop.
+// servicekit.Run, which runs the host-owned migration (moduleMigrate) before the
+// module registers, then serves under the fail-closed boot gate. It returns an
+// error (rather than exiting) so the smoke test can drive it. ctx owns the serve
+// lifetime; the smoke test cancels it to stop.
 func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAddr, dsn string) error {
 	repo, gormDB, err := newRepository(dsn)
 	if err != nil {
@@ -233,6 +268,13 @@ func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAdd
 		Modules:  []servicekit.Module{svcmodule.Module(repo, sqlDB)},
 		GRPCAddr: grpcAddr,
 		HTTPAddr: httpAddr,
+		// Standalone host: this module shares its database with no other, so no
+		// HostConfig.Database is set and the module's namespace is zero-qualification
+		// (bare tables, unchanged). The migration still runs host-owned (Migrate).
+		// When this service is composed into a "suite" host (de compose), THAT host
+		// declares a shared engine and each module gets its own schema/prefix — the
+		// SAME moduleMigrate runner namespaces accordingly, no module change.
+		Migrate: moduleMigrate(gormDB),
 		// Derive the caller's authz.Principal from request metadata (account-id ->
 		// tenant, groups -> group:<name>). Without it the principal is empty and
 		// every call is denied. Swap for a verified-token PrincipalFunc in prod.

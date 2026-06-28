@@ -29,12 +29,11 @@ import (
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
 
-// migrationsFS is the module's embedded migration files (WS-012: a module owns
-// its migration FILES; the HOST runs them — host-run, advisory-locked,
-// per-module-namespaced migration is a later phase). P1 keeps the standalone host
-// migrating via the ORM (see cmd/{{.BinName}}/main.go); this embed is the seam the
-// later host-run migrator reads. The placeholder keeps `go:embed` valid until the
-// first migration file lands.
+// migrationsFS is the module's embedded migration files (WS-012: a module owns its
+// migration FILES; the HOST runs them — host-run, advisory-locked,
+// per-module-namespaced). The host's moduleMigrate runner (cmd/{{.BinName}}/main.go)
+// runs them via gormtx.MigrateModule. This embed is the seam that runner reads; the
+// placeholder keeps `go:embed` valid until the first migration file lands.
 //
 //go:embed migrations
 var migrationsFS embed.FS
@@ -69,9 +68,18 @@ type {{.ServiceLower}}Module struct {
 	db    sdkhealth.Pinger
 }
 
-// Descriptor implements servicekit.Module: the generated proto facts.
+// Descriptor implements servicekit.Module: the generated proto facts, plus the
+// module's self-describing Database descriptor (WS-012 P2). The module declares its
+// embedded migrations FS and leaves Isolation unset, so a host applies the
+// composition default (schema-preferred). A composed host reads Database to allocate
+// the module's namespace and run its migrations.
 func (m *{{.ServiceLower}}Module) Descriptor() servicekit.Descriptor {
-	return m.inner.Descriptor()
+	d := m.inner.Descriptor()
+	d.Database = servicekit.DatabaseDescriptor{
+		// Isolation unset => host/composition default (schema-preferred).
+		Migrations: Migrations(),
+	}
+	return d
 }
 
 // Register implements servicekit.Module: register the generated CRUD handler on
