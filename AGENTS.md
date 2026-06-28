@@ -3,16 +3,24 @@
 ## Commands
 
 ```
-make build             # compile all root packages
-make test              # unit tests (root module only)
-make vet               # go vet ./...
-make lint              # golangci-lint or go vet
-make generate          # rebuild generated files after any .proto change
-make security-check    # security assertions against toy fixture
+make build                 # build every module (root + 6 nested) via go.work
+make test                  # unit tests across every module
+make vet                   # go vet across every module
+make lint                  # golangci-lint or go vet
+make build-gowork-off      # build each module with the workspace OFF (real requires only)
+make check-graph-isolation # prove a server-only consumer's graph is free of the heavy adapter deps
+make generate              # rebuild generated files after any .proto change
+make security-check        # security assertions against toy fixture
+make release VERSION=vX.Y.Z   # synchronized multi-module release (dry run; PUSH=1 to publish)
 ```
 
-`testdata/toy` and `testdata/apikey` are separate Go modules — `make test` does **not** cover them.
-Run `cd testdata/toy && go test ./...` after any proto or middleware change.
+This is a **multi-module repo** (WS-011 / F039): the dep-light root library plus six nested modules
+(`cmd`, `config/koanf`, `events/kafkabus`, `observability/otel`, `persistence/gormtx`,
+`persistence/entrepo`). A committed `go.work` resolves cross-module refs locally; the build/vet/test
+targets loop over the `MODULES` list. The `testdata/*` fixtures are separate consumer modules NOT in
+`go.work` — `make test` does **not** cover them. Run `cd testdata/toy && GOWORK=off go test ./...`
+after any proto or middleware change. To carve a future heavy component into its own module, see
+`docs/content/docs/explanation/adding-an-isolated-module.md`.
 
 ## Layout
 
@@ -29,12 +37,17 @@ Run `cd testdata/toy && go test ./...` after any proto or middleware change.
 | `seccheck/` | Static + dynamic §3.5 security assertions |
 | `secret/` | AES-256-GCM + HMAC-SHA256 encryptor; Vault Transit adapter |
 | `server/` | `Server` lifecycle (gRPC + HTTP gateway, interceptor chain auto-wired) |
+| `cmd/` | The CLI + `protoc-gen-*` plugins — its OWN module (may import ent/gorm freely; kept out of the root library graph) |
 | `cmd/protoc-gen-svc` | Generates `<Service>Server` handler interface + `Register<Svc>` |
 | `cmd/protoc-gen-storage` | Generates GORM model + `Repository[*T, string]` from a proto resource |
 | `cmd/protoc-gen-ent` | Generates ent schema from a proto resource |
 | `cmd/protoc-gen-devedge-authz` | Generates `<Service>AuthzRules` table from proto annotations |
-| `testdata/toy/` | Toy `WidgetService` — the integration test and security-gate target (own `go.mod`) |
-| `testdata/apikey/` | APIKey fixture with GORM + ent shapes (own `go.mod`) |
+| `observability/otel/` | Nested module: OTel SDK + exporters (the only package that imports them) |
+| `config/koanf/` | Nested module: the koanf-backed config adapter |
+| `events/kafkabus/` | Nested module: the franz-go Kafka adapter |
+| `persistence/gormtx/` | Nested module: the gorm transaction runner + outbox (gorm lives here, not in core) |
+| `persistence/entrepo/` | Nested module: the ent-backed `Repository` adapter (ent lives here, not in core) |
+| `testdata/{toy,apikey,fleet,iam}/` | Consumer fixtures — separate modules with own `go.mod` + `replace`, NOT in `go.work` |
 
 ## Always / Ask first / Never
 
@@ -52,7 +65,7 @@ Run `cd testdata/toy && go test ./...` after any proto or middleware change.
 
 **Never:**
 - Edit `*.pb.go`, `*.svc.go`, `*.storage.go`, `*.pb.gw.go`, `*.authz.go` — fix the proto or the plugin, then re-run `make generate`
-- Import OPA, GORM, or any ORM/policy-engine in `authz/`, `authz/grpcauthz/`, or `persistence/` — those packages are the engine-neutral core; adapters live outside the module
+- Import OPA, GORM, ent, or any ORM/policy-engine in `authz/`, `authz/grpcauthz/`, or `persistence/` — those packages are the engine-neutral core. The gorm/ent adapters live in their own nested modules (`persistence/gormtx`, `persistence/entrepo`), so a core import of them is a cross-module **compile error**; other engine adapters live outside the repo (e.g. `Infoblox-CTO/devedge-sdk-internal`).
 - Return a `[secret]`-annotated field value from a List or Get response
 - Add a per-method interceptor by hand — use proto annotations to drive middleware wiring (that is the architecture's reason for being)
 - Grant a `public: true` authz exemption without a code review
@@ -79,7 +92,7 @@ Files with `// Code generated ... DO NOT EDIT.` and a `.pb.`, `.svc.`, `.storage
 
 ## Core-cleanliness invariant
 
-`authz/`, `authz/grpcauthz/`, and `persistence/` must have zero imports of OPA, GORM, or any policy/ORM engine. Engine-specific adapters live outside this module (e.g. `Infoblox-CTO/devedge-sdk-internal`). Enforce via `go mod graph` if unsure.
+`authz/`, `authz/grpcauthz/`, and `persistence/` must have zero imports of OPA, GORM, ent, or any policy/ORM engine. The gorm/ent adapters are now their OWN nested modules (`persistence/gormtx`, `persistence/entrepo`), so a core import of them fails to compile across the module boundary — `make build-gowork-off` and the `cleancore_test.go` guards enforce it; other engine adapters live outside the repo (e.g. `Infoblox-CTO/devedge-sdk-internal`). Enforce via `go mod graph` if unsure.
 
 ## Security invariants (enforced by `seccheck` and `make security-check`)
 
