@@ -188,6 +188,11 @@ func TestECSStub_SatisfiesSeamWithoutCoreChange(t *testing.T) {
 	if !strings.Contains(err.Error(), "not implemented") {
 		t.Errorf("ecs stub error should say not implemented, got: %v", err)
 	}
+	// BF-001: the error must not reference the pre-Diataxis guides/ path that no
+	// longer exists; it should point to the stable deploy how-to guide instead.
+	if strings.Contains(err.Error(), "guides/deploy") {
+		t.Errorf("ecs stub error references stale guides/deploy path (use the deploy how-to guide): %v", err)
+	}
 }
 
 // TestParseTargets covers the --deploy parsing: default, explicit, none, unknown.

@@ -20,5 +20,5 @@ func (ecsTarget) Render(ServiceView, Options) ([]Artifact, error) {
 	return nil, fmt.Errorf(
 		"deploy target %q is not implemented yet: it is a documented seam stub proving a "+
 			"new runtime needs only an adapter (no core change). Use --deploy k8s,compose for now; "+
-			"see docs/content/docs/guides/deploy.md (\"Future targets\")", "ecs")
+			"see the deploy how-to guide (\"Future targets\")", "ecs")
 }
