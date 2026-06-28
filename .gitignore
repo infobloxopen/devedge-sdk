@@ -10,9 +10,10 @@
 /protoc-gen-devedge-authz
 /security-check
 
-# Go workspace files
-go.work
-go.work.sum
+# Go workspace: go.work IS committed (WS-011 / F039) — it is the multi-module
+# matrix CI and every clone use to resolve cross-module refs to the working tree.
+# go.work.sum is committed alongside it so the workspace's checksums are
+# reproducible (the published module go.mod/go.sum carry the real requires).
 
 # Editor / OS
 .DS_Store
