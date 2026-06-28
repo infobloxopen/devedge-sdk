@@ -1,6 +1,6 @@
 # 030 — Composable Services: importable Module + executable Host (`servicekit`)
 
-**Status**: P1 + P2 implemented. P3–P6 planned.
+**Status**: P1 + P2 + P3 implemented. P4–P6 planned.
 **Initiative**: WS-012 (cross-repo proposal: development-hub `specs/composable-services-proposal.md`).
 **Decisions (ratified P0):** package `servicekit` in the ROOT module; generated Module via
 `protoc-gen-svc`; static composition only (no Go plugins); one shared `server.Server`;
@@ -151,9 +151,10 @@ A service that does nothing keeps working — the change is opt-in until P3/P4 c
   domain tables (outbox / idempotency / migrations); host-run, advisory-locked per-module
   migrations; no-cross-module-FK rule. Postgres schema isolation + prefix fallback tests.
   (this commit — see the P2 section above)
-- [ ] **P3 — Composition host.** Enrich `servicekit.Run`: shared backends resolved once,
+- [x] **P3 — Composition host.** Enrich `servicekit.Run`: shared backends resolved once,
   host-owned relay/consumer per module outbox, config prefix layering, in-process bulkheads +
   `failurePolicy`. Full ConfigProvider / DatabaseRegistry / EventRegistry / MetricsRegistry impls.
+  (this commit — see the P3 section below)
 - [ ] **P4 — `kind: Composition` + `de compose`** (devedge side): resource kind +
   `de compose init/add/tidy/build/test/up`; generate `cmd/<comp>/main.go` + `composition.lock`.
 - [ ] **P5 — Composition test harness.** `servicekittest.AssertModule` + `AssertComposition`;
@@ -297,3 +298,135 @@ P2 documents the `entrepo.NamespacedDSN` namespacing path.
 - `cmd/devedge-sdk/internal/scaffold/templates/{main.go,migrations.README.md,module.go,
   main.ent.go}.tmpl` — host-run migration runner; self-describing Database descriptor.
 - `testdata/iam/iamv1/ws012_namespace_pg_test.go` — real-Postgres two-module proof.
+
+---
+
+# P3 — Composition host (the full `servicekit.Run` lifecycle)
+
+**Status:** P3 implemented (this commit). The host now resolves shared backends once,
+OWNS one relay + one consumer per module outbox, layers config per module prefix, and
+contains per-module failures with `failurePolicy`. P4 (`de compose`), P5 (test harness),
+and P6 (deploy rendering) remain.
+
+## Problem (P3)
+
+P1 formalized the unit; P2 made the DB axis real. What was still inert (marked `P3:`):
+the **event-dispatcher composition** (a composed binary that naively started a relay +
+consumer per service's `main()` would **double-start** dispatchers), **config layering**
+(one struct per service, no per-module prefix), and **in-process bulkheads** (one process
+loses OS isolation — a panic/failure in one module would take the host down).
+
+## Decision — the host owns process behavior across modules
+
+`servicekit.Run` now executes the full §5.3 lifecycle. New host-owned machinery (the
+ONLY genuinely new code — relay/consumer/bus/breaker/health/config primitives are reused):
+
+### Event composition (load-bearing — "same binary ≠ direct calls")
+
+- The host owns ONE shared `events.Bus` (`HostConfig.Bus`; default in-process `membus`
+  for the same-binary/one-DB case). It starts **exactly one `events.Relay` + one
+  `events.Consumer` per module outbox** over that bus — no double-start.
+- A module hands the host its **namespaced** (P2) stores from `Register`:
+  `app.RegisterOutboxRelay(OutboxRelayConfig{Store, Cursors, Leader, …})` (publisher
+  side, one relay) and `app.Subscribe(ConsumerConfig{Tx, Idem}, EventHandler…)`
+  (subscriber side, one consumer in the module's own consumer **group** so every module
+  sees every event it subscribes to). The host never reaches into a module's DB — it
+  only drives the relay/consumer loops over the module's supplied stores.
+- Cross-module communication stays through the **durable outbox → relay → bus →
+  consumer** pipeline even in one process (in-process bus). A module never imports
+  another module's handler. This is what preserves recomposability.
+- **Boot-time event-graph validation** (`validateEventGraph`, wired into
+  `ValidateModules`): event type names must be **globally unique** across publishers
+  (a duplicate publisher is a boot error), and every **subscribed** type must have a
+  publisher in the composition (an **orphan subscriber** is a boot error). A published
+  type with no in-composition subscriber is allowed (another daemon may consume it).
+  `Descriptor.Events.{Publishes,Subscribes,Outbox}` is the declared graph.
+
+### Config layering
+
+- The host loads ALL config from one source set, then hands each module a
+  `ConfigProvider` **scoped to its prefix** (`ConfigDescriptor.Prefix`, default = module
+  ID): module `orders` reading `config:"NAME"` resolves `ORDERS_NAME`; `billing` reads
+  `BILLING_NAME` — isolated slices from one source set. A `prefixSource` decorator wraps
+  the existing `config.Source`s; the loader (`config.Load`) is reused unchanged.
+- The reserved **platform-global** namespaces (`runtime/database/observability/authz/
+  events`) are host-owned; a module that claims one as its prefix is **rejected at boot**.
+- Enforced: a module reads config only via `app.Config.Load` (never raw global env,
+  flags, `os.Exit`/`log.Fatal`, or a listener) — the host owns all of that.
+
+### Bulkheads + failure policy
+
+- A `supervisor` runs every module's background work (relay, consumer, jobs) in its own
+  goroutine **keyed by module ID** with a **panic boundary** (`recoverModule` +
+  `guardCall` around `Register`): a panic is recovered, attributed to its module, and
+  routed through the module's `FailurePolicy`. It never unwinds past the module boundary.
+- **`failurePolicy`** (`Descriptor.FailurePolicy`, overridable per composition via
+  `HostConfig.FailurePolicies`; host default `fail-host`): `fail-host` (CORE — a failure
+  cancels the host context with the attributed cause, fail-fast) vs `degraded` (OPTIONAL
+  — the failure ISOLATES to that module, which marks **itself** unready via a per-module
+  `moduleReadiness` check on the shared server's readiness aggregator, and the host +
+  other modules stay up).
+- **Background-job supervision:** `app.RegisterBackgroundJob(name, fn)` — the host runs
+  `fn` in the module's bulkhead; a panic/error is contained + routed through the policy.
+- Per-module health is attributed via `health.Aggregate` (reused) over the per-module
+  readiness gates. The **circuit-breaker / rate-limit** seams (`server.Config.Resilience`)
+  and per-module **DB-pool limits** are CONFIGURED, not rebuilt (no new breaker).
+
+### MetricsRegistry
+
+- `hostMetricsRegistry.Namespace(moduleID)` returns a metric-safe per-module token — a
+  thin per-module label over the SDK's existing OTel RED metrics. No new metrics backend.
+
+## The lifecycle as it now stands (`servicekit.Run`, §5.3)
+
+1. resolve host defaults + a **cancel-cause** root context (host owns signals + fail-fast); ✅ real
+2. `ValidateModules` — IDs / service names / route prefixes / permissions **+ the event graph**; ✅ real
+3. resolve shared backends ONCE: the one `server.New`, the one `events.Bus`, the host
+   config store, the per-module `DatabaseRegistry`, the `supervisor`; ✅ real
+4. per module: allocate `DatabaseNamespace` (P2) → host-run advisory-locked migration (P2)
+   → register the module's readiness gate → `Register` inside its **panic boundary**, with a
+   **per-module `App`** (config scoped to its prefix, event/job helpers keyed to its ID); ✅ real
+5. start **one relay + one consumer per module outbox** + every supervised background job,
+   each in its module's bulkhead; ✅ real
+6. `server.Serve` — the EXISTING fail-closed union completeness gate validates the union; ✅ reused
+7. on shutdown: close the shared bus + wait for supervised goroutines (clean stop). ✅ real
+
+## Acceptance criteria (P3)
+
+- **AC-P3-1 (composed event flow, real DB):** two modules in one host on one Postgres DB —
+  module A publishes via its namespaced outbox, module B's subscriber receives it through the
+  HOST-OWNED in-process dispatcher (relay→bus→consumer), with exactly one relay + one consumer
+  asserted (no double-start). `testdata/iam/iamv1/ws012_events_pg_test.go` (Docker-gated;
+  **RAN green** against postgres:16). ✅
+- **AC-P3-2 (panic containment):** a `degraded` module's job panic is recovered, attributed to
+  it, marks it unready, and does NOT crash a co-resident module or the host; a `fail-host`
+  module's panic fails the host fast with the attributed cause. ✅ (`servicekit/p3_test.go`)
+- **AC-P3-3 (config layering):** two modules get isolated, prefix-scoped config from one
+  source set; a reserved platform-global prefix is rejected at boot. ✅
+- **AC-P3-4 (boot validation):** a duplicate event type / orphan subscriber is rejected at
+  boot (event-graph gate). ✅
+- **AC-P3-5 (standalone unchanged):** a single-module host serves identically — empty config
+  prefix = verbatim, no shared bus needed for a module that neither publishes nor subscribes,
+  zero-qualification DB namespace; scaffold integration + fixtures green. ✅
+- **AC-P3-6 (reuse / scope):** relay/consumer/bus/breaker/health/config primitives are reused;
+  the only new code is host orchestration (per-module relay lifecycle, config prefix scoping,
+  panic boundary, failurePolicy, event-graph validation). No new runtime/backend. ✅
+
+## Files (P3)
+
+- `servicekit/run.go` — full §5.3 lifecycle: cancel-cause context, shared-backend
+  resolution, per-module `App` + panic-guarded `Register`, dispatcher + job start, clean
+  shutdown; `HostConfig.{Bus,FailurePolicies,DefaultFailurePolicy}`; `hostState`/`registerJob`.
+- `servicekit/events_registry.go` (new) — `hostEventRegistry`: one shared bus, one relay +
+  one consumer per module outbox; `OutboxRelayConfig`/`ConsumerConfig`/`EventHandler`.
+- `servicekit/config.go` — `hostConfigStore` + `scopedConfigProvider` + `prefixSource`
+  (per-module prefix layering, reserved global namespaces); `hostMetricsRegistry`.
+- `servicekit/bulkhead.go` (new) — `FailurePolicy`, `supervisor` (panic boundary + per-module
+  readiness + failure routing), `guardCall`, `moduleReadiness`.
+- `servicekit/servicekit.go` — per-module `App` helpers (`RegisterOutboxRelay`, `Subscribe`,
+  `RegisterBackgroundJob`, `Bus`, `ModuleID`); `Descriptor.FailurePolicy`.
+- `servicekit/validate.go` — `validateEventGraph` (globally-unique types + coherent graph).
+- `servicekit/p3_test.go` (new) — composed in-process event flow, panic containment
+  (degraded + fail-host), config layering, boot validation (all Docker-free).
+- `testdata/iam/iamv1/ws012_events_pg_test.go` (new) — real-Postgres composed-host event-flow
+  proof (Docker-gated; clean skip without Docker).

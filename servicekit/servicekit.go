@@ -18,13 +18,19 @@
 // dependency-light.
 //
 // P1 shipped the contract, descriptor types, registry INTERFACES, and a minimal
-// [Run]. P2 (this surface) made the DB axis real: [DatabaseNamespace] +
-// [IsolationPolicy] (aliasing the persistence types), a real [DatabaseRegistry] that
-// allocates a per-module schema/prefix, and host-run, advisory-locked,
-// per-module-namespaced migration wired into [Run] via [HostConfig.Migrate]. Still
-// P3 (inert + marked `P3:` in run.go): host-owned per-module event relays, config
-// prefix layering, per-module metrics, in-process bulkheads, and failure policy. See
-// specs/030-composable-services.
+// [Run]. P2 made the DB axis real: [DatabaseNamespace] + [IsolationPolicy] (aliasing
+// the persistence types), a real [DatabaseRegistry] that allocates a per-module
+// schema/prefix, and host-run, advisory-locked, per-module-namespaced migration wired
+// into [Run] via [HostConfig.Migrate]. P3 (this surface) made the host OWN process
+// behavior across modules: it resolves shared backends once, starts exactly one event
+// relay + one consumer per module outbox over one shared [events.Bus] (so a composed
+// binary does not double-start dispatchers — see [App.RegisterOutboxRelay] /
+// [App.Subscribe]), layers config per module prefix (so two modules read isolated
+// slices from one source set), and contains per-module failures with in-process
+// bulkheads + a [FailurePolicy] (a module panic is recovered + attributed; a degraded
+// module marks itself unready while the host stays up; a core module fails the host
+// fast). Boot validates a globally-unique, coherent event graph. P4 (de compose), P5
+// (test harness), and P6 (deploy rendering) remain. See specs/030-composable-services.
 package servicekit
 
 import (
@@ -32,6 +38,7 @@ import (
 	"log/slog"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/events"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
@@ -103,6 +110,13 @@ type Descriptor struct {
 	// composition-time compatibility gating (validated by `de compose tidy` /
 	// the test harness in later phases).
 	Requires Compatibility
+
+	// FailurePolicy is the module's self-declared failure posture in a composed host
+	// (P3, proposal §5.9): FailHost (core — a failure fails the host fast) or Degraded
+	// (optional — a failure isolates the module + marks it unready, host stays up).
+	// Empty defers to the host default. A composition can override it per module via
+	// HostConfig.FailurePolicies.
+	FailurePolicy FailurePolicy
 }
 
 // RouteDescriptor describes one HTTP gateway route the module serves: a path
@@ -244,28 +258,83 @@ type Compatibility struct {
 
 // App is the running host's shared services, handed to each [Module.Register].
 // It carries the ONE shared [server.Server] (built by [Run] via server.New) plus
-// the per-module registry interfaces. In P1 the registries support the standalone
-// path; their full per-module implementations (namespaced DB handles, host-owned
-// relays, config prefix scoping) land in P2/P3.
+// the per-module registry interfaces. The host hands each module a per-module App
+// (its registry seams are scoped to that module's ID), so app.Config.Load fills only
+// the module's config slice (P3 prefix layering), app.DB.Namespace resolves the
+// module's namespace (P2), and the event/job helpers attribute their work to the
+// module (P3 host-owned dispatchers + bulkheads).
 type App struct {
 	// Server is the ONE shared server every module registers on. Its boot-time
 	// union completeness gate (server.Serve) validates the combined surface — the
 	// host does NOT invent a parallel gate.
 	Server *server.Server
-	// Config resolves a module's namespaced configuration. P3 scopes it per
-	// module prefix; P1 provides a minimal host-backed implementation.
+	// Config resolves a module's namespaced configuration. P3 scopes it to the
+	// module's ConfigDescriptor.Prefix (or its ID); a module's Load fills only its
+	// own slice from the host's shared sources.
 	Config ConfigProvider
 	// DB resolves a module's namespaced persistence handle. P2 implements
-	// DatabaseNamespace allocation; P1's registry is inert (no namespacing).
+	// DatabaseNamespace allocation; a single-module / unshared-DB host yields a
+	// zero-qualification namespace (unchanged).
 	DB DatabaseRegistry
-	// Events registers the module's outbox relay + handlers. P3 owns one relay +
-	// consumer per module outbox; P1's registry is inert.
+	// Events registers the module's outbox relay + handlers. P3: the HOST owns one
+	// relay + one consumer per module outbox over the shared bus (use
+	// [App.RegisterOutboxRelay] + [App.Subscribe], the per-module-attributed helpers).
 	Events EventRegistry
 	// Health registers the module's readiness checks on the shared server.
 	Health HealthRegistry
 	// Logger is the host's structured logger; a module derives a child logger
 	// scoped to its ID rather than reading global logging config.
 	Logger *slog.Logger
-	// Metrics registers the module's metrics. P3 scopes per module; P1 is inert.
+	// Metrics registers the module's metrics. P3 scopes per module (a thin
+	// per-module-labeled wrapper over the SDK's existing metrics — no new backend).
 	Metrics MetricsRegistry
+
+	// moduleID is the ID of the module this App is scoped to (the host hands each
+	// module its own App). It keys the per-module helpers below so a module need not
+	// repeat its own ID. Set by the host.
+	moduleID string
+	// host is the back-reference the per-module helpers use to record relay/consumer/
+	// job registrations against the host's shared dispatcher + supervisor. Set by Run.
+	host *hostState
+}
+
+// ModuleID returns the ID of the module this App is scoped to.
+func (a *App) ModuleID() string { return a.moduleID }
+
+// Bus returns the host's shared event [events.Bus] (in-process membus by default).
+// A module rarely needs it directly — publishing flows through the transactional
+// outbox and subscribing flows through [App.Subscribe] — but a module that bridges to
+// an external transport can reach the shared bus here. Same binary != direct calls:
+// even over this bus, cross-module reactions go through the durable outbox→relay→bus
+// pipeline, never a direct handler import.
+func (a *App) Bus() events.Bus { return a.host.events.sharedBus() }
+
+// RegisterOutboxRelay declares this module's transactional outbox so the HOST starts
+// exactly ONE relay for it (proposal §5.5) — fixing the "dispatchers double-started"
+// risk a composed binary would have if each module started its own relay in main().
+// The module supplies its NAMESPACED outbox + cursor stores (built from its
+// [DatabaseNamespace] per P2); the host owns the relay loop over the shared bus, under
+// the module's bulkhead. Call it once from Register; a second call for the same module
+// is an error.
+func (a *App) RegisterOutboxRelay(cfg OutboxRelayConfig) error {
+	return a.host.events.registerRelay(a.moduleID, cfg)
+}
+
+// Subscribe registers this module's event handlers so the HOST starts exactly ONE
+// consumer for the module over the shared bus (proposal §5.5), in the module's own
+// consumer group. The handlers commit through cfg.Tx with cfg.Idem (the exactly-once
+// guard). The host runs the consumer under the module's bulkhead. Subscribing to an
+// event type with no publisher in the composition is rejected at boot (orphan
+// subscriber).
+func (a *App) Subscribe(cfg ConsumerConfig, handlers ...EventHandler) error {
+	return a.host.events.registerConsumer(a.moduleID, cfg, handlers...)
+}
+
+// RegisterBackgroundJob registers a supervised background job the HOST runs for this
+// module (proposal §5.9). The host runs fn in the module's bulkhead: a panic or error
+// is contained, attributed to the module, and routed through its [FailurePolicy]
+// (Degraded marks the module unready; FailHost fails the host fast). fn should run
+// until ctx is cancelled (host shutdown). name is module-qualified for logs.
+func (a *App) RegisterBackgroundJob(name string, fn func(ctx context.Context) error) error {
+	return a.host.registerJob(a.moduleID, name, fn)
 }

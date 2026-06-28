@@ -90,6 +90,55 @@ func ValidateDescriptors(descs []Descriptor) error {
 			seenPermission[name] = d.ID
 		}
 	}
+
+	// P3: the event graph must be coherent across the whole composition.
+	if err := validateEventGraph(descs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateEventGraph enforces, across the union of descriptors (proposal §5.5):
+//   - globally-unique event type NAMES on the publish side: two modules publishing
+//     the same event type is a boot error (an ambiguous producer — a subscriber
+//     could not tell whose event it is), and
+//   - a coherent publisher/subscriber graph: every SUBSCRIBED event type must have a
+//     publisher somewhere in the composition (an orphan subscriber — a handler that
+//     can never fire — is a misconfiguration the host rejects fail-closed at boot
+//     rather than silently never delivering).
+//
+// It does NOT require every published event to have a subscriber (a fire-and-forget
+// event with no in-composition reactor is legitimate — another daemon / read model
+// may consume it off the bus). Duplicate publish within ONE module's descriptor is
+// the module's own concern and deduped here.
+func validateEventGraph(descs []Descriptor) error {
+	publishedBy := map[EventType]string{} // event type -> owning (publishing) module ID
+	for _, d := range descs {
+		seen := map[EventType]struct{}{}
+		for _, et := range d.Events.Publishes {
+			if et == "" {
+				continue
+			}
+			if _, dup := seen[et]; dup {
+				continue // intra-module duplicate publish — dedup, not an error
+			}
+			seen[et] = struct{}{}
+			if owner, dup := publishedBy[et]; dup {
+				return fmt.Errorf("servicekit: event type %q is published by both module %q and module %q (event type names must be globally unique)", et, owner, d.ID)
+			}
+			publishedBy[et] = d.ID
+		}
+	}
+	for _, d := range descs {
+		for _, et := range d.Events.Subscribes {
+			if et == "" {
+				continue
+			}
+			if _, ok := publishedBy[et]; !ok {
+				return fmt.Errorf("servicekit: module %q subscribes to event type %q but no module in the composition publishes it (orphan subscriber)", d.ID, et)
+			}
+		}
+	}
 	return nil
 }
 

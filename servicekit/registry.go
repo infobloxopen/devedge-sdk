@@ -13,18 +13,19 @@ import (
 type fsFS = fs.FS
 
 // The registry INTERFACES below are the per-module seams the host hands each
-// module via [App]. P1 defines the contracts and ships minimal implementations
-// (see run.go) sufficient for the standalone single-module path:
-//   - HealthRegistry is fully functional in P1 (it registers checks on the
-//     shared server, which already aggregates readiness).
-//   - ConfigProvider, DatabaseRegistry, EventRegistry, and MetricsRegistry are
-//     contracts whose per-module behavior (namespacing, prefix scoping,
-//     host-owned relays) is P2/P3. P1's implementations are inert but valid, so a
-//     single-module host compiles and serves identically to today.
+// module via [App]. They are now all backed by real per-module implementations:
+//   - HealthRegistry registers checks on the shared server (readiness aggregation);
+//   - DatabaseRegistry allocates a per-module schema/prefix namespace (P2);
+//   - ConfigProvider scopes config to the module's prefix (P3 layering);
+//   - EventRegistry declares a module's outbox so the host owns one relay + one
+//     consumer per module over the shared bus (P3) — the richer per-module
+//     registration (namespaced stores, handlers) flows through the [App] helpers
+//     [App.RegisterOutboxRelay] / [App.Subscribe], keeping this interface minimal;
+//   - MetricsRegistry hands a module a metric-safe per-module namespace (P3).
 
 // ConfigProvider hands a module its configuration scoped to its config prefix.
-// In P3 the host layers a platform-global config beneath each module's prefixed
-// layer; in P1 the provider is host-backed and unscoped.
+// The host layers a platform-global config (host-owned) beside each module's
+// prefixed layer (P3); a module's Load fills only its own slice.
 type ConfigProvider interface {
 	// Load populates dst (a pointer to the module's typed config struct) from the
 	// resolved configuration. It mirrors config.Load semantics. A module calls it
@@ -54,12 +55,15 @@ type DatabaseRegistry interface {
 // from [App.DB] in Register and passes it to its store constructors.
 type DatabaseNamespace = persistence.DatabaseNamespace
 
-// EventRegistry registers a module's outbox relay and event handlers with the
-// host. In P3 the host starts exactly one relay + one consumer per module outbox
-// (each namespaced, each with its own cursor); P1's implementation is inert.
+// EventRegistry declares a module's outbox to the host (P3). The host starts exactly
+// one relay + one consumer per module outbox (each namespaced, each with its own
+// cursor) over the one shared [events.Bus]. The descriptor-only RegisterOutbox keeps
+// this interface minimal; the namespaced stores + handlers a module supplies flow
+// through the [App] helpers [App.RegisterOutboxRelay] and [App.Subscribe], which
+// attribute them to the registering module.
 type EventRegistry interface {
-	// RegisterOutbox declares the module's outbox so the host can own its
-	// relay/consumer lifecycle (P3). P1 records nothing actionable.
+	// RegisterOutbox declares the module's outbox so the host owns its relay/
+	// consumer lifecycle (P3). A disabled outbox (Enabled=false) starts no relay.
 	RegisterOutbox(moduleID string, d OutboxDescriptor) error
 }
 
@@ -71,11 +75,10 @@ type HealthRegistry interface {
 	Register(name string, check health.Check) error
 }
 
-// MetricsRegistry registers a module's metrics, scoped per module in P3. P1's
-// implementation is inert (the SDK's OTel seam already emits per-RPC RED metrics
-// globally without per-module wiring).
+// MetricsRegistry hands a module a metric-safe per-module namespace (P3) — a thin
+// per-module label over the SDK's existing OTel RED metrics (no new backend).
 type MetricsRegistry interface {
-	// Namespace returns a per-module metrics namespace (P3). P1 returns the
-	// module ID unchanged.
+	// Namespace returns a metric-safe per-module namespace token derived from the
+	// module ID, so a module's own metrics are distinguishable per module.
 	Namespace(moduleID string) string
 }
