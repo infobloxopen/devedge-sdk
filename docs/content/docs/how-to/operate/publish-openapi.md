@@ -1,0 +1,194 @@
+---
+title: Publish your service's public API as OpenAPI v3
+weight: 5
+aliases:
+  - /docs/guides/publish-openapi/
+---
+
+Publish your service's gRPC-gateway REST surface as a versioned OpenAPI v3 spec to the **apx
+catalog** — and optionally generate a typed Angular client from it. The end-to-end path is:
+
+```
+proto (google.api.http annotations)
+  → buf generate → openapi/<svc>.openapi.yaml
+    → de api publish → apx catalog (OCI artifact on GHCR)
+      → ng-openapi-gen → typed Angular client
+```
+
+## Prerequisites
+
+- The `devedge-sdk` CLI and `de` on PATH (see [Installation](../../../getting-started/installation/)).
+- `apx` on PATH: `go install github.com/infobloxopen/apx@latest`
+- `buf` on PATH (scaffolded services already have it): `go install github.com/bufbuild/buf/cmd/buf@latest`
+
+## Step 1 — Annotate RPCs with `google.api.http`
+
+The gRPC-gateway HTTP/JSON transcoder (and the OpenAPI emitter) reads `google.api.http` options.
+Every RPC you want in the public REST surface needs one.
+
+```proto {filename="proto/orders/v1/orders.proto"}
+import "google/api/annotations.proto";
+
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (Order) {
+    option (google.api.http) = {post: "/v1/orders", body: "order"};
+  }
+  rpc GetOrder(GetOrderRequest) returns (Order) {
+    option (google.api.http) = {get: "/v1/orders/{id}"};
+  }
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse) {
+    option (google.api.http) = {get: "/v1/orders"};
+  }
+  rpc DeleteOrder(DeleteOrderRequest) returns (DeleteOrderResponse) {
+    option (google.api.http) = {delete: "/v1/orders/{id}"};
+  }
+}
+```
+
+The scaffold already imports `google/api/annotations.proto` — if you scaffolded with
+`devedge-sdk new service` the import is wired. If you are adding HTTP annotations to an existing
+service, add `buf.gen.yaml` entries for `protoc-gen-openapiv2` (the scaffold's `buf.gen.yaml`
+already includes them).
+
+## Step 2 — Generate `openapi/<svc>.openapi.yaml`
+
+```sh
+make generate
+```
+
+`make generate` runs `buf generate`, which invokes both the Go/gRPC plugins and the
+`protoc-gen-openapiv2` plugin. The converter (built into the SDK's codegen step) converts
+the grpc-gateway OpenAPI v2 output to a flat OpenAPI v3 YAML file:
+
+```
+openapi/
+  orders.openapi.yaml    # ← the flat v3 spec; commit this
+```
+
+Inspect the file to confirm it lists your operations and schemas before publishing.
+
+## Step 3 — Publish via `de api publish`
+
+`de api publish` is a thin wrapper that (1) re-runs `make generate` to ensure the spec is fresh,
+(2) arranges the flat spec into the apx directory layout, and (3) shells out to `apx release
+prepare`.
+
+```sh
+de api publish \
+  --api-id openapi/platform.data/orders/v1 \
+  --version v0.1.0 \
+  --lifecycle beta \
+  --canonical-repo github.com/infobloxopen/apis
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|---|---|---|
+| `--api-id` | yes | Full apx API ID, e.g. `openapi/platform.data/orders/v1` |
+| `--version` | yes | Semantic version to publish, e.g. `v0.1.0` |
+| `--canonical-repo` | yes | Canonical APIs repo, e.g. `github.com/infobloxopen/apis` |
+| `--lifecycle` | no | `beta` (default) or `stable` |
+| `--service-dir` | no | Service root; defaults to the current directory |
+| `--skip-generate` | no | Skip `make generate`; use the existing `openapi/<svc>.openapi.yaml` |
+| `--submit` | no | Also run `apx release submit` automatically (opens the PR) |
+
+By default the command **prepares only** and prints the two follow-on commands:
+
+```
+prepare complete — next:
+  apx release submit
+  # (after the PR is merged on the canonical repo:)
+  apx release finalize --api openapi/platform.data/orders/v1 --version v0.1.0
+```
+
+Review the PR, merge it, then run `apx release finalize` in canonical-repo CI to land the OCI
+artifact in the apx catalog.
+
+### Using the raw `apx release` sequence directly
+
+If you prefer to skip `de api publish`, the equivalent manual steps are:
+
+```sh
+# 1. Generate the spec.
+make generate
+
+# 2. Arrange into the apx layout (apx resolves the ID to this directory).
+mkdir -p openapi/platform.data/orders/v1
+cp openapi/orders.openapi.yaml openapi/platform.data/orders/v1/orders.openapi.yaml
+
+# 3. Prepare the release (adds a release entry + writes the OCI manifest locally).
+apx release prepare openapi/platform.data/orders/v1 \
+  --version v0.1.0 \
+  --lifecycle beta \
+  --canonical-repo github.com/infobloxopen/apis
+
+# 4. Open the PR on the canonical repo.
+apx release submit
+
+# 5. After the PR is merged — run this in canonical-repo CI:
+apx release finalize \
+  --api openapi/platform.data/orders/v1 \
+  --version v0.1.0
+```
+
+The `apx.yaml` in your service repo must declare:
+
+```yaml {filename="apx.yaml"}
+version: 1
+org: infobloxopen
+repo: apis            # the canonical-apis-repo short name
+module_roots:
+  - openapi
+```
+
+## Step 4 — Consume from a frontend: generate a typed Angular client
+
+Once the spec is in the apx catalog (or even locally from `openapi/orders.openapi.yaml`), generate
+a typed Angular client with **ng-openapi-gen** (requires OpenAPI v3 — which is exactly what `make
+generate` emits):
+
+```sh
+# Install once:
+npm install --save-dev ng-openapi-gen
+
+# Generate (point at the local spec or the catalog-fetched copy):
+npx ng-openapi-gen \
+  --input openapi/orders.openapi.yaml \
+  --output src/app/api/orders
+```
+
+This writes a full Angular service + model set under `src/app/api/orders/`. Import the generated
+`OrdersService` and use it directly:
+
+```typescript
+import { OrdersService } from './api/orders/services/orders.service';
+
+@Component({ ... })
+export class OrdersListComponent {
+  constructor(private svc: OrdersService) {}
+
+  ngOnInit() {
+    this.svc.listOrders().subscribe(resp => this.orders = resp.orders);
+  }
+}
+```
+
+**Alternative:** `openapi-generator-cli` with the `typescript-angular` generator also works and
+produces comparable output. `ng-openapi-gen` is lighter and needs no Java runtime, which makes it
+the preferred choice for most frontend workflows.
+
+> **v3 is required.** `ng-openapi-gen` does not accept OpenAPI v2 / Swagger 2 specs. The
+> `make generate` converter step that produces `openapi/<svc>.openapi.yaml` is what converts the
+> grpc-gateway v2 output to v3 — this is why you must use the devedge-sdk codegen pipeline rather
+> than consuming the raw `protoc-gen-openapiv2` output directly.
+
+## Versioning and lifecycle
+
+| Lifecycle | When to use |
+|---|---|
+| `beta` | API shape is still evolving; consumers should pin to a minor range |
+| `stable` | API shape is committed; breaking changes require a new `<line>` (e.g. `v2`) |
+
+Publish a new `--version` for each backwards-compatible change. For a breaking change, start a new
+line (`openapi/platform.data/orders/v2`) and deprecate the old one via `apx deprecate`.
