@@ -61,8 +61,19 @@ type Config struct {
 	// request metadata; in production supply one backed by a verified token.
 	PrincipalFunc grpcauthz.PrincipalFunc
 	// Interceptors are additional unary interceptors appended after the
-	// framework chain.
+	// framework chain. They run post-handler too (an interceptor may observe or
+	// wrap the response), so a gRPC-side cross-cutting extension (e.g. an audit
+	// hook) wires in here — the way an Authorizer wires into Authorizer.
 	Interceptors []grpc.UnaryServerInterceptor
+	// HTTPMiddleware are net/http middlewares wrapping the REST gateway mux (the
+	// P2 HTTP extension seam). They wrap only the gateway routes — never the
+	// /healthz and /readyz probes — and run inside the SDK's tracing span;
+	// HTTPMiddleware[0] is the outermost wrapper. A REST request still traverses
+	// the full gRPC interceptor chain on the in-process hop, so these compose
+	// with (do not bypass) the gRPC stages. Used by an internal extension exactly
+	// as Interceptors is — e.g. an audit/identity HTTP middleware shipped in
+	// devedge-sdk-internal.
+	HTTPMiddleware []func(http.Handler) http.Handler
 	// DeduplicationStore is the idempotency store for DeduplicateUnary. Defaults to MemoryDeduplicationStore (10-minute TTL) when nil.
 	DeduplicationStore middleware.DeduplicationStore
 	// LROStore is the operation store for long-running operations (AIP-151).
@@ -413,7 +424,18 @@ func (s *Server) Serve(ctx context.Context) error {
 		outerMux := http.NewServeMux()
 		outerMux.HandleFunc("/healthz", s.handleLiveness)
 		outerMux.HandleFunc("/readyz", s.handleReadiness)
-		outerMux.Handle("/", otelhttp.NewHandler(s.gwMux, "gateway"))
+		// Wrap the gateway mux (not the probes) with any configured HTTP
+		// middleware, then trace the result. Applied innermost-first so
+		// cfg.HTTPMiddleware[0] is the outermost wrapper around the gateway; the
+		// SDK's otelhttp span stays outermost overall so the middleware runs
+		// within the request span.
+		var gw http.Handler = s.gwMux
+		for i := len(s.cfg.HTTPMiddleware) - 1; i >= 0; i-- {
+			if mw := s.cfg.HTTPMiddleware[i]; mw != nil {
+				gw = mw(gw)
+			}
+		}
+		outerMux.Handle("/", otelhttp.NewHandler(gw, "gateway"))
 
 		httpSrv = &http.Server{Handler: outerMux}
 		go func() {

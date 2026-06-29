@@ -9,9 +9,39 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/middleware"
 )
 
 func okHandler(_ context.Context, _ any) (any, error) { return "ok", nil }
+
+// TestAuthorizeStashesIdentityOnContext verifies the P2 identity SPI: after a
+// successful decision the interceptor puts the authorized principal and the
+// resource/verb on the handler's context, where a non-authz extension (audit,
+// the change feed) reads them.
+func TestAuthorizeStashesIdentityOnContext(t *testing.T) {
+	var gotCtx context.Context
+	capture := func(ctx context.Context, _ any) (any, error) { gotCtx = ctx; return "ok", nil }
+	intc := UnaryServerInterceptor("test",
+		WithMethodRule("/dns.v1.ZoneService/GetZone", authz.Get, "zone"),
+		WithAuthorizer(authz.NewDevAuthorizer(
+			authz.Grant{Tenant: "t1", Subjects: []string{"u1"}, Verbs: []authz.Verb{authz.Get}, Resource: "zone"},
+		)),
+		WithPrincipalFunc(func(context.Context) (authz.Principal, error) {
+			return authz.Principal{Subject: "u1", Tenant: "t1", Groups: []string{"admins"}}, nil
+		}),
+	)
+	if _, err := intc(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/dns.v1.ZoneService/GetZone"}, capture); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	p, ok := middleware.PrincipalFromContext(gotCtx)
+	if !ok || p.Subject != "u1" || p.Tenant != "t1" {
+		t.Fatalf("principal not stashed on handler ctx: %+v ok=%v", p, ok)
+	}
+	r, ok := middleware.ResourceFromContext(gotCtx)
+	if !ok || r.Type != "zone" || r.Verb != "get" {
+		t.Fatalf("resource ref not stashed on handler ctx: %+v ok=%v", r, ok)
+	}
+}
 
 func TestUndeclaredMethodDeniedByDefault(t *testing.T) {
 	intc := UnaryServerInterceptor("test") // no rules declared

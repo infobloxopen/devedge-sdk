@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/middleware"
 )
 
 type obligationsKey struct{}
@@ -97,6 +98,14 @@ func (c *config) authorize(ctx context.Context, fullMethod string) (context.Cont
 	if len(dec.Obligations) > 0 {
 		ctx = context.WithValue(ctx, obligationsKey{}, dec.Obligations)
 	}
+	// P2 identity SPI: stash the authorized principal and the resource/verb the
+	// rule targets on context, so a non-authz extension downstream (an audit
+	// middleware, the change feed's Actor, a tag-enforcement hook) can observe
+	// "who did what to which resource" without re-deriving identity or reaching
+	// into the authz engine. Name is left empty: the rule resolves the resource
+	// TYPE and the VERB, but the concrete id is not parsed from the request here.
+	ctx = middleware.WithPrincipal(ctx, princ)
+	ctx = middleware.WithResource(ctx, middleware.ResourceRef{Type: r.resource, Verb: string(r.verb)})
 	return ctx, nil
 }
 

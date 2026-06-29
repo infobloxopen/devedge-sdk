@@ -376,6 +376,59 @@ func TestHealth_Healthz_Returns200(t *testing.T) {
 	}
 }
 
+// TestHTTPMiddleware_WrapsGatewayNotProbes verifies the P2 HTTP middleware seam:
+// a configured Config.HTTPMiddleware wraps the REST gateway routes (so it runs
+// even for an unmatched gateway path) but NOT the /healthz and /readyz probes,
+// which must stay off the extension path.
+func TestHTTPMiddleware_WrapsGatewayNotProbes(t *testing.T) {
+	mark := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Audit-MW", "1")
+			next.ServeHTTP(w, r)
+		})
+	}
+	s, err := server.New(server.Config{
+		GRPCAddr:       ":0",
+		HTTPAddr:       ":0",
+		HTTPMiddleware: []func(http.Handler) http.Handler{mark},
+	})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = s.Serve(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && (s.HTTPAddr() == ":0" || s.HTTPAddr() == "") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s.HTTPAddr() == ":0" || s.HTTPAddr() == "" {
+		t.Fatal("server did not start within 5s")
+	}
+	base := "http://" + s.HTTPAddr()
+
+	// A gateway route (unmatched → 404) is still wrapped by the middleware.
+	gwResp, err := http.Get(base + "/v1/anything")
+	if err != nil {
+		t.Fatalf("GET gateway path: %v", err)
+	}
+	gwResp.Body.Close()
+	if gwResp.Header.Get("X-Audit-MW") != "1" {
+		t.Errorf("HTTP middleware must wrap gateway routes (missing X-Audit-MW header), status=%d", gwResp.StatusCode)
+	}
+
+	// The liveness probe must NOT be wrapped by the middleware.
+	hzResp, err := http.Get(base + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	hzResp.Body.Close()
+	if hzResp.Header.Get("X-Audit-MW") != "" {
+		t.Errorf("HTTP middleware must NOT wrap the /healthz probe, but X-Audit-MW was set")
+	}
+}
+
 // TestHealth_Readyz_AllPassReturns200_FailureReturns503 verifies AC-2 and AC-3:
 // /readyz flips between 200 and 503 as the readiness check toggles.
 func TestHealth_Readyz_AllPassReturns200_FailureReturns503(t *testing.T) {
