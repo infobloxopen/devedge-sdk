@@ -23,3 +23,6 @@ plugins:
   - local: protoc-gen-grpc-gateway
     out: testdata/toy
     opt: module=github.com/infobloxopen/devedge-sdk/testdata/toy
+  - local: protoc-gen-openapiv2
+    out: testdata/toy
+    opt: output_format=json,allow_merge=true,merge_file_name=toy

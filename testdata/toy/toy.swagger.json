@@ -1,0 +1,700 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "widgets.proto",
+    "description": "Test fixture for protoc-gen-svc + protoc-gen-storage (W3-4 checkpoint).\nThis proto exercises both plugins: a resource message (Widget) and a service\n(WidgetService) with authz annotations on all five standard AIP methods.",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "WidgetService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/v1/operations/{name}": {
+      "get": {
+        "summary": "AIP-151: poll the status of a previously submitted ProcessWidget operation.",
+        "operationId": "WidgetService_GetOperationStatus",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1OperationStatus"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": ".+"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/operations/{name}:cancel": {
+      "post": {
+        "summary": "AIP-152: cancel a running ProcessWidget operation.",
+        "operationId": "WidgetService_CancelWidgetOperation",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1OperationStatus"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "pattern": ".+"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/WidgetServiceCancelWidgetOperationBody"
+            }
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets": {
+      "get": {
+        "operationId": "WidgetService_ListWidgets",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ListWidgetsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "showDeleted",
+            "description": "AIP-148: include soft-deleted widgets when true.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          },
+          {
+            "name": "readMask",
+            "description": "AIP-157: fields to return; empty means all fields.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      },
+      "post": {
+        "operationId": "WidgetService_CreateWidget",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Widget"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "widget",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1Widget"
+            }
+          },
+          {
+            "name": "requestId",
+            "description": "AIP-155: idempotency key; empty = no dedup.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "validateOnly",
+            "description": "AIP-163: dry-run; validate but do not persist.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets/{id}": {
+      "get": {
+        "operationId": "WidgetService_GetWidget",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Widget"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "readMask",
+            "description": "AIP-157: fields to return; empty means all fields.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      },
+      "delete": {
+        "operationId": "WidgetService_DeleteWidget",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeleteWidgetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets/{id}:archive": {
+      "post": {
+        "summary": "AIP-136: custom method — sets archived_time on the widget.",
+        "operationId": "WidgetService_ArchiveWidget",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ArchiveWidgetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/WidgetServiceArchiveWidgetBody"
+            }
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets/{id}:process": {
+      "post": {
+        "summary": "AIP-151: start async processing; returns a pending OperationStatus immediately.",
+        "operationId": "WidgetService_ProcessWidget",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1OperationStatus"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/WidgetServiceProcessWidgetBody"
+            }
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets/{widget.id}": {
+      "patch": {
+        "operationId": "WidgetService_UpdateWidget",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Widget"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "widget.id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "widget",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "name is the AIP-122 resource name, e.g. \"widgets/abc123\".",
+                  "readOnly": true
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "etag": {
+                  "type": "string"
+                },
+                "deleteTime": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.",
+                  "readOnly": true
+                },
+                "archivedTime": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "AIP-136: set by ArchiveWidget; non-nil means the widget is archived.",
+                  "readOnly": true
+                }
+              },
+              "description": "Widget is the resource managed by WidgetService."
+            }
+          },
+          {
+            "name": "updateMask",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets:batchDelete": {
+      "post": {
+        "summary": "AIP-137: soft-delete multiple widgets atomically.",
+        "operationId": "WidgetService_BatchDeleteWidgets",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "type": "object",
+              "properties": {}
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "AIP-137: batch delete.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1BatchDeleteWidgetsRequest"
+            }
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets:batchGet": {
+      "get": {
+        "summary": "AIP-137: retrieve multiple widgets in one call.",
+        "operationId": "WidgetService_BatchGetWidgets",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1BatchGetWidgetsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    },
+    "/v1/widgets:batchUpdate": {
+      "post": {
+        "summary": "AIP-137: update multiple widgets atomically (each request carries its own update_mask).",
+        "operationId": "WidgetService_BatchUpdateWidgets",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1BatchUpdateWidgetsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "AIP-137: batch update — each request carries its own widget + update_mask.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1BatchUpdateWidgetsRequest"
+            }
+          }
+        ],
+        "tags": [
+          "WidgetService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "WidgetServiceArchiveWidgetBody": {
+      "type": "object",
+      "description": "AIP-136: custom method — archive a widget."
+    },
+    "WidgetServiceCancelWidgetOperationBody": {
+      "type": "object",
+      "description": "AIP-152: cancel a running long-running operation."
+    },
+    "WidgetServiceProcessWidgetBody": {
+      "type": "object",
+      "description": "AIP-151: long-running operation status for widget processing."
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "v1ArchiveWidgetResponse": {
+      "type": "object",
+      "properties": {
+        "widget": {
+          "$ref": "#/definitions/v1Widget"
+        }
+      }
+    },
+    "v1BatchDeleteWidgetsRequest": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "AIP-137: batch delete."
+    },
+    "v1BatchGetWidgetsResponse": {
+      "type": "object",
+      "properties": {
+        "widgets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Widget"
+          }
+        }
+      }
+    },
+    "v1BatchUpdateWidgetsRequest": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1UpdateWidgetRequest"
+          }
+        }
+      },
+      "description": "AIP-137: batch update — each request carries its own widget + update_mask."
+    },
+    "v1BatchUpdateWidgetsResponse": {
+      "type": "object",
+      "properties": {
+        "widgets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Widget"
+          }
+        }
+      }
+    },
+    "v1DeleteWidgetResponse": {
+      "type": "object"
+    },
+    "v1ListWidgetsResponse": {
+      "type": "object",
+      "properties": {
+        "widgets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Widget"
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "v1OperationStatus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "result": {
+          "type": "string"
+        }
+      }
+    },
+    "v1UpdateWidgetRequest": {
+      "type": "object",
+      "properties": {
+        "widget": {
+          "$ref": "#/definitions/v1Widget"
+        },
+        "updateMask": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "v1Widget": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "name is the AIP-122 resource name, e.g. \"widgets/abc123\".",
+          "readOnly": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "etag": {
+          "type": "string"
+        },
+        "deleteTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.",
+          "readOnly": true
+        },
+        "archivedTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "AIP-136: set by ArchiveWidget; non-nil means the widget is archived.",
+          "readOnly": true
+        }
+      },
+      "description": "Widget is the resource managed by WidgetService."
+    }
+  }
+}

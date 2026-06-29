@@ -631,7 +631,7 @@ const sdkModulePath = "github.com/infobloxopen/devedge-sdk"
 func buildSDKPlugins(t *testing.T, sdkDir string) string {
 	t.Helper()
 	bin := t.TempDir()
-	for _, p := range []string{"protoc-gen-devedge-authz", "protoc-gen-svc", "protoc-gen-storage", "protoc-gen-ent"} {
+	for _, p := range []string{"protoc-gen-devedge-authz", "protoc-gen-svc", "protoc-gen-storage", "protoc-gen-ent", "openapiv2to3"} {
 		cmd := exec.Command("go", "build", "-o", filepath.Join(bin, p), "./cmd/"+p)
 		cmd.Dir = sdkDir
 		if outb, err := cmd.CombinedOutput(); err != nil {

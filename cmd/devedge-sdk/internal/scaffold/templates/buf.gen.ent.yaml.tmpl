@@ -47,3 +47,6 @@ plugins:
   - local: protoc-gen-ent
     out: gen
     opt: dialect=sqlite
+  - local: protoc-gen-openapiv2
+    out: openapi
+    opt: output_format=json,allow_merge=true,merge_file_name={{.BinName}}

@@ -19,12 +19,15 @@ generate:
 	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
 	go build -o bin/protoc-gen-ent           ./cmd/protoc-gen-ent
+	go build -o bin/openapiv2to3             ./cmd/openapiv2to3
 	# SDK-OWNED infoblox.ddd.v1 annotation binding: generated LOCALLY (the one
 	# annotation .pb.go the repo generates in-repo — safe, SDK-private namespace).
 	# Run before the others so protoc-gen-{ent,svc} can import the dddv1 binding.
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.ddd.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.toy.yaml
+	# WS-013 EMIT: convert the toy v2 swagger to OpenAPI v3 (lands in testdata/toy/openapi/).
+	bin/openapiv2to3 testdata/toy/toy.swagger.json testdata/toy/openapi
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.apikey.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.fleet.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.iam.yaml

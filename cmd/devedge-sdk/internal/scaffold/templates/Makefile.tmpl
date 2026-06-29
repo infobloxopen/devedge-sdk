@@ -23,6 +23,8 @@ tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
+	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
+	go install github.com/infobloxopen/devedge-sdk/cmd/openapiv2to3@$(SDK_VERSION)
 
 # Generate the consumer-local implementation (models, repository, service
 # scaffolding, authz rules, gateway) from the public proto. Output is git-ignored.
@@ -51,6 +53,7 @@ tools:
 generate:
 	@test -f buf.lock || buf dep update
 	buf generate
+	openapiv2to3 openapi/{{.BinName}}.swagger.json openapi
 	@echo "  seeding ent codegen toolchain (go.sum)…"
 	@go get entgo.io/ent/cmd/ent \
 		github.com/infobloxopen/devedge-sdk/persistence/entrepo \
@@ -68,6 +71,7 @@ generate:
 generate:
 	@test -f buf.lock || buf dep update
 	buf generate
+	openapiv2to3 openapi/{{.BinName}}.swagger.json openapi
 	go mod tidy
 {{- end }}
 
