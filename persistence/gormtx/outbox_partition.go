@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS %s (
 	event_type     text,
 	payload        bytea,
 	created_time   timestamptz NOT NULL,
+	event_seq      bigint NOT NULL DEFAULT 0,
+	event_epoch    bigint NOT NULL DEFAULT 0,
 	PRIMARY KEY (id, created_time)
 ) PARTITION BY RANGE (created_time)`
 
