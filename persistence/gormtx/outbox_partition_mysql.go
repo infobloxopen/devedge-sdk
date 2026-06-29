@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS outbox (
 	event_type     varchar(255),
 	payload        longblob,
 	created_time   datetime(6) NOT NULL,
+	event_seq      bigint NOT NULL DEFAULT 0,
+	event_epoch    bigint NOT NULL DEFAULT 0,
 	PRIMARY KEY (id, created_time)
 ) PARTITION BY RANGE (TO_DAYS(created_time)) (
 %s
