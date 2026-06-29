@@ -28,7 +28,7 @@ const (
 // this constant only ever sets the INITIAL pin — but a stale value would still
 // pin a new project to an old SDK, so keep it aligned with the latest released
 // SDK tag (bump on every release).
-const fallbackSDKVersion = "v0.31.1"
+const fallbackSDKVersion = "v0.32.0"
 
 // Pinned dependency versions for the generated go.mod. These mirror the versions
 // the SDK's own testdata modules build against; `go mod tidy` reconciles indirects.
