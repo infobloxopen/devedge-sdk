@@ -20,7 +20,7 @@ require (
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
-	github.com/infobloxopen/devedge-sdk v0.31.0
+	github.com/infobloxopen/devedge-sdk v0.31.1
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/protobuf v1.36.11
