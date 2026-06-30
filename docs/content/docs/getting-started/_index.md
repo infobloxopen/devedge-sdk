@@ -12,4 +12,5 @@ This section walks you through installing devedge-sdk and running your first ser
 {{< cards >}}
   {{< card link="installation/" title="Installation" icon="download" subtitle="Prerequisites and module setup." >}}
   {{< card link="quickstart/" title="Quickstart" icon="play" subtitle="From proto definition to a running service." >}}
+  {{< card link="use-with-claude-code/" title="Use with Claude Code" icon="terminal" subtitle="Bootstrap a service from a single prompt with the devedge plugin." >}}
 {{< /cards >}}
