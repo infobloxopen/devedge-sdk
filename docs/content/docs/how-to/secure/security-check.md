@@ -5,11 +5,13 @@ aliases:
   - /docs/guides/security-check/
 ---
 
-`seccheck` turns the SDK's security invariants into ordinary Go test assertions, so they run in
-CI on every change. Each assertion returns a `[]seccheck.Finding`; `seccheck.RunT` maps those to
-test failures.
+`seccheck` is a Go test helper that turns the SDK's security invariants into standard test assertions. You add a `security_test.go` file to your service, call the provided assertion functions, and `seccheck.RunT` maps any findings to `t.Errorf` or `t.Logf` calls — so security properties fail your existing `go test` run with no separate harness.
 
-## Findings and `RunT`
+Use `seccheck` when you want CI to catch a security regression the moment a change is merged, rather than discovering it in a manual review.
+
+## Findings and RunT
+
+Each assertion returns a `[]seccheck.Finding`. A finding carries the method name, a severity, and a human-readable message:
 
 ```go
 type Finding struct {
@@ -22,19 +24,18 @@ type Finding struct {
 func RunT(t testing.TB, findings []Finding)
 ```
 
-The usual pattern is "collect findings, then `RunT`, expecting zero failures":
+Pass the slice directly to `seccheck.RunT` to convert findings into test failures:
 
 ```go
 findings := seccheck.AssertCrossAccountIsolation(ctx, cfg)
 seccheck.RunT(t, findings)
 ```
 
-## The assertions
+## Assertions
 
-### `AssertRulesComplete` — every method declares authz (static)
+### AssertRulesComplete
 
-Fails if the rules slice is empty, or if any non-public rule has an empty verb or resource. This
-is the static counterpart to the fail-closed boot gate.
+`AssertRulesComplete` checks that every method in an authz rules slice has a non-empty verb and resource. It fails if the rules slice is empty or if any non-public rule omits either field. This is the static counterpart to the fail-closed boot gate.
 
 ```go
 func TestSecurity_RulesComplete(t *testing.T) {
@@ -43,11 +44,9 @@ func TestSecurity_RulesComplete(t *testing.T) {
 }
 ```
 
-### `AssertUnknownPrincipalDenied` — fail-closed at runtime (dynamic)
+### AssertUnknownPrincipalDenied
 
-Calls every non-public method with a principal that has no grants (account-id
-`__seccheck_unknown__`) and asserts each returns `codes.PermissionDenied`. You provide a `CallFn`
-per method; methods with no `CallFn` produce a `Notice` and are skipped.
+`AssertUnknownPrincipalDenied` calls every non-public method with a principal that has no grants (account ID `__seccheck_unknown__`) and asserts that each call returns `codes.PermissionDenied`. You provide a `CallFn` per method. Methods with no `CallFn` produce a `Notice` and are skipped.
 
 ```go
 func TestSecurity_UnknownPrincipalDenied(t *testing.T) {
@@ -68,10 +67,9 @@ func TestSecurity_UnknownPrincipalDenied(t *testing.T) {
 }
 ```
 
-### `AssertCrossAccountIsolation` — tenant isolation (dynamic)
+### AssertCrossAccountIsolation
 
-Creates a resource as Principal A and asserts Principal B cannot read it (`codes.NotFound`) or
-list it (count 0). See [Tenant Isolation](../../../concepts/tenant-isolation/) for a full example.
+`AssertCrossAccountIsolation` verifies [tenant isolation](../../../concepts/tenant-isolation/): it creates a resource as Principal A and asserts that Principal B cannot read it (`codes.NotFound`) or list it (count 0). See [Tenant Isolation](../../../concepts/tenant-isolation/) for a full example.
 
 ```go
 findings := seccheck.AssertCrossAccountIsolation(context.Background(), seccheck.IsolationConfig{
@@ -84,12 +82,9 @@ findings := seccheck.AssertCrossAccountIsolation(context.Background(), seccheck.
 seccheck.RunT(t, findings)
 ```
 
-### `AssertErrorMessagesClean` — no internal leakage
+### AssertErrorMessagesClean
 
-Runs each trigger and fails if the resulting gRPC error message contains internal details. The
-forbidden substrings include `persistence:`, SQL keywords (`SELECT `, `INSERT `, `WHERE `,
-`ERROR:`), filesystem paths (`/home/`, `/Users/`, `/app/`), and Go internals (`goroutine `,
-`.go:`).
+`AssertErrorMessagesClean` runs each trigger and fails if the resulting gRPC error message contains internal details. The forbidden substrings include `persistence:`, SQL keywords (`SELECT `, `INSERT `, `WHERE `, `ERROR:`), filesystem paths (`/home/`, `/Users/`, `/app/`), and Go internals (`goroutine `, `.go:`).
 
 ```go
 findings := seccheck.AssertErrorMessagesClean(ctx, []seccheck.ErrorTrigger{
@@ -101,10 +96,9 @@ findings := seccheck.AssertErrorMessagesClean(ctx, []seccheck.ErrorTrigger{
 seccheck.RunT(t, findings)
 ```
 
-### `AssertNoSecretFieldsLeaked` — secret fields never returned
+### AssertNoSecretFieldsLeaked
 
-Walks each response proto and returns an `Error` for any `secret` field that holds a value other
-than the literal `[REDACTED]`.
+`AssertNoSecretFieldsLeaked` walks each response proto and returns an `Error` for any `secret` field that holds a value other than the literal `[REDACTED]`.
 
 ```go
 created, _ := client.CreateAPIKey(ctx, req)
@@ -113,7 +107,9 @@ findings := seccheck.AssertNoSecretFieldsLeaked(created, got)
 seccheck.RunT(t, findings) // GetAPIKey must NOT return key_value
 ```
 
-## A complete `security_test.go`
+## Complete security_test.go
+
+The following example runs all five assertions in a single `TestSecurity` test function:
 
 ```go {filename="security_test.go"}
 package apikeyv1_test
@@ -157,7 +153,7 @@ func TestSecurity(t *testing.T) {
 }
 ```
 
-## Wire it into CI
+## CI integration
 
 `seccheck` runs as part of `go test` — no special harness. A typical CI step:
 
@@ -166,7 +162,6 @@ func TestSecurity(t *testing.T) {
   run: go test ./... -run TestSecurity -v
 ```
 
-Because the dynamic checks exercise real boundaries (a real gRPC server, a real repository),
-run them as end-to-end tests with an in-memory SQLite or a `MemoryRepository` so they need no
-external services. The SDK's own apikey fixture runs the isolation check against **both** the
-GORM and ent repositories and expects zero findings.
+{{< callout type="info" >}}
+**Run dynamic checks against real boundaries, not mocks.** The dynamic assertions (`AssertUnknownPrincipalDenied`, `AssertCrossAccountIsolation`, `AssertErrorMessagesClean`) exercise a real gRPC server and a real repository. Use an in-memory SQLite database or a `MemoryRepository` so they need no external services. The SDK's own apikey fixture runs the isolation check against both the GORM and ent repositories and expects zero findings.
+{{< /callout >}}

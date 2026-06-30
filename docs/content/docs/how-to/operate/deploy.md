@@ -5,14 +5,9 @@ aliases:
   - /docs/guides/deploy/
 ---
 
-A scaffolded service ships with a **deploy path for two real runtime targets** — Kubernetes/k3s
-(first-class, via a framework-owned Helm chart + Flux GitOps) and Docker Compose (local/lightweight)
-— behind a deployment-target seam. You pick a target; the framework renders the artifacts. Both
-wire the SAME operational foundation the service serves out of the box: liveness/readiness probes,
-the config env, the OTEL exporter, the DSN secret, and a shutdown grace period paired with the
-service's graceful shutdown.
+The deploy scaffolding generates ready-to-use deployment artifacts for your service. It supports two runtime targets through a shared deployment-target seam (the `Target` interface): Kubernetes/k3s is the first-class target, rendered via a framework-owned Helm chart and Flux GitOps; Docker Compose covers local development. Both targets wire the same operational foundation your service serves out of the box — liveness and readiness probes, config env, the OTEL exporter, the DSN secret, and the shutdown grace period — so your local environment stays shaped like production. Use this page when you need to configure, publish, or update either target after running `devedge-sdk new service`.
 
-## Pick your targets
+## Choosing a target
 
 ```sh
 # Render both targets (the default):
@@ -25,11 +20,9 @@ devedge-sdk new service orders --resource Order --deploy compose
 devedge-sdk new service orders --resource Order --deploy none
 ```
 
-The flag is `--deploy k8s,compose` (comma-separated; default renders both). Adding a runtime is
-adding a `Target` adapter behind the seam — **no core change** — which is how AWS ECS will slot in
-later (a documented stub is already registered; see *Future targets*).
+The `--deploy` flag accepts a comma-separated list of targets (`k8s`, `compose`). The default renders both. Adding a target means adding a `Target` adapter behind the shared interface with no change to the framework core.
 
-## What lands in your repo
+## Files generated in your repo
 
 ```
 deploy/
@@ -42,30 +35,40 @@ deploy/
     docker-compose.yml    # the service + its declared deps, wired to the same surface
 ```
 
-You will notice there is **no Helm chart** in your repo — only the Flux glue and a values overlay.
-That is by design (see below).
+Your repo contains only the Flux glue and a values overlay, not a Helm chart. The chart itself is embedded in the SDK and managed by the framework.
 
-## Target 1 — Kubernetes / k3s (Flux GitOps)
+## Kubernetes / k3s (Flux GitOps)
 
-The chart is **framework-owned and you never author it.** The canonical chart lives embedded in the
-SDK. The intended publish target is `ghcr.io/infobloxopen/charts/devedge-service`, but **the
-framework does not yet publish the chart to that registry** — it is the planned coordinate, not a
-live one. Until the framework ships a publish step, you must publish the embedded chart to your own
-registry first (see *Publishing the chart yourself* below). Your repo carries only:
+The Helm chart is framework-owned. The canonical chart lives embedded in the SDK. The planned publish target is `ghcr.io/infobloxopen/charts/devedge-service`.
+
+{{< callout type="warning" >}}
+**The framework does not yet publish the chart to that registry.** Until a publish step ships, you must extract the embedded chart and push it to your own OCI registry. See [Publishing the chart](#publishing-the-chart) below.
+{{< /callout >}}
+
+Your repo carries:
 
 - a Flux **`HelmRelease`** that reconciles the chart with your values,
-- an **`OCIRepository`** source pointing at the chart registry (yours, until the framework
-  publishes its own), and
-- a thin **`values.yaml`** overlay — the only chart input you edit.
+- an **`OCIRepository`** source pointing at the chart registry, and
+- a thin **`values.yaml`** overlay — the only file you edit.
 
-The chart renders a `Deployment` (with `livenessProbe` → `/healthz`, `readinessProbe` → `/readyz`,
-the config env, `OTEL_*` export, the DSN as a Secret, and `terminationGracePeriodSeconds`), a
-`Service`, an optional `Ingress`, and resource requests/limits.
+The chart renders a `Deployment` with the following configuration:
 
-### Publishing the chart yourself (required today)
+- `livenessProbe` → `/healthz`
+- `readinessProbe` → `/readyz`
+- config env
+- `OTEL_*` export
+- DSN as a Secret
+- `terminationGracePeriodSeconds`
 
-The framework-published chart registry is not yet live. Until it is, extract and push the embedded
-chart to your own OCI registry, then point your `oci-repository.yaml` at it:
+It also renders a `Service`, an optional `Ingress`, and resource requests/limits.
+
+### Why the chart is not in your repo
+
+A chart you can edit is a chart that drifts from the SDK. Keeping the chart embedded and published by the framework means every service gets the same probe paths, env names, secret handling, and grace period. A chart fix ships to all consumers via a version bump, not a copy-paste. You express service-specific intent through the values overlay.
+
+### Publishing the chart
+
+Publishing the chart yourself is required today: until the framework publishes the chart to its own registry, extract and push the embedded chart to your own OCI registry:
 
 ```sh
 # 1. Extract the embedded chart (requires devedge-sdk CLI on PATH):
@@ -79,15 +82,17 @@ helm push devedge-service-*.tgz oci://<your-registry>/charts
 #    url: oci://<your-registry>/charts
 ```
 
-Once the framework publishes the chart, update `oci-repository.yaml` to point at
-`oci://ghcr.io/infobloxopen/charts` and remove your private copy.
+Once the framework publishes the chart, update `oci-repository.yaml` to point at `oci://ghcr.io/infobloxopen/charts` and remove your private copy.
 
-### Wire it up
+### Wiring it up
 
-1. Publish the embedded chart to your registry (see above).
-2. Edit `deploy/k8s/values.yaml`: set `image.repository` (and `image.tag` for a pinned release),
-   the OTEL collector endpoint, and the DSN (in prod, reference a pre-provisioned Secret via
-   `dsn.existingSecret` so the connection string never lands in git).
+1. Publish the embedded chart to your registry (see [Publishing the chart](#publishing-the-chart) above).
+2. Edit `deploy/k8s/values.yaml`: set `image.repository` (and `image.tag` for a pinned release), the OTEL collector endpoint, and the DSN.
+
+   {{< callout type="info" >}}
+   **In production, reference a pre-provisioned Secret via `dsn.existingSecret`** so the connection string never lands in git.
+   {{< /callout >}}
+
 3. Point `deploy/k8s/oci-repository.yaml` `spec.url` at your published chart registry.
 4. Apply the overlay as a ConfigMap the `HelmRelease` references:
    ```sh
@@ -97,54 +102,37 @@ Once the framework publishes the chart, update `oci-repository.yaml` to point at
    ```
 5. Commit `deploy/k8s/` and let Flux reconcile it.
 
-### Why "you never see the chart"
+## Docker Compose
 
-A chart you can edit is a chart that drifts from the SDK. Keeping the chart embedded and published
-by the framework means every service gets the same probe paths, env names, secret handling, and
-grace period — and a chart fix ships to everyone via a version bump, not a copy-paste. You express
-service-specific intent through the values overlay, nothing more.
-
-## Target 2 — Docker Compose
-
-`deploy/compose/docker-compose.yml` brings up the service and its declared dependencies (e.g. a
-`postgres`), wired to the **same surface** as the chart: the config env, a `healthcheck:` hitting
-`/healthz`, the `OTEL_*` export env (with a commented `otel-collector` service to switch on), and a
-`stop_grace_period` matching the chart's grace period.
+`deploy/compose/docker-compose.yml` brings up the service and its declared dependencies (for example, a `postgres` instance). It uses the same configuration surface as the Helm chart: the config env, a `healthcheck:` hitting `/healthz`, the `OTEL_*` export env (with a commented `otel-collector` service you can enable), and a `stop_grace_period` that matches the chart's grace period.
 
 ```sh
 docker compose -f deploy/compose/docker-compose.yml up --build
 ```
 
-This is the pure-local runtime — no cluster needed — that proves the seam with a second real
-adapter and keeps your local environment shaped like production.
+Use the Compose target for purely local development when you do not need a cluster. It is a second real adapter behind the deployment-target seam, and it wires the same operational surface as the chart, so your local environment stays shaped like production.
 
-## Chart publication (one chart, two consumers)
+## Chart publication
 
-The embedded chart is the single source of truth, consumed two ways:
+The embedded chart is the single source of truth. It is consumed two ways:
 
-1. **Prod / GitOps.** The chart is published to an OCI registry; the emitted `HelmRelease` +
-   `OCIRepository` reference it by version. The framework plans to publish to
-   `ghcr.io/infobloxopen/charts/devedge-service`, but **that registry is not yet live** — publish
-   to your own registry today (see *Publishing the chart yourself* above).
-2. **Local / dev.** `de project up --deploy` renders the SAME embedded chart directly
-   (`helm template`). One chart, two reconcilers — they cannot drift.
+1. **Production / GitOps.** The chart is published to an OCI registry. The emitted `HelmRelease` and `OCIRepository` reference it by version. Until the framework publishes to `ghcr.io/infobloxopen/charts/devedge-service`, publish to your own registry (see [Publishing the chart](#publishing-the-chart) above).
+2. **Local / dev.** `de project up --deploy` renders the same embedded chart directly via `helm template`. Both paths use the same chart source and cannot drift from each other.
 
 ## Graceful shutdown
 
-The generated `main` wires `signal.NotifyContext(ctx, SIGTERM, os.Interrupt)`, so a SIGTERM (the
-k8s pod-termination signal) cancels the serve context: the gRPC and HTTP servers drain in-flight
-requests, the readiness loop stops, and the OTel exporter flushes before exit. The chart's
-`terminationGracePeriodSeconds` and compose's `stop_grace_period` (both 30s by default) give that
-drain its time budget — keep them paired.
+The generated `main` wires `signal.NotifyContext(ctx, SIGTERM, os.Interrupt)`. When Kubernetes sends SIGTERM to terminate a pod, this cancels the serve context: the gRPC and HTTP servers drain in-flight requests, the readiness loop stops, and the OTel exporter flushes before exit.
+
+The chart's `terminationGracePeriodSeconds` and Compose's `stop_grace_period` (both 30 seconds by default) set the time budget for that drain.
+
+{{< callout type="warning" >}}
+**Keep `terminationGracePeriodSeconds` and `stop_grace_period` in sync.** If they diverge, one target will force-kill the process before the drain completes.
+{{< /callout >}}
 
 ## Future targets
 
-AWS ECS is a documented seam **stub**: it is registered and satisfies the same `Target` interface
-(so the seam is proven open) but renders nothing yet — `--deploy ecs` returns a clear
-"not implemented" message. Implementing it is adding an adapter, with no change to the core seam.
+AWS ECS is a registered seam stub. It satisfies the same `Target` interface, so the seam is proven open, but renders nothing yet — `--deploy ecs` returns a "not implemented" message. Implementing it requires adding an adapter with no change to the core interface.
 
-## Dependency-light by design
+## Runtime dependencies
 
-Deploy artifacts are **templates, not dependencies.** Rendering them adds nothing to your service's
-runtime dependency closure — the chart and its YAML tooling live entirely in the CLI, never in the
-service binary.
+Deploy artifacts are templates, not runtime dependencies. Rendering them adds nothing to your service's runtime dependency closure. The chart and its YAML tooling live entirely in the CLI, not in the service binary.

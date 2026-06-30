@@ -3,18 +3,28 @@ title: Annotations
 weight: 2
 ---
 
-devedge-sdk's contract is two proto annotations. They are **engine-neutral**: they name *what*
-is required, not *how* it is evaluated, so they carry no policy-engine-specific fields.
+Annotations are protobuf custom options that declare authorization requirements, field
+sensitivity, storage constraints, and aggregate boundaries directly in your `.proto` files.
+They let code generators and runtime enforcement share a single authoritative source of truth
+rather than requiring you to duplicate declarations across generated code and configuration.
 
-The two annotations live in `infoblox/authz/v1/authz.proto` (the method rule) and
-`infoblox/field/v1/field.proto` (the field options). The canonical schemas live in the
+The annotations are engine-neutral: they name *what* is required, not *how* it is evaluated, so
+they carry no policy-engine-specific fields. This is what distinguishes them from OPA-embedded
+or otherwise engine-coupled annotations.
+
+Use annotations when you define a new RPC, add a sensitive field, configure storage columns, or
+establish aggregate ownership rules.
+
+The two core annotation packages are `infoblox/authz/v1/authz.proto` (method rules) and
+`infoblox/field/v1/field.proto` (field options). Their canonical schemas live in the
 [`infobloxopen/apis`](https://github.com/infobloxopen/apis) module; the SDK depends on their
 generated Go bindings (`github.com/infobloxopen/apis/proto/infoblox/authz/v1` and
-`.../infoblox/field/v1`).
+`.../infoblox/field/v1`). A third package, `infoblox/ddd/v1/ddd.proto`, is defined and owned by
+this SDK and generated locally in-repo.
 
-## `(infoblox.authz.v1.rule)` — method authorization
+## Method authorization
 
-Attach a `Rule` to an RPC to declare its authorization requirement:
+Attach a `(infoblox.authz.v1.rule)` option to an RPC to declare its authorization requirement:
 
 ```proto
 service ZoneService {
@@ -34,9 +44,13 @@ The `Rule` message has three fields:
 
 | Field | Number | Meaning |
 |---|---|---|
-| `verb` | 1 | the canonical permission verb. Standard set: `get`, `list`, `watch`, `create`, `update`, `delete`. Custom verbs (e.g. `download`) are allowed as free strings. `read` is intentionally *not* canonical — it maps to the **View** group (`get` + `list` + `watch`). |
-| `resource` | 2 | the resource type or a template over request fields, e.g. `zone` or `zone:{zone_id}`. |
-| `public` | 3 | if true, the method requires no authorization. **A method with neither a verb nor `public: true` is denied at runtime** and fails the boot-time completeness gate. |
+| `verb` | 1 | The canonical permission verb. The standard set is: `get`, `list`, `watch`, `create`, `update`, `delete`. Custom verbs such as `download` are allowed as free strings. The verb `read` is not in the canonical set — it maps to the View group, which covers `get`, `list`, and `watch`. |
+| `resource` | 2 | The resource type or a template over request fields, for example `zone` or `zone:{zone_id}`. |
+| `public` | 3 | If `true`, the method requires no authorization. |
+
+{{< callout type="warning" >}}
+**A method with neither a `verb` nor `public: true` is denied at runtime.** It also fails the boot-time completeness gate. Every RPC must have an explicit rule.
+{{< /callout >}}
 
 Each annotation becomes one `authz.MethodRule` in Go:
 
@@ -49,23 +63,23 @@ type MethodRule struct {
 }
 ```
 
-### Two ways to consume it — pick per service
+### Consuming the rules
 
-Both produce **identical** `[]authz.MethodRule`:
+Both approaches produce an identical `[]authz.MethodRule`:
 
 - **Reflection** — `authzpb.RulesFromGlobal()` reads the annotation off the linked descriptors
-  at startup. No generated file.
+  at startup. No generated file is required.
 - **Codegen** — `protoc-gen-devedge-authz` (run by `buf generate`) emits a
   `<Service>AuthzRules` table next to the `.pb.go`. Pass it to `server.Config.Rules` or
   `grpcauthz.WithRules(...)`.
 
-That single set feeds **both** enforcement (the interceptor's rule table) **and** the permission
-catalog (`catalog.Build`), which renders per-resource verbs, the endpoints implementing each, and
-the View/Manage intent groups.
+That single rule set feeds both enforcement (the interceptor's rule table) and the permission
+catalog (`catalog.Build`), which renders per-resource verbs, the endpoints implementing each,
+and the View/Manage intent groups.
 
-## `(infoblox.field.v1.opts).secret` — secret fields
+## Secret fields
 
-Attach `FieldOptions` (the `infoblox.field.v1.opts` extension) to a message field to mark it
+Attach `(infoblox.field.v1.opts)` with `secret: true` to a message field to mark it
 sensitive. The proto must `import "infoblox/field/v1/field.proto"`:
 
 ```proto
@@ -82,14 +96,11 @@ message APIKey {
 }
 ```
 
-`FieldOptions` also carries storage constraints and ORM relationship options; the field that drives
-secret handling is `secret`:
-
 | Field | Number | Meaning |
 |---|---|---|
-| `secret` | 1 | if true, the field contains sensitive data. The framework will: **encrypt/hash at rest** (never store plaintext), **redact in logs** (`[REDACTED]`), and **catch leaks** — the security-check tooling flags any code path that returns the raw value. |
+| `secret` | 1 | If `true`, the field contains sensitive data. The framework will **encrypt/hash at rest** (never store plaintext), **redact in logs** (`[REDACTED]`), and **catch leaks** — the security-check tooling flags any code path that returns the raw value. |
 
-A `secret` field drives behavior across three packages:
+A `secret: true` field drives behavior across three packages:
 
 - **Storage** (`protoc-gen-storage` / `protoc-gen-ent`) emits `<field>_hash` and
   `<field>_cipher` columns instead of a plaintext column, and calls the `Encryptor` on
@@ -98,10 +109,10 @@ A `secret` field drives behavior across three packages:
 - **Security** (`seccheck.AssertNoSecretFieldsLeaked`) walks every response proto and fails if a
   secret field is non-empty (other than the literal `[REDACTED]`).
 
-## `(infoblox.field.v1.opts)` — storage constraints
+## Storage constraints
 
-`secret` is the most visible option, but the same `FieldOptions` extension carries the storage
-constraints and column overrides the codegen plugins translate into the generated model:
+The `(infoblox.field.v1.opts)` extension also carries storage constraints and column overrides
+that the codegen plugins translate into the generated model:
 
 | Field | Number | Generates (GORM / ent) |
 |---|---|---|
@@ -119,29 +130,30 @@ message Widget {
 }
 ```
 
-`unique` takes precedence over `index` (a unique index already covers the lookup). The constraints
-are applied by `db.AutoMigrate`; for production schemas drive DDL through
+`unique` takes precedence over `index` because a unique index already covers the lookup. The
+constraints are applied by `db.AutoMigrate`; for production schemas, drive DDL through
 [`infobloxopen/migrate`](../../reference/persistence/#migrations) rather than relying on
 AutoMigrate.
 
 {{< callout type="info" >}}
-**`unique` is per-tenant by default.** When the message has an `account_id` field (the multi-tenant
-case), `unique` does **not** generate a global index on the column alone — that would let one tenant
-deny another the use of a common name (e.g. `primary`) and leak that the name exists. Instead the
-field joins `account_id` in a composite unique index named `ux_<message>_account_<field>`, with
-`account_id` as the leading column. So the example `Widget.slug` above is unique *within each
-account*. A message with no `account_id` field keeps a plain global unique index.
+**`unique` is per-tenant by default.** When the message has an `account_id` field (the
+multi-tenant case), `unique` does **not** generate a global index on the column alone — that
+would let one tenant deny another the use of a common name (such as `primary`) and leak that
+the name exists. Instead, the field joins `account_id` in a composite unique index named
+`ux_<message>_account_<field>`, with `account_id` as the leading column. So the example
+`Widget.slug` above is unique *within each account*. A message with no `account_id` field
+keeps a plain global unique index.
 {{< /callout >}}
 
-## `(infoblox.field.v1.opts)` — relationships
+## ORM relationships
 
-`FieldOptions` also declares ORM relationships on a message-typed (or repeated message-typed)
-field. `protoc-gen-storage` emits the corresponding GORM association tag (and `protoc-gen-ent` the
-equivalent edge):
+`(infoblox.field.v1.opts)` also declares ORM relationships on a message-typed (or repeated
+message-typed) field. `protoc-gen-storage` emits the corresponding GORM association tag, and
+`protoc-gen-ent` emits the equivalent edge.
 
-The generated association is typed against the related message's **GORM model** —
-`*<Related>Model` (or `[]*<Related>Model`) — so `Preload`, FK constraints, and joins all work; the
-`foreign_key` you give in snake_case is emitted as the related model's Go field name.
+The generated association is typed against the related message's GORM model —
+`*<Related>Model` (or `[]*<Related>Model`) — so `Preload`, FK constraints, and joins all work.
+The `foreign_key` you provide in snake_case is emitted as the related model's Go field name.
 
 | Option | Number | Declare on | Generates (GORM) |
 |---|---|---|---|
@@ -163,8 +175,8 @@ message Order {
 }
 ```
 
-For `belongs_to`, the natural AIP shape is to expose the FK as a scalar field **and** annotate the
-association — exactly the `Order` above, which has both `user_id` and `belongs_to user`. The
+For `belongs_to`, the natural AIP shape is to expose the FK as a scalar field **and** annotate
+the association — exactly the `Order` above, which has both `user_id` and `belongs_to user`. The
 generated model carries the scalar FK column once (reused by the association) and a
 `*UserModel` association; it does not duplicate the FK. If you annotate `belongs_to` *without* a
 sibling scalar FK field, the generator emits the FK column for you.
@@ -177,19 +189,24 @@ the scalar FK is bound to the edge with `.Field(...)` so ent generates a single 
 [Codegen → Relationships in ent](../../reference/codegen/#relationships-in-ent) for the generated
 shape and `testdata/fleet/` for a complete worked example.
 
-`has_one`/`has_many`/`belongs_to` accept `foreign_key` and `association_foreign_key`; `has_many`
-also accepts `position_field` for an ordered association; `many_to_many` takes `join_table`,
-`foreign_key`, and `association_foreign_key`. A scalar repeated field with no relationship option is
-skipped in the GORM model (it needs JSONB serialization), so reach for these options whenever a
-field references another resource. The related message must itself be a stored resource (it has an
-`id` field, so `<Related>Model` is generated).
+`has_one`, `has_many`, and `belongs_to` accept `foreign_key` and `association_foreign_key`.
+`has_many` also accepts `position_field` for an ordered association. `many_to_many` takes
+`join_table`, `foreign_key`, and `association_foreign_key`.
 
-## `(infoblox.ddd.v1.*)` — aggregate boundaries
+{{< callout type="info" >}}
+**A scalar repeated field with no relationship option is skipped in the GORM model** and
+requires JSONB serialization. Use one of the relationship options whenever a field references
+another resource. The related message must itself be a stored resource — it must have an `id`
+field so that `<Related>Model` is generated.
+{{< /callout >}}
 
-The SDK-owned `infoblox.ddd.v1` annotations declare DDD aggregate boundaries. Unlike
-`authz.v1`/`field.v1` (consumed as bindings from the published `infobloxopen/apis` module),
-`ddd.v1` is **defined and owned by this SDK** and its Go binding is generated **locally,
-in-repo** — safe precisely because the namespace is SDK-private (no register-once collision).
+## Aggregate boundaries
+
+The `infoblox.ddd.v1` annotations declare domain-driven design (DDD) aggregate boundaries.
+Unlike `authz.v1` and `field.v1`, which are consumed as bindings from the published
+`infobloxopen/apis` module, `ddd.v1` is defined and owned by this SDK. Its Go binding is
+generated locally, in-repo — safe precisely because the namespace is SDK-private, so there is
+no register-once collision with another module.
 
 | Option | Number | Declare on | Meaning |
 |---|---|---|---|
@@ -209,9 +226,10 @@ message ApiKey {
 }
 ```
 
-`member`/`aggregate` drive containment cascade, member write-redirection, and the
-fail-closed boundary gate; `references` keeps cross-aggregate links ID-only. See
-[Aggregates](../aggregates/) for the full model and `testdata/iam/` for a worked example.
+`member` and `aggregate` drive containment cascade, member write-redirection, and the
+fail-closed boundary gate. `references` keeps cross-aggregate links ID-only. See
+[Aggregates](../aggregates/) for the full model and `testdata/iam/` for a complete worked
+example.
 
 ## Extension numbers
 
@@ -231,14 +249,18 @@ extend google.protobuf.MessageOptions {
 }
 ```
 
-The numbers (`50001`, `50003`, `50010`–`50012`) are in the protobuf **50000–99999 "internal
-use"** range. Before any cross-org publication, obtain a globally-unique number from the
-protobuf registry.
+The numbers `50001`, `50003`, and `50010`–`50012` fall in the protobuf **50000–99999 "internal
+use"** range.
 
 {{< callout type="warning" >}}
-The copies of `authz.proto` / `field.proto` checked into the SDK repo are **mirrors** for
-codegen input only — their `go_package` points at the canonical `infobloxopen/apis` module,
+**Obtain a globally-unique extension number before any cross-org publication.** Register the
+number with the protobuf registry to avoid collisions with other organizations.
+{{< /callout >}}
+
+{{< callout type="warning" >}}
+**The copies of `authz.proto` and `field.proto` checked into the SDK repo are mirrors for
+codegen input only.** Their `go_package` points at the canonical `infobloxopen/apis` module,
 so no Go is generated from the local copy. Keep them byte-identical to the canonical file.
-The SDK-owned `ddd.proto` is the exception: it is generated locally (its `go_package` points
-at this module), since the `infoblox.ddd.v1` namespace has no canonical counterpart.
+The SDK-owned `ddd.proto` is the exception: it is generated locally because the
+`infoblox.ddd.v1` namespace has no canonical counterpart.
 {{< /callout >}}

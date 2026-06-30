@@ -7,21 +7,30 @@ aliases:
 
 # Configuration
 
-The SDK ships a dependency-light `config` package that loads service settings from flags,
-environment variables, `.env` files, and JSON files through a uniform seam. The core package
-uses **stdlib only** — no third-party config library enters a consumer's dependency graph unless
-they explicitly opt into the `config/koanf` adapter.
+The `config` package loads service settings from flags, environment variables, `.env` files, and
+JSON files. It merges these sources in a defined priority order and maps the results onto a typed
+Go struct. Use it whenever you need to configure a service's addresses, log level, database
+connection string, or any other setting that varies between environments.
 
-## Precedence (highest → lowest)
+The core package uses the Go standard library only. No third-party config library enters a
+consumer's dependency graph unless they explicitly opt into the `config/koanf` adapter described
+below.
+
+## Source precedence
 
 ```
 flags  >  environment  >  file (.env / JSON)  >  default tag
 ```
 
-The first source that **has** a key wins — *presence*, not non-emptiness. A source that reports a
-key as present with an explicitly empty value (e.g. `MYSVC_DSN=` in the environment, read via
-`os.LookupEnv`) wins over later sources and the `default:` tag; only an *absent* key falls through.
-Subsequent sources are not consulted for a key once a source provides it.
+Sources are evaluated left to right. The first source that **has** a key wins — the rule is
+*presence*, not non-emptiness. Once a source provides a key, later sources are not consulted for
+that key.
+
+{{< callout type="info" >}}
+**An explicitly empty value still wins.** If `MYSVC_DSN=` appears in the environment (read via
+`os.LookupEnv`), that empty string takes precedence over file sources and the `default:` tag.
+Only an absent key falls through to the next source.
+{{< /callout >}}
 
 ## Quick start
 
@@ -39,10 +48,10 @@ if err := config.Load(&opts,
 // opts.GRPCAddr, opts.HTTPAddr etc. are now populated
 ```
 
-The scaffolded `server/main.go` does exactly this — the addresses, log level, OTLP endpoint, and
-DSN come from the config seam, not hardcoded strings.
+The scaffolded `server/main.go` uses this pattern. The addresses, log level, OTel (OpenTelemetry)
+endpoint, and database connection string all come from `config.Load`, not hardcoded strings.
 
-## Built-in sources (stdlib-only)
+## Built-in sources
 
 | Constructor | Reads from |
 |---|---|
@@ -51,6 +60,10 @@ DSN come from the config seam, not hardcoded strings.
 | `config.DotEnv(path)` | `.env` file at path (`KEY=VALUE` or `KEY="VALUE"` lines; missing file silently empty) |
 | `config.JSONFile(path)` | Flat JSON object at path (missing file silently empty) |
 | `config.Map(m)` | In-memory `map[string]string` (useful for tests) |
+
+The core `config` package imports only Go standard library packages (`reflect`, `strconv`, `time`,
+`os`, `flag`, `encoding/json`, `bufio`). Opting into YAML or TOML support requires the separate
+`config/koanf` adapter described below.
 
 ## Defining your own options struct
 
@@ -66,10 +79,12 @@ type MyOptions struct {
 ```
 
 Supported field types: `string`, `int`, `int64`, `bool`, `float64`, `time.Duration`.
-An unsupported field kind returns an error (never panics). A malformed value returns a descriptive
-error naming the key (e.g. `config: key "WORKERS": cannot parse "bad" as int`).
 
-Fields without a `config:` tag are silently skipped. Embedded structs are flattened recursively.
+- An unsupported field kind returns an error; it does not panic.
+- A malformed value returns a descriptive error naming the key (for example,
+  `config: key "WORKERS": cannot parse "bad" as int`).
+- Fields without a `config:` tag are silently skipped.
+- Embedded structs are flattened recursively.
 
 ## Canonical `ServerOptions`
 
@@ -85,15 +100,15 @@ type ServerOptions struct {
 }
 ```
 
-`OTLPEndpoint` feeds `otel.Setup(...OTLPEndpoint...)` in the scaffold — when empty, the standard
+`OTLPEndpoint` feeds `otel.Setup(...OTLPEndpoint...)` in the scaffold. When empty, the standard
 `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable is honoured (OTel convention). `DSN` is the
-database connection string; empty means the service falls back to its built-in default (in-memory
-SQLite in the scaffold).
+database connection string; an empty value causes the scaffold to fall back to its built-in
+default (in-memory SQLite).
 
-## YAML / TOML support — the koanf adapter
+## YAML and TOML support
 
-For YAML or TOML files, opt into the `config/koanf` adapter (the **only** package that imports
-koanf — the core `config` package stays stdlib-only):
+To read YAML or TOML files, import the `config/koanf` adapter. This adapter is the only package
+that imports koanf; the core `config` package stays stdlib-only.
 
 ```go
 import (
@@ -106,7 +121,7 @@ if err != nil { log.Fatal(err) }
 config.Load(&opts, config.Flags(fs), config.Env("SVC_"), src)
 ```
 
-`YAMLFile` returns a `*KoanfSource` that implements `config.Source` — it slots into the standard
+`YAMLFile` returns a `*KoanfSource` that implements `config.Source` and slots into the standard
 precedence chain like any other source. koanf lowercases keys by default; `KoanfSource.Get`
 accepts both upper- and lower-case keys.
 
@@ -126,10 +141,10 @@ func (s *VaultSource) Get(key string) (string, bool) {
 config.Load(&opts, &VaultSource{client: vc}, config.Env("SVC_"), config.DotEnv(".env"))
 ```
 
-## Dep-light guarantee
+## Stdlib dependency guarantee
 
-The core `config` package imports only stdlib packages (`reflect`, `strconv`, `time`, `os`, `flag`,
-`encoding/json`, `bufio`). The `cleancore_test.go` integration test asserts this at every CI run:
+The core `config` package imports only Go standard library packages. The `cleancore_test.go`
+integration test asserts this at every CI run:
 
 ```sh
 go list -deps ./config | grep koanf   # must be empty

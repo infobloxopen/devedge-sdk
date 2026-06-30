@@ -17,7 +17,7 @@ layout: hextra-home
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A modern Go service framework. Declare authorization and secrets&nbsp;<br class="hx:sm:block hx:hidden" />once in your proto — the framework enforces them everywhere.
+  A Go service framework for Infoblox services. Define authorization and secrets&nbsp;<br class="hx:sm:block hx:hidden" />in your proto once — the framework enforces them at every layer.
 {{< /hextra/hero-subtitle >}}
 </div>
 
@@ -29,7 +29,7 @@ layout: hextra-home
 
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
-    title="Declare authz once, enforced everywhere"
+    title="Authorization enforcement"
     subtitle="Annotate an RPC with (infoblox.authz.v1.rule). The framework builds the per-method rule table, enforces it fail-closed, and refuses to boot if any served method is undeclared."
     icon="lock-closed"
   >}}
@@ -44,7 +44,7 @@ layout: hextra-home
     icon="shield-check"
   >}}
   {{< hextra/feature-card
-    title="Batteries-included gRPC server"
+    title="gRPC server"
     subtitle="server.New assembles the interceptor chain — request-ID, error mapping, tenant-ID, fail-closed authz, field-mask validation, ETag/412 preconditions — plus an optional HTTP/JSON gateway."
     icon="server"
   >}}
@@ -54,7 +54,7 @@ layout: hextra-home
     icon="cog"
   >}}
   {{< hextra/feature-card
-    title="Pluggable, dependency-light core"
+    title="Pluggable core"
     subtitle="Core packages depend only on the standard library. No ORM, no policy-engine dependency. Every seam ships a dev-suitable default and swaps for a production backend without touching service code."
     icon="puzzle"
   >}}

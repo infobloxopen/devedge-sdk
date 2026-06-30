@@ -5,7 +5,7 @@ sidebar:
   open: true
 ---
 
-API reference for each package and codegen plugin.
+This section covers every public package and code-generation plugin in devedge-sdk. Use it when you need the exact signature, field, or option for a symbol you are already working with.
 
 {{< cards >}}
   {{< card link="server/" title="server" icon="server" subtitle="Config, New, Serve, the gateway." >}}

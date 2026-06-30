@@ -3,31 +3,17 @@ title: Why devedge-sdk?
 weight: 1
 ---
 
-devedge-sdk exists to answer a recurring problem in platform services: **a team with a well-defined
-proto contract still has to hand-wire a large pile of cross-cutting concerns** — authorization,
-multi-tenancy, secret handling, observability, resilience, health probes — before the service can
-safely carry production traffic. Each team re-solves the same problems, and small deviations in
-those solutions produce security gaps and operational inconsistencies that are expensive to find
-after the fact.
+devedge-sdk is a Go runtime library that wires cross-cutting concerns — authorization,
+multi-tenancy, secret handling, observability, resilience, and health probes — into every service
+that imports it. It gives you a secure, AIP-correct foundation so you can focus on business logic
+rather than rebuilding the same infrastructure on every service.
 
-## The cost of doing it by hand
-
-Without a shared runtime:
-
-- **Authorization** is opt-in and often incomplete. Middleware is added per route; a forgotten
-  route is an open door. The "fail-closed by default" property has to be hand-maintained.
-- **Multi-tenancy** is applied inconsistently. A missed filter predicate lets one tenant read
-  another's data. There is no mechanical way to prove isolation in CI.
-- **Secret fields** are stored as plaintext unless the developer remembers to hash and encrypt
-  them — and remembers to redact them from logs and responses.
-- **Observability** is bolted on service-by-service with different libraries and different signal
-  shapes, making cross-service correlation difficult.
-- **Resilience** (timeouts, rate limiting, circuit breakers) is absent from most services until
-  an incident reveals the gap.
+Use devedge-sdk when you are building a multi-tenant Infoblox platform service that carries
+production traffic. See [When to use it](#when-to-use-it) for the full criteria.
 
 ## What the SDK provides
 
-devedge-sdk is the **runtime layer** that closes these gaps structurally:
+devedge-sdk is the runtime layer that closes cross-cutting gaps structurally:
 
 - **One proto file drives the entire service.** The authz rules, the storage model, the HTTP/JSON
   gateway, and the scaffold are all generated from the proto. The contract is the single source of
@@ -47,6 +33,23 @@ devedge-sdk is the **runtime layer** that closes these gaps structurally:
   `server.New`. The backend is pluggable (OTel API + adapter pattern); calling `otel.Setup` once is
   enough to point the service at any OTLP collector.
 
+## Gaps in hand-written services
+
+Without a shared runtime, each team re-solves the same set of problems. Small deviations in those
+solutions produce security gaps and operational inconsistencies that are expensive to find after the
+fact:
+
+- **Authorization** is opt-in and often incomplete. Middleware is added per route; a forgotten
+  route is an open door. The "fail-closed by default" property has to be hand-maintained.
+- **Multi-tenancy** is applied inconsistently. A missed filter predicate lets one tenant read
+  another's data. There is no mechanical way to prove isolation in CI.
+- **Secret fields** are stored as plaintext unless the developer remembers to hash and encrypt
+  them — and remembers to redact them from logs and responses.
+- **Observability** is bolted on service-by-service with different libraries and different signal
+  shapes, making cross-service correlation difficult.
+- **Resilience** (timeouts, rate limiting, circuit breakers) is absent from most services until
+  an incident reveals the gap.
+
 ## When to use it
 
 devedge-sdk is the right foundation when:
@@ -63,7 +66,7 @@ It is not the right choice for:
 - Pure batch / offline workloads with no gRPC or HTTP surface.
 - Services that are not multi-tenant and have no need for the authz/secret-handling machinery.
 
-## How it fits in the Infoblox stack
+## Fit in the Infoblox stack
 
 devedge-sdk is the **runtime library** — the module your service imports. Its companion,
 [devedge](https://github.com/infobloxopen/devedge), is the **dev- and deploy-time CLI**: it

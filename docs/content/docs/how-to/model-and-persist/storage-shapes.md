@@ -5,44 +5,49 @@ aliases:
   - /docs/guides/storage-shapes/
 ---
 
-The SDK is **resource-oriented and AIP-aligned**: the API contract (resources, standard methods,
-field masks, filtering, pagination) is primary. *How* a service stores those resources is a
-secondary, swappable concern — so the SDK **does not impose an ORM** and has **no ORM
-dependency**.
+A *storage shape* is the combination of a data-modeling tool and its generated code that backs a
+service's `Repository` implementation. The SDK offers four shapes — two with code generators
+(`protoc-gen-storage` for GORM and `protoc-gen-ent` for ent), and two convention-based options
+(sqlc and hand-written). Pick the shape that best fits your data model; you can mix shapes across
+resources in the same service.
 
-A "shape" is how entities and queries are modeled and generated. A service picks the one that
-fits; none is mandated.
+The SDK is resource-oriented and AIP-aligned: the API contract — resources, standard methods,
+field masks, filtering, and pagination — is primary, and how a service stores those resources is
+a secondary, swappable concern. The SDK does not impose an ORM and has no ORM dependency, so no
+shape is mandated.
 
-## The shapes
+Use this page when you are starting a new resource and want to choose between the available
+shapes, or when you need to wire a shape to the SDK's persistence seam.
 
-| Shape | Source of truth | What you get | When |
+## Available shapes
+
+| Shape | Source of truth | What you get | Best for |
 |---|---|---|---|
 | **proto → GORM** (`protoc-gen-storage`) | the `.proto` resource | generated ORM model + CRUDL `Repository` | lowest-friction when the proto already defines the resource |
-| **ent** ([entgo.io](https://entgo.io)) | a Go ent schema | a type-safe client; **graph edges/traversal**, hooks, and a **privacy layer** | rich domain graphs, relationship-heavy data; privacy layer pairs well with the authz seam |
-| **sqlc** | hand-written SQL | compile-time-safe query code, no reflection | hand-tuned / performance-critical paths (the escape hatch) |
-| **hand-written** | your code | implement `Repository[T,K]` directly | small/simple stores, or wrapping any of the above |
+| **ent** ([entgo.io](https://entgo.io)) | a Go ent schema | a type-safe client; graph edges and traversal, hooks, and a privacy layer | rich domain graphs, relationship-heavy data; privacy layer pairs well with the authz seam |
+| **sqlc** | hand-written SQL | compile-time-safe query code, no reflection | hand-tuned or performance-critical paths; the escape hatch |
+| **hand-written** | your code | implement `Repository[T,K]` directly | small or simple stores, or wrapping any shape above |
 
-The SDK ships generators for the first two (`protoc-gen-storage`, `protoc-gen-ent`). sqlc and
-hand-written are conventions, not generators.
+The SDK ships generators for GORM and ent. sqlc and hand-written are conventions, not generators.
 
-## GORM vs ent — how to choose
+## Choosing between GORM and ent
 
 | Question | Lean GORM | Lean ent |
 |---|---|---|
 | Is the proto the natural source of truth? | yes — generate straight from it | maybe — ent schema is separate Go |
 | Plain per-resource CRUD? | yes | overkill |
 | Relationship-heavy graph (edges, traversals)? | awkward | **yes** — ent's strength |
-| Want a query-level **privacy layer** alongside authz? | no | **yes** |
+| Want a query-level privacy layer alongside authz? | no | **yes** |
 | Want hooks on mutations? | callbacks | **first-class** |
 | Minimize new concepts for the team? | **yes** | learning curve |
 
 Both enforce **tenant isolation** the same way — every query is scoped by `account_id` from
-`middleware.TenantIDFromContext(ctx)` (see [Tenant Isolation](../../../concepts/tenant-isolation/)).
+`middleware.TenantIDFromContext(ctx)` (see [Tenant isolation](../../../concepts/tenant-isolation/)).
 
 ## Constructor signatures
 
-The generated constructors differ only by whether the message has secret fields (which adds an
-`Encryptor`):
+The generated constructors differ only by whether the message has secret fields. When secret fields
+are present, the constructor accepts an `Encryptor`:
 
 ```go
 // GORM — protoc-gen-storage
@@ -54,7 +59,8 @@ func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor) *APIKeyRepository
 func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*APIKey, string]
 ```
 
-Both satisfy the same neutral seam:
+Both satisfy the same neutral `Repository` seam — it is backend-agnostic, so it favors neither
+GORM nor ent:
 
 ```go
 type Repository[T any, K comparable] interface {
@@ -67,14 +73,19 @@ type Repository[T any, K comparable] interface {
 }
 ```
 
-## Opening the database — logger configuration
+## Database logger configuration
 
-**You** own the `gorm.Open` call; the generated repository uses whatever `*gorm.DB` you hand its
-constructor, including that DB's logger. GORM's **default** logger writes every query — and every
-"record not found" — to stderr, complete with the SQL, the bound values (tenant ids included), and
-the `file.go:line` of the call site. That output never crosses the API boundary
-(`seccheck.AssertErrorMessagesClean` still passes), but it is noisy in dev and leaks internals into
-server logs in prod. Set the logger explicitly when you open the connection:
+You own the `gorm.Open` call; the generated repository uses whatever `*gorm.DB` you pass to its
+constructor, including that DB's logger. GORM's default logger writes every query — and every
+"record not found" — to stderr, including the SQL, the bound values (tenant IDs included), and
+the `file.go:line` of the call site.
+
+{{< callout type="info" >}}
+**That output never crosses the API boundary** — `seccheck.AssertErrorMessagesClean` still passes.
+However, it is noisy in development and leaks internals into server logs in production.
+{{< /callout >}}
+
+Set the logger explicitly when you open the connection:
 
 ```go
 import (
@@ -93,22 +104,27 @@ To route GORM through your service's `slog`/structured logger instead, implement
 `logger.Interface` (or adapt one of the community bridges) and pass it as `Logger`. The repository
 inherits it for every query.
 
-## Two ways to plug a shape in
+## Wiring a shape to the persistence seam
 
-1. **Behind the neutral seam** — wrap the generated client in a type that implements
+There are two ways to connect a shape to the rest of your service:
+
+1. **Behind the `Repository` seam** — wrap the generated client in a type that implements
    `Repository[T,K]`. Service code depends only on the seam, so the shape can change locally
-   without touching callers. Good for plain CRUD. (Both generated repositories already do this.)
+   without touching callers. Both generated repositories already do this, and it is the right
+   approach for plain CRUD.
 2. **Directly** — use the shape's generated client where its capabilities matter (ent's graph
-   queries or privacy rules). The SDK does **not** force a lowest-common-denominator; it gives
-   you the connection + migration conventions and gets out of the way.
+   queries or privacy rules). The SDK does not force a lowest-common-denominator: it provides the
+   connection and migration conventions and gets out of the way.
 
-## What the SDK provides regardless of shape
+## What the SDK provides for every shape
+
+Regardless of which shape you choose, the SDK provides:
 
 - **Connection convention** — the `persistence.DSN` abstraction, including devedge's indirect
   *hotload* form (`fsnotify://<driver>/<abs-path>` + a real DSN file), so rotated credentials
   reload without a restart.
-- **A neutral seam + dev store** — `Repository[T,K]` plus an in-memory `MemoryRepository` for the
-  common CRUD case and for tests.
+- **A neutral seam and dev store** — `Repository[T,K]` plus an in-memory `MemoryRepository` for
+  the common CRUD case and for tests.
 - **Migrations** — schema migrations use `infobloxopen/migrate` (the org-standard fork)
   regardless of shape.
 

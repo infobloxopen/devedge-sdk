@@ -3,14 +3,16 @@ title: Quickstart
 weight: 2
 ---
 
-Stand up a fail-closed gRPC service in five minutes. By the end you will have a proto with an
-authz annotation, generated rules, a running server, and a passing test.
+This quickstart walks you through creating a fail-closed gRPC service with the devedge-sdk in
+about five minutes. By the end you have a proto with an authz annotation, generated rules, a
+running server, and a passing test. Use this page as the starting point before moving on to the
+full [API Key Manager tutorial](../../tutorial/api-key-manager/).
 
-## The one-command path (recommended)
+## Scaffold generator
 
-The fastest way to a running service is the scaffold generator. One command produces an
-**apx-governed**, **authz-gated**, **persisting** project that builds and passes its smoke test
-with **zero files hand-edited**:
+The scaffold generator is the fastest path to a running service. One command produces a project
+governed by apx, gated by authz, and backed by a persistence layer. The generated project builds
+and passes its smoke test without any manual file edits.
 
 ```bash
 go install github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk@latest
@@ -20,38 +22,48 @@ cd orders
 make test            # boots the server + one tenant-scoped CRUD round-trip — green
 ```
 
-What you get, wired together: the public `proto/orders/v1/orders.proto` (a CRUD `OrderService`
-with an `(infoblox.authz.v1.rule)` on every RPC); the apx app-repo files (`apx.yaml`,
-`.github/workflows/apx-release.yml`); the `buf.yaml`/`buf.gen.yaml` with the six SDK codegen
-plugins pre-wired; the vendored `infoblox/{authz,field,storage}` annotation mirrors; `server/main.go`
-already calling `server.New(...)` with the generated `OrderServiceAuthzRules`; a generated GORM
-model + repository (git-ignored, engine deps in *your* go.mod only); and a passing smoke test.
+The generated project includes:
 
-The generator requires `apx` and `buf` on PATH and shells out to `apx init app` so the app layout
-stays current with apx. Flags: `--backend gorm|ent` (both produce a building, persisting service
-with zero hand-written persistence wiring — `ent` runs the buf→entc two-step for you), `--module`,
-`--org`, `--no-generate` (skip the first `buf generate`), `--force` (scaffold into a non-empty dir).
+- `proto/orders/v1/orders.proto` — a CRUD `OrderService` with an `(infoblox.authz.v1.rule)` on every RPC.
+- `apx.yaml` and `.github/workflows/apx-release.yml` — the apx app-repo files.
+- `buf.yaml` and `buf.gen.yaml` — pre-wired with the six SDK codegen plugins.
+- Vendored `infoblox/{authz,field,storage}` annotation mirrors.
+- `server/main.go` — calls `server.New(...)` with the generated `OrderServiceAuthzRules`.
+- A generated GORM model and repository (git-ignored; engine deps in your `go.mod` only).
+- A passing smoke test.
 
-> **Set `--module` if you're not Infoblox.** The Go module path defaults to
-> `github.com/<org>/<name>` and `--org` defaults to `infobloxopen`, so the command above generates a
-> module rooted at `github.com/infobloxopen/orders`. If you publish elsewhere, pass your own path so
-> the generated `go.mod` and imports are correct:
->
-> ```bash
-> devedge-sdk new service orders --resource Order --backend gorm \
->   --module github.com/you/orders
-> ```
+The generator requires `apx` and `buf` on `PATH` and calls `apx init app` so the app layout
+stays current with apx. Available flags:
 
-> **Before / after.** The manual sequence below is ~10 hand-authored, error-prone artifacts (a
-> two-module `buf.yaml`, a seven-plugin `buf.gen.yaml` where one plugin takes no `module=` and
-> another an optional `dialect=`, byte-identical annotation mirrors, the `server.New(...)` wiring,
-> …). The scaffold collapses that to **one command and zero hand-edits**. The rest of this page
-> walks the manual flow so you understand what the scaffold generates.
+| Flag | Description |
+|---|---|
+| `--backend gorm\|ent` | Persistence backend. Both produce a building, persisting service with no hand-written persistence wiring. The `ent` backend runs the `buf`→`entc` two-step for you. |
+| `--module` | Go module path. Defaults to `github.com/<org>/<name>`. |
+| `--org` | GitHub org. Defaults to `infobloxopen`. |
+| `--no-generate` | Skip the first `buf generate`. |
+| `--force` | Scaffold into a non-empty directory. |
+
+{{< callout type="info" >}}
+**Set `--module` if your module path is not under `github.com/infobloxopen`.** The command above
+generates a module rooted at `github.com/infobloxopen/orders`. Pass your own path so the
+generated `go.mod` and imports are correct:
+
+```bash
+devedge-sdk new service orders --resource Order --backend gorm \
+  --module github.com/you/orders
+```
+{{< /callout >}}
+
+The rest of this page walks the manual flow so you understand what the scaffold generates. The
+manual sequence involves roughly ten hand-authored artifacts: a two-module `buf.yaml`, a
+seven-plugin `buf.gen.yaml` (where one plugin takes no `module=` and another an optional
+`dialect=`), byte-identical annotation mirrors, and the `server.New(...)` wiring. The scaffold
+produces all of these from a single command.
 
 ## 1. Prerequisites
 
-Install the SDK and **every** plugin the `buf.gen.yaml` in step 3 invokes — the two SDK plugins
-plus the base proto/gRPC plugins (see [Installation](../installation/) for the full table):
+Install the SDK and every plugin the `buf.gen.yaml` in step 3 invokes — the two SDK plugins plus
+the base proto/gRPC plugins (see [Installation](../installation/) for the full table):
 
 ```bash
 go get github.com/infobloxopen/devedge-sdk@latest
@@ -65,12 +77,12 @@ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 If you also wire a backend (`protoc-gen-storage` for GORM or `protoc-gen-ent` for ent) or the
 HTTP/JSON gateway (`protoc-gen-grpc-gateway`), install those too — see
-[Installation](../installation/#install-the-codegen-plugins).
+[Installation](../installation/#codegen-plugins).
 
 ## 2. Write a proto with an authz annotation
 
 Each RPC declares its authorization requirement with `(infoblox.authz.v1.rule)`. The verb and
-resource are the *only* things a method needs to declare — the framework does the rest.
+resource are the only things a method needs to declare — the framework handles the rest.
 
 ```proto {filename="widget.proto"}
 syntax = "proto3";
@@ -116,8 +128,8 @@ plugins:
 buf generate
 ```
 
-This produces `widget.pb.go`, `widget_grpc.pb.go`, and `widget.authz.go` — the last contains a
-generated `WidgetServiceAuthzRules` table you pass straight to the server.
+This produces `widget.pb.go`, `widget_grpc.pb.go`, and `widget.authz.go`. The last file contains
+a generated `WidgetServiceAuthzRules` table you pass directly to the server.
 
 {{< callout type="info" >}}
 Prefer no generated file? `authzpb.RulesFromGlobal()` reads the same annotations off the
@@ -127,9 +139,9 @@ linked descriptors at runtime. Both produce identical `[]authz.MethodRule`. See
 
 ## 4. Wire the server
 
-`server.New` assembles the full interceptor chain and (optionally) the HTTP gateway. The
-`Authorizer` defaults to a **default-deny** dev authorizer, so unless you grant something,
-every call is denied — fail-closed by construction.
+`server.New` assembles the full interceptor chain and, optionally, the HTTP gateway. The
+`Authorizer` defaults to a default-deny dev authorizer, so every call is denied unless you grant
+it explicitly.
 
 ```go {filename="main.go"}
 package main
@@ -192,7 +204,7 @@ See [server reference](../../reference/server.md) for every `Config` field.
 ## 5. Test it
 
 A request with no grants must be denied. With this dev authorizer, only `group:admin` is
-allowed; everyone else gets `PermissionDenied`:
+allowed; everyone else receives `PermissionDenied`:
 
 ```go {filename="widget_test.go"}
 func TestGetWidget_DeniedForUnknownPrincipal(t *testing.T) {
@@ -204,8 +216,8 @@ func TestGetWidget_DeniedForUnknownPrincipal(t *testing.T) {
 }
 ```
 
-Conversely, a caller that presents the granted identity is **allowed** — `DevPrincipalFunc` reads
-it from metadata (`account-id` → tenant, `groups` → `group:<name>`):
+A caller that presents the granted identity is allowed. `DevPrincipalFunc` reads the identity from
+metadata (`account-id` → tenant, `groups` → `group:<name>`):
 
 ```go
 md := metadata.Pairs("account-id", "t1", "groups", "admin")
@@ -218,7 +230,7 @@ _, err = client.GetWidget(ctx, &widgetv1.GetWidgetRequest{Id: "w1"})
 go test ./...
 ```
 
-## What you got for free
+## What the server provides
 
 - **Fail-closed authz** — an undeclared or ungranted method is denied, no code required.
 - **Tenant context** — `account-id` from incoming metadata is on `ctx` for every handler.
@@ -238,10 +250,11 @@ the persistence error sentinels to canonical gRPC status codes:
 | `persistence.ConstraintError(err)` (unique/FK violation) | `codes.AlreadyExists` or `codes.FailedPrecondition` |
 | `*persistence.FieldViolationError` | `codes.InvalidArgument` (with field detail) |
 
-**Return the sentinel; do not hand-map it.** If your handler (or the repository it calls) returns
-`persistence.ErrNotFound`, the interceptor turns it into a `NotFound` status before the client
-sees it — you never need to call `status.Error(codes.NotFound, …)` yourself. Hand-mapping
-duplicates the logic, creates inconsistencies, and leaks internal detail.
+Return the sentinel from your handler rather than mapping it yourself. If your handler (or the
+repository it calls) returns `persistence.ErrNotFound`, the interceptor converts it to a
+`NotFound` status before the client sees it — you do not need to call
+`status.Error(codes.NotFound, …)` yourself. Hand-mapping duplicates the logic, creates
+inconsistencies, and leaks internal detail.
 
 ```go
 func (s *server) GetWidget(ctx context.Context, req *pb.GetWidgetRequest) (*pb.Widget, error) {
@@ -253,7 +266,7 @@ func (s *server) GetWidget(ctx context.Context, req *pb.GetWidgetRequest) (*pb.W
 }
 ```
 
-See [middleware → ErrorMapperUnary](../../reference/middleware/#errormapperunary) and
+See [middleware → Error mapper](../../reference/middleware/#error-mapper) and
 [persistence → Errors](../../reference/persistence/#errors) for the full mapping and defense-in-depth
 details.
 

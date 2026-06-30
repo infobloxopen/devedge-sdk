@@ -7,9 +7,9 @@ weight: 1
 import "github.com/infobloxopen/devedge-sdk/server"
 ```
 
-Package `server` provides a batteries-included gRPC server builder. It assembles the framework
-interceptor chain (request-ID, error mapping, tenant-ID, fail-closed authz, field-mask
-validation, ETag preconditions) and, optionally, an HTTP/JSON gateway in front of the gRPC
+Package `server` provides a gRPC server builder with the framework interceptor chain wired in.
+It assembles the chain — request ID, error mapping, tenant ID, fail-closed authz, field-mask
+validation, ETag preconditions — and optionally runs an HTTP/JSON gateway in front of the gRPC
 endpoint.
 
 ## Config
@@ -96,9 +96,9 @@ type ResilienceConfig struct {
 func New(cfg Config) (*Server, error)
 ```
 
-Validates `cfg` and constructs a `*Server`. Returns an error if `GRPCAddr` is empty. When
-`Authorizer` is nil it defaults to a **default-deny** dev authorizer (no grants), so the server is
-fail-closed out of the box.
+`New` validates `cfg` and constructs a `*Server`. It returns an error if `GRPCAddr` is empty.
+When `Authorizer` is nil it defaults to a default-deny dev authorizer (no grants), so the server
+is fail-closed out of the box.
 
 `New` builds this unary interceptor chain (outermost first):
 
@@ -122,30 +122,38 @@ chain = append(chain, cfg.Interceptors...)
 ```go
 func (s *Server) Serve(ctx context.Context) error
 ```
-First runs the **boot-time authz completeness gate** (fail-closed) over the accumulated rule set and
-every registered method — a registered RPC with neither a rule nor a `public: true` exemption makes
-`Serve` return an `undeclared` error and **never bind**. Then starts the gRPC server (and the HTTP
-gateway when configured) and **blocks until `ctx` is cancelled**, then shuts both down gracefully
-(bounded by a 5s timeout). Returns the first fatal error from either server, or nil on clean
-shutdown.
 
-> The gate moved here from per-`Register` so it can see rules contributed by every
-> `Register<Service>`/`…WithRepository` call (which `AddRules` after `New`). Registering a service
-> but never serving means the gate never runs — `Serve` is required to serve.
+`Serve` first runs the boot-time authz completeness gate (fail-closed) over the accumulated rule
+set and every registered method. A registered RPC with neither a rule nor a `public: true`
+exemption makes `Serve` return an `undeclared` error and never bind. `Serve` then starts the gRPC
+server (and the HTTP gateway when configured) and blocks until `ctx` is cancelled, then shuts both
+down gracefully (bounded by a 5s timeout). It returns the first fatal error from either server, or
+nil on clean shutdown.
+
+{{< callout type="info" >}}
+**The completeness gate runs at `Serve`, not at `Register`.** This lets it see rules contributed
+by every `Register<Service>` / `…WithRepository` call, which call `AddRules` after `New`.
+Registering a service but never serving means the gate never runs — you must call `Serve`.
+{{< /callout >}}
 
 ```go
 func (s *Server) GRPCServer() *grpc.Server
 ```
+
 The underlying `*grpc.Server`, so you can register your service implementations on it.
 
 ```go
 func (s *Server) RegisterGateway(fn func(context.Context, *runtime.ServeMux, *grpc.ClientConn) error)
 ```
+
 Records a grpc-gateway registration function, invoked against the gateway mux and the in-process
-gRPC connection when `Serve` starts. No-op unless an HTTP gateway is configured. This is the
-lower-level alternative to the generated `Register<Service>` helper (see *codegen*); use one or the
-other, not both — the generated helper already calls `RegisterGateway` for you, so combining them
-registers the gateway twice.
+gRPC connection when `Serve` starts. This is a no-op unless an HTTP gateway is configured. It is
+the lower-level alternative to the generated `Register<Service>` helper (see *codegen*).
+
+{{< callout type="warning" >}}
+**Use `RegisterGateway` or the generated `Register<Service>` helper, not both.** The generated
+helper already calls `RegisterGateway` for you, so combining them registers the gateway twice.
+{{< /callout >}}
 
 ```go
 func (s *Server) AddRules(rules ...authz.MethodRule)   // contribute authz rules (the generated Register<Service> calls this)
@@ -159,12 +167,14 @@ func (s *Server) HTTPAddr() string // actual bound gateway addr after Serve; "" 
 ### Multi-service protos: rules are auto-wired
 
 `protoc-gen-devedge-authz` emits one `<Service>AuthzRules` per `service` (and an `AllAuthzRules`
-aggregate). You do **not** hand-merge them: registering each service — via
+aggregate). You do not hand-merge them. Registering each service — via
 `Register<Service>WithRepository(s, repo)` or `Register<Service>(s, impl)` — calls
-`s.AddRules(<Service>AuthzRules...)` for you, so the accumulated set covers every registered service
-by the time `Serve` runs the completeness gate. A service you never register (so never contribute
-rules for) cannot silently serve unprotected: its methods aren't registered, and any that were would
-fail the gate. See [codegen → protoc-gen-devedge-authz](../codegen/#protoc-gen-devedge-authz).
+`s.AddRules(<Service>AuthzRules...)` for you, so the accumulated set covers every registered
+service by the time `Serve` runs the completeness gate.
+
+A service you never register contributes no rules and cannot silently serve unprotected: its
+methods are not registered, and any that were would fail the gate. See
+[codegen → protoc-gen-devedge-authz](../codegen/#protoc-gen-devedge-authz).
 
 ## Complete `main.go`
 
@@ -242,5 +252,5 @@ curl -s -X POST localhost:8080/v1/widgets \
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/v1/widgets/w1   # 403
 ```
 
-In production, set `PrincipalFunc` to one that reads a **verified** token (never raw client
-headers) and swap `Authorizer` for your PDP — nothing else in the service changes.
+In production, set `PrincipalFunc` to one that reads a verified token (never raw client headers)
+and swap `Authorizer` for your PDP. Nothing else in the service changes.
