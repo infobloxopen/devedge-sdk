@@ -205,35 +205,45 @@ You now have:
 
 ## Wire the server
 
-For a pure-CRUD service there is no hand-written handler and no hand-listed rules. Build the
-repository and register it in one call:
+A scaffolded service runs on the `servicekit` host. `protoc-gen-svc` emits an importable
+`<Service>Module`, and the scaffold's `cmd/<svc>/main.go` hands it to `servicekit.Run`, which builds
+the one shared server and serves under the fail-closed boot gate. For the runtime these pieces form,
+see the [servicekit reference](../../../reference/servicekit/).
+
+For a pure-CRUD service there is no hand-written handler and no hand-listed rules. The generated
+module wires the generated CRUD handler over your repository, and `Run` hosts it:
 
 ```go
-srv, err := server.New(server.Config{
+// Build the generated repository, wrap it in the generated module, and host it.
+repo := apikeyv1.NewAPIKeyRepository(db, enc) // generated GORM repo (enc for the secret field)
+err := servicekit.Run(servicekit.HostConfig{
+    Modules:  []servicekit.Module{apikeyv1.APIKeyServiceModule(apikeyv1.APIKeyServiceModuleOptions{Repo: repo})},
     GRPCAddr: ":9090",
     HTTPAddr: ":8080",
-    // No Rules: RegisterAPIKeyServiceWithRepository contributes APIKeyServiceAuthzRules.
+    // No Rules to pass: the generated module carries APIKeyServiceAuthzRules and
+    // contributes them when it registers.
     Authorizer: authz.NewDevAuthorizer(/* grants */),
     // Derive the principal from request metadata in dev so grants can match;
     // swap for a verified-token PrincipalFunc in production. See server reference.
     PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+    Context:       ctx,
 })
-// One call: construct the generated default CRUD handler over the repository,
-// register it on gRPC + the HTTP gateway, and contribute the service's authz
-// rules. The boot-time completeness gate runs at srv.Serve.
-repo := apikeyv1.NewAPIKeyRepository(db, enc) // generated GORM repo (enc for the secret field)
-if err := apikeyv1.RegisterAPIKeyServiceWithRepository(srv, repo); err != nil {
-    log.Fatal(err)
-}
-// then srv.Serve(ctx)
 ```
 
-**Custom or non-CRUD logic?** Embed the generated `APIKeyServiceCRUDHandler`, override only the
-methods you change (and add any custom RPCs the generator left `Unimplemented`), then register your
-handler with `RegisterAPIKeyService(srv, h)`. See
-[codegen → protoc-gen-svc](../../../reference/codegen/#protoc-gen-svc) for the override recipe.
+The generated module's `Register` calls `RegisterAPIKeyServiceWithRepository` on the shared server,
+which constructs the generated CRUD handler, registers it on gRPC and the HTTP gateway, and
+contributes the service's authz rules. The boot-time completeness gate runs when `Run` calls
+`server.Serve`.
+
+**Custom or non-CRUD logic?** Replace the generated module with a hand-written `servicekit.Module`:
+embed the generated `APIKeyServiceCRUDHandler`, override the methods you change (and implement any
+custom RPCs the generator left `Unimplemented`), then register your handler with
+`RegisterAPIKeyService(app.Server, h)`. The
+[Add a custom method or second resource](../custom-methods/) how-to walks the full recipe; see
+[codegen → protoc-gen-svc](../../../reference/codegen/#protoc-gen-svc) for the override mechanics.
 
 The generated rules feed both the authz interceptor and the field-mask validator. See the
+[servicekit reference](../../../reference/servicekit/) and the
 [server reference](../../../reference/server/).
 
 ## Error handling

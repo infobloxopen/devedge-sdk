@@ -11,4 +11,5 @@ This section covers how to define your service contract, describe your data mode
   {{< card link="define-a-service/" title="Define a service" icon="code" subtitle="Write a proto definition, run buf generate, and scaffold the service." >}}
   {{< card link="model-a-resource/" title="Model a resource" icon="cube" subtitle="Field types, framework fields, constraints, relationships, and secret fields." >}}
   {{< card link="storage-shapes/" title="Storage shapes" icon="database" subtitle="GORM vs ent — when to use each." >}}
+  {{< card link="custom-methods/" title="Add a custom method or second resource" icon="puzzle" subtitle="Grow a scaffolded service: a custom RPC and a second resource, wired through the servicekit module and host." >}}
 {{< /cards >}}

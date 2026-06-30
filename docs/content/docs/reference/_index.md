@@ -9,6 +9,7 @@ This section covers every public package and code-generation plugin in devedge-s
 
 {{< cards >}}
   {{< card link="server/" title="server" icon="server" subtitle="Config, New, Serve, the gateway." >}}
+  {{< card link="servicekit/" title="servicekit" icon="cube-transparent" subtitle="Module, Descriptor, App, HostConfig, Run — the runtime the scaffold generates." >}}
   {{< card link="middleware/" title="middleware" icon="adjustments" subtitle="The interceptor chain." >}}
   {{< card link="secret/" title="secret" icon="key" subtitle="Encryptor and its implementations." >}}
   {{< card link="persistence/" title="persistence" icon="database" subtitle="Repository, MemoryRepository, DSN, ListOptions." >}}

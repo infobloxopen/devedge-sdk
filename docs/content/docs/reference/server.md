@@ -12,6 +12,14 @@ It assembles the chain — request ID, error mapping, tenant ID, fail-closed aut
 validation, ETag preconditions — and optionally runs an HTTP/JSON gateway in front of the gRPC
 endpoint.
 
+{{< callout type="info" >}}
+**A scaffolded service does not call `server.New` directly.** `devedge-sdk new service` generates a
+[`servicekit`](../servicekit/) host that calls `server.New` for you and serves your service as a
+module. Use this page to understand the server `servicekit` builds and the `Config` it exposes
+through `servicekit.HostConfig`; use the [servicekit reference](../servicekit/) for the host and
+module API.
+{{< /callout >}}
+
 ## Config
 
 ```go

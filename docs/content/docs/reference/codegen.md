@@ -91,6 +91,8 @@ _ = myv1.RegisterWidgetService(s, h) // plain Register, with your overriding han
 
 For a fully custom (non-CRUD) service, implement the bare `<Service>Server` interface and use `Register<Service>(s, custom)` directly.
 
+In a scaffolded service the `s *server.Server` you register on is `app.Server`, the shared server a [`servicekit`](../servicekit/) module is handed. [Add a custom method or second resource](../../how-to/model-and-persist/custom-methods/) walks this override through the module and host.
+
 ## protoc-gen-storage
 
 This plugin generates a GORM-backed `Repository` for each message. For a message named `APIKey` it emits:
