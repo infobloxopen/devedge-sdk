@@ -166,6 +166,12 @@ type messageInfo struct {
 	// graph-load primitive. Mirrors protoc-gen-ent's entMessageInfo.
 	AggregateRoot bool
 	MemberRoot    string // owning aggregate root message name; "" when not a member
+	// BC-12 resource identity (infoblox.field.v1.opts.id on the id field). Zero
+	// values (STRATEGY_UNSPECIFIED / GENERATOR_UNSPECIFIED) mean the annotation was
+	// absent or left default and are treated as SERVER_GENERATED + UUID7 — so an
+	// id-less Create mints a fresh id and an empty id is never persisted.
+	IdStrategy  fieldv1.IdOptions_Strategy
+	IdGenerator fieldv1.IdOptions_Generator
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -184,6 +190,31 @@ func (msg messageInfo) modelType() string {
 		return msg.MessageName
 	}
 	return msg.Model
+}
+
+// idUserSettable reports whether the resource's id is USER_SETTABLE (the caller
+// must supply it). The default (STRATEGY_UNSPECIFIED) and SERVER_GENERATED are
+// both server-generated: an empty id is minted. Drives the Create id-guard.
+func (msg messageInfo) idUserSettable() bool {
+	return msg.IdStrategy == fieldv1.IdOptions_STRATEGY_USER_SETTABLE
+}
+
+// idGeneratorExpr returns the persistence.IDGenerator expression the constructor
+// defaults to for this resource's id, per the (infoblox.field.v1.opts.id)
+// generator: UUID7 (default / unspecified) → persistence.UUID7Generator();
+// UUID4 → persistence.UUID4Generator(); CUSTOM → persistence.DefaultIDGenerator
+// (no built-in baked in — the host is expected to override via the option, and
+// DefaultIDGenerator is the process-wide fallback). The host can always override
+// any of these via the WithIDGenerator constructor option.
+func idGeneratorExpr(g fieldv1.IdOptions_Generator) string {
+	switch g {
+	case fieldv1.IdOptions_GENERATOR_UUID4:
+		return "persistence.UUID4Generator()"
+	case fieldv1.IdOptions_GENERATOR_CUSTOM:
+		return "persistence.DefaultIDGenerator"
+	default: // GENERATOR_UNSPECIFIED / GENERATOR_UUID7
+		return "persistence.UUID7Generator()"
+	}
 }
 
 // fieldInfo describes a single proto message field.
@@ -912,19 +943,28 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		}
 	}
 
+	// BC-12 resource identity follows the OWNER (Create persists into the owner's
+	// table). serverGenID selects mint-on-empty (the default) vs reject-empty
+	// (USER_SETTABLE); idGenDefault is the per-annotation built-in generator. The
+	// idGen struct field + variadic ...persistence.RepoOption let a host override
+	// the generator without a positional-signature change.
+	serverGenID := !owner.idUserSettable()
+	idGenDefault := idGeneratorExpr(owner.IdGenerator)
 	// Repository struct + constructor. Named for the SURFACE (msg.MessageName) so each
 	// surface gets its own constructor; the struct's db field operates on the owner's table.
 	fmt.Fprintf(b, "// %sRepository is a GORM-backed persistence.Repository for %s.\n", msg.MessageName, pbType)
 	if msgHasSecrets {
-		fmt.Fprintf(b, "type %sRepository struct {\n\tdb  *gorm.DB\n\tenc secret.Encryptor\n}\n\n", msg.MessageName)
+		fmt.Fprintf(b, "type %sRepository struct {\n\tdb    *gorm.DB\n\tenc   secret.Encryptor\n\tidGen persistence.IDGenerator\n}\n\n", msg.MessageName)
 		fmt.Fprintf(b, "// New%sRepository creates a repository backed by db and enc.\n", msg.MessageName)
-		fmt.Fprintf(b, "func New%sRepository(db *gorm.DB, enc secret.Encryptor) *%sRepository {\n", msg.MessageName, msg.MessageName)
-		fmt.Fprintf(b, "\treturn &%sRepository{db: db, enc: enc}\n}\n\n", msg.MessageName)
+		fmt.Fprintf(b, "func New%sRepository(db *gorm.DB, enc secret.Encryptor, opts ...persistence.RepoOption) *%sRepository {\n", msg.MessageName, msg.MessageName)
+		fmt.Fprintf(b, "\tcfg := persistence.NewRepoConfig(%s, opts...)\n", idGenDefault)
+		fmt.Fprintf(b, "\treturn &%sRepository{db: db, enc: enc, idGen: cfg.IDGenerator}\n}\n\n", msg.MessageName)
 	} else {
-		fmt.Fprintf(b, "type %sRepository struct{ db *gorm.DB }\n\n", msg.MessageName)
+		fmt.Fprintf(b, "type %sRepository struct {\n\tdb    *gorm.DB\n\tidGen persistence.IDGenerator\n}\n\n", msg.MessageName)
 		fmt.Fprintf(b, "// New%sRepository creates a repository backed by db.\n", msg.MessageName)
-		fmt.Fprintf(b, "func New%sRepository(db *gorm.DB) *%sRepository {\n", msg.MessageName, msg.MessageName)
-		fmt.Fprintf(b, "\treturn &%sRepository{db: db}\n}\n\n", msg.MessageName)
+		fmt.Fprintf(b, "func New%sRepository(db *gorm.DB, opts ...persistence.RepoOption) *%sRepository {\n", msg.MessageName, msg.MessageName)
+		fmt.Fprintf(b, "\tcfg := persistence.NewRepoConfig(%s, opts...)\n", idGenDefault)
+		fmt.Fprintf(b, "\treturn &%sRepository{db: db, idGen: cfg.IDGenerator}\n}\n\n", msg.MessageName)
 	}
 
 	// conn resolves the *gorm.DB to use for an operation: the transaction-scoped
@@ -1014,6 +1054,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 
 	// Create. Model type follows the OWNER; hooks use the SURFACE name.
 	fmt.Fprintf(b, "func (r *%sRepository) Create(ctx context.Context, entity %s) (%s, error) {\n", msg.MessageName, pbType, pbType)
+	// BC-12 resource identity: resolve the id BEFORE toModel_ so the model (and the
+	// persisted row) always carries a populated id (never the empty string).
+	// SERVER_GENERATED (the default) mints one via r.idGen when the caller leaves id
+	// empty and honors a caller-supplied id; USER_SETTABLE rejects an empty id with
+	// InvalidArgument.
+	if serverGenID {
+		b.WriteString("\tif entity.GetId() == \"\" {\n\t\tentity.Id = r.idGen.NewID()\n\t}\n")
+	} else {
+		b.WriteString("\tif entity.GetId() == \"\" {\n\t\treturn nil, status.Error(codes.InvalidArgument, \"id is required\")\n\t}\n")
+	}
 	fmt.Fprintf(b, "\tm := toModel_%s(entity)\n", msg.MessageName)
 	if hasTenant {
 		// Stamp the tenant from context when the caller did not set it, so the

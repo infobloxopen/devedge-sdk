@@ -6,7 +6,7 @@ require (
 	entgo.io/ent v0.14.6
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
 	github.com/infobloxopen/devedge-sdk v0.39.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
@@ -28,7 +28,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/inflect v0.19.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
 	github.com/infobloxopen/devedge-sdk/persistence/entrepo v0.0.0
 	github.com/jinzhu/inflection v1.0.0 // indirect

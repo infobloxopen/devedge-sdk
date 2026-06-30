@@ -71,7 +71,7 @@ func TestRenderEntRepoAdapter_fullShape(t *testing.T) {
 	}
 
 	wants := []string{
-		"func NewCouponEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*Coupon, string]",
+		"func NewCouponEntRepository(client *ent.Client, enc secret.Encryptor, opts ...persistence.RepoOption) persistence.Repository[*Coupon, string]",
 		// F030 D-1(a): every op resolves tx-or-client from ctx via the per-resource
 		// resolver, so a write inside persistence.TxRunner.Atomically joins the tx.
 		"couponClient := func(ctx context.Context) *ent.CouponClient {",
@@ -322,6 +322,60 @@ func TestRenderEntRepository_emitsInMaskHelper(t *testing.T) {
 	}
 }
 
+// TestRenderEntRepoAdapter_resourceIdentity covers BC-12: the Create_ id-guard and
+// the per-annotation generator wiring on the ent backend.
+func TestRenderEntRepoAdapter_resourceIdentity(t *testing.T) {
+	// Default (no id annotation) => SERVER_GENERATED + UUID7: mint on empty id.
+	def := entMessageInfo{
+		MessageName: "Note",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "body", SnakeName: "body", EntType: "String"},
+		},
+	}
+	out := renderEntRepoAdapter(def, def, "notev1", "github.com/example/noted/notev1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator") {
+		t.Error("default identity must wire the UUID7 built-in via NewRepoConfig")
+	}
+	if !strings.Contains(out, "if entity.GetId() == \"\" {\n\t\t\t\tentity.Id = idGen.NewID()") {
+		t.Error("SERVER_GENERATED Create_ must mint an id when the caller leaves it empty")
+	}
+	if strings.Contains(out, "InvalidArgument") {
+		t.Error("a server-generated id must not reject an empty id")
+	}
+
+	// UUID4 generator selection.
+	u4 := def
+	u4.IdGenerator = fieldv1.IdOptions_GENERATOR_UUID4
+	if out := renderEntRepoAdapter(u4, u4, "notev1", "github.com/example/noted/notev1"); !strings.Contains(out, "persistence.NewRepoConfig(persistence.UUID4Generator()") {
+		t.Error("GENERATOR_UUID4 must wire the UUID4 built-in")
+	}
+
+	// CUSTOM generator => the package default (host overrides via the option).
+	cust := def
+	cust.IdGenerator = fieldv1.IdOptions_GENERATOR_CUSTOM
+	if out := renderEntRepoAdapter(cust, cust, "notev1", "github.com/example/noted/notev1"); !strings.Contains(out, "persistence.NewRepoConfig(persistence.DefaultIDGenerator") {
+		t.Error("GENERATOR_CUSTOM must wire persistence.DefaultIDGenerator")
+	}
+
+	// USER_SETTABLE => reject an empty id with InvalidArgument; never mint.
+	us := def
+	us.IdStrategy = fieldv1.IdOptions_STRATEGY_USER_SETTABLE
+	out = renderEntRepoAdapter(us, us, "notev1", "github.com/example/noted/notev1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("USER_SETTABLE generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "status.Error(codes.InvalidArgument, \"id is required\")") {
+		t.Error("USER_SETTABLE Create_ must reject an empty id with InvalidArgument")
+	}
+	if strings.Contains(out, "idGen.NewID()") {
+		t.Error("USER_SETTABLE must never mint an id")
+	}
+}
+
 // TestRenderEntRepoAdapter_noTenantNoSecretHardDelete covers the minimal shape:
 // no account_id (no tenant guard / no middleware import), no secret (no enc
 // param), no soft-delete (hard-delete path, no Undelete_).
@@ -337,7 +391,7 @@ func TestRenderEntRepoAdapter_noTenantNoSecretHardDelete(t *testing.T) {
 	if _, err := format.Source([]byte(out)); err != nil {
 		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
 	}
-	if !strings.Contains(out, "func NewNoteEntRepository(client *ent.Client) persistence.Repository[*Note, string]") {
+	if !strings.Contains(out, "func NewNoteEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*Note, string]") {
 		t.Error("expected no-enc constructor for a message without secret fields")
 	}
 	if !strings.Contains(out, "noteClient(ctx).Delete().Where(entnote.ID(key))") {
@@ -402,7 +456,7 @@ func TestRenderEntRepoAdapter_multiSurface(t *testing.T) {
 	wants := []string{
 		// Constructor named for the surface, serving the surface domain type; no enc
 		// (the surface projects no secret field).
-		"func NewCouponSummaryEntRepository(client *ent.Client) persistence.Repository[*CouponSummary, string]",
+		"func NewCouponSummaryEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*CouponSummary, string]",
 		"entrepo.EntRepository[*CouponSummary, string]",
 		// Operates over the OWNER's ent type / client / predicate package. F030: the
 		// adapter resolves the OWNER's <Model> client from ctx (tx-or-client) instead

@@ -91,6 +91,12 @@ type entMessageInfo struct {
 	// edge generates OnDelete: Cascade (the root owns its members).
 	AggregateRoot bool
 	MemberRoot    string // owning aggregate root message name; "" when not a member
+	// BC-12 resource identity (infoblox.field.v1.opts.id on the id field). Zero
+	// values (STRATEGY_UNSPECIFIED / GENERATOR_UNSPECIFIED) mean the annotation was
+	// absent or left default and are treated as SERVER_GENERATED + UUID7 — so an
+	// id-less Create mints a fresh id and an empty id is never persisted.
+	IdStrategy  fieldv1.IdOptions_Strategy
+	IdGenerator fieldv1.IdOptions_Generator
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -109,6 +115,31 @@ func (msg entMessageInfo) modelType() string {
 		return msg.MessageName
 	}
 	return msg.Model
+}
+
+// idUserSettable reports whether the resource's id is USER_SETTABLE (the caller
+// must supply it). The default (STRATEGY_UNSPECIFIED) and SERVER_GENERATED are
+// both server-generated: an empty id is minted. Drives the Create id-guard.
+func (msg entMessageInfo) idUserSettable() bool {
+	return msg.IdStrategy == fieldv1.IdOptions_STRATEGY_USER_SETTABLE
+}
+
+// idGeneratorExpr returns the persistence.IDGenerator expression the constructor
+// defaults to for this resource's id, per the (infoblox.field.v1.opts.id)
+// generator: UUID7 (default / unspecified) → persistence.UUID7Generator();
+// UUID4 → persistence.UUID4Generator(); CUSTOM → persistence.DefaultIDGenerator
+// (no built-in baked in — the host is expected to override via the option, and
+// DefaultIDGenerator is the process-wide fallback). The host can always override
+// any of these via the WithIDGenerator constructor option.
+func idGeneratorExpr(g fieldv1.IdOptions_Generator) string {
+	switch g {
+	case fieldv1.IdOptions_GENERATOR_UUID4:
+		return "persistence.UUID4Generator()"
+	case fieldv1.IdOptions_GENERATOR_CUSTOM:
+		return "persistence.DefaultIDGenerator"
+	default: // GENERATOR_UNSPECIFIED / GENERATOR_UUID7
+		return "persistence.UUID7Generator()"
+	}
 }
 
 // msgHasResourceName reports whether the message participates in AIP-122 resource
@@ -1088,6 +1119,11 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	hasTags := msgHasTags(msg)
 	projectSoft := msg.SoftDelete    // fromEnt projects delete_time only if the surface declares it
 	projectExpire := msg.HasExpireTime
+	// BC-12 resource identity follows the OWNER (Create persists into the owner's
+	// table). serverGenID selects mint-on-empty (the default) vs reject-empty
+	// (USER_SETTABLE); idGenDefault is the per-annotation built-in generator.
+	serverGenID := !owner.idUserSettable()
+	idGenDefault := idGeneratorExpr(owner.IdGenerator)
 
 	entImport := path.Dir(goImportPath) + "/ent"
 	entPredImport := entImport + "/" + lower
@@ -1152,6 +1188,11 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if hasSecret {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
+	if !serverGenID {
+		// BC-12: a USER_SETTABLE id rejects an empty id with InvalidArgument.
+		b.WriteString("\n\t\"google.golang.org/grpc/codes\"\n")
+		b.WriteString("\t\"google.golang.org/grpc/status\"\n\n")
+	}
 	fmt.Fprintf(&b, "\tent %q\n", entImport)
 	// The field-predicate package is always needed: every Delete_ references it
 	// (ent<lower>.ID for hard delete, ent<lower>.DeleteTimeIsNil for soft delete),
@@ -1168,20 +1209,47 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// constructor client, so a write issued inside persistence.TxRunner.Atomically
 	// participates in the transaction (F030, D-1 option a).
 	txClientVar := lower + "Client"
+	// BC-12 resource identity: the variadic ...persistence.RepoOption lets a host
+	// override the IDGenerator without changing the positional signature (which would
+	// break every caller + the batch wrapper). For a server-generated id (the
+	// default) the constructor resolves idGen from the per-annotation built-in
+	// (UUID7 unless the id field declares otherwise) plus any option override, and
+	// the Create_ closure captures it to mint an id when the caller leaves it empty.
+	// A USER_SETTABLE id is never minted, so idGen is not bound (the option is
+	// accepted but unused — the signature stays uniform across resources).
 	if hasSecret {
 		b.WriteString("// enc may be nil only if no secret values will be written.\n")
-		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*%s, string] {\n", res, res)
+		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, enc secret.Encryptor, opts ...persistence.RepoOption) persistence.Repository[*%s, string] {\n", res, res)
 		writeEntTxClientResolver(&b, txClientVar, model)
+		if serverGenID {
+			fmt.Fprintf(&b, "\tidGen := persistence.NewRepoConfig(%s, opts...).IDGenerator\n", idGenDefault)
+		} else {
+			b.WriteString("\t_ = opts // id is USER_SETTABLE; the generator option is accepted but unused\n")
+		}
 		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
 		b.WriteString("\t\tEnc: enc,\n")
 	} else {
-		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client) persistence.Repository[*%s, string] {\n", res, res)
+		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*%s, string] {\n", res, res)
 		writeEntTxClientResolver(&b, txClientVar, model)
+		if serverGenID {
+			fmt.Fprintf(&b, "\tidGen := persistence.NewRepoConfig(%s, opts...).IDGenerator\n", idGenDefault)
+		} else {
+			b.WriteString("\t_ = opts // id is USER_SETTABLE; the generator option is accepted but unused\n")
+		}
 		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
 	}
 
 	// ---- Create_ ----
 	fmt.Fprintf(&b, "\t\tCreate_: func(ctx context.Context, entity *%s) (*%s, error) {\n", res, res)
+	// BC-12 resource identity: resolve the id BEFORE the setter chain so SetID
+	// always persists a populated id (never the empty string). SERVER_GENERATED
+	// (the default) mints one via idGen when the caller leaves id empty and honors a
+	// caller-supplied id; USER_SETTABLE rejects an empty id with InvalidArgument.
+	if serverGenID {
+		b.WriteString("\t\t\tif entity.GetId() == \"\" {\n\t\t\t\tentity.Id = idGen.NewID()\n\t\t\t}\n")
+	} else {
+		b.WriteString("\t\t\tif entity.GetId() == \"\" {\n\t\t\t\treturn nil, status.Error(codes.InvalidArgument, \"id is required\")\n\t\t\t}\n")
+	}
 	if ownerTenant {
 		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
 		b.WriteString("\t\t\tif entity.GetAccountId() == \"\" && tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")

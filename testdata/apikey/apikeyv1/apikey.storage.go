@@ -134,13 +134,15 @@ func ParseAPIKeyName(name string) (string, error) {
 
 // APIKeyRepository is a GORM-backed persistence.Repository for *APIKey.
 type APIKeyRepository struct {
-	db  *gorm.DB
-	enc secret.Encryptor
+	db    *gorm.DB
+	enc   secret.Encryptor
+	idGen persistence.IDGenerator
 }
 
 // NewAPIKeyRepository creates a repository backed by db and enc.
-func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor) *APIKeyRepository {
-	return &APIKeyRepository{db: db, enc: enc}
+func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor, opts ...persistence.RepoOption) *APIKeyRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &APIKeyRepository{db: db, enc: enc, idGen: cfg.IDGenerator}
 }
 
 func (r *APIKeyRepository) conn(ctx context.Context) *gorm.DB {
@@ -220,6 +222,9 @@ func (r *APIKeyRepository) List(ctx context.Context, opts persistence.ListOption
 }
 
 func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_APIKey(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
@@ -574,11 +579,15 @@ var APIKeySummaryColumns = map[string]string{
 }
 
 // APIKeySummaryRepository is a GORM-backed persistence.Repository for *APIKeySummary.
-type APIKeySummaryRepository struct{ db *gorm.DB }
+type APIKeySummaryRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewAPIKeySummaryRepository creates a repository backed by db.
-func NewAPIKeySummaryRepository(db *gorm.DB) *APIKeySummaryRepository {
-	return &APIKeySummaryRepository{db: db}
+func NewAPIKeySummaryRepository(db *gorm.DB, opts ...persistence.RepoOption) *APIKeySummaryRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &APIKeySummaryRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *APIKeySummaryRepository) conn(ctx context.Context) *gorm.DB {
@@ -658,6 +667,9 @@ func (r *APIKeySummaryRepository) List(ctx context.Context, opts persistence.Lis
 }
 
 func (r *APIKeySummaryRepository) Create(ctx context.Context, entity *APIKeySummary) (*APIKeySummary, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_APIKeySummary(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
@@ -913,3 +925,297 @@ func (r *APIKeySummaryRepository) BatchDelete(ctx context.Context, keys []string
 
 // compile-time check.
 var _ persistence.BatchRepository[*APIKeySummary, string] = (*APIKeySummaryRepository)(nil)
+
+// TokenModel is the GORM model for Token.
+type TokenModel struct {
+	ID        string `gorm:"primaryKey;type:varchar(36)"`
+	Label     string `gorm:"column:label"`
+	ETag      string `gorm:"column:etag"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func toModel_Token(p *Token) *TokenModel {
+	if p == nil {
+		return nil
+	}
+	m := &TokenModel{ID: p.Id}
+	m.Label = p.Label
+	return m
+}
+
+func fromModel_Token(m *TokenModel) *Token {
+	if m == nil {
+		return nil
+	}
+	p := &Token{Id: m.ID}
+	p.Label = m.Label
+	if FromModelTokenCustom != nil {
+		FromModelTokenCustom(m, p)
+	}
+	return p
+}
+
+// FromModelTokenCustom, if set, runs at the end of fromModel_Token to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelTokenCustom func(m *TokenModel, p *Token)
+
+// ToModelTokenOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelTokenOnCreate func(p *Token, m *TokenModel)
+
+// ToModelTokenOnUpdate, if set, runs in Update just before the database write.
+var ToModelTokenOnUpdate func(p *Token, m *TokenModel)
+
+// TokenColumns maps proto field names to DB column names for safe filter/order_by parsing.
+var TokenColumns = map[string]string{
+	"id":    "id",
+	"label": "label",
+}
+
+// TokenRepository is a GORM-backed persistence.Repository for *Token.
+type TokenRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
+
+// NewTokenRepository creates a repository backed by db.
+func NewTokenRepository(db *gorm.DB, opts ...persistence.RepoOption) *TokenRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &TokenRepository{db: db, idGen: cfg.IDGenerator}
+}
+
+func (r *TokenRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
+func (r *TokenRepository) Get(ctx context.Context, key string) (*Token, error) {
+	var m TokenModel
+	if err := r.conn(ctx).Where("id = ?", key).First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get Token: %w", err)
+	}
+	return fromModel_Token(&m), nil
+}
+
+func (r *TokenRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Token, string, error) {
+	var models []TokenModel
+	q := r.conn(ctx)
+	if opts.Filter != "" {
+		cond, err := filter.Parse(opts.Filter, TokenColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
+		}
+		sql, args := cond.SQL()
+		q = q.Where(sql, args...)
+	}
+	if opts.OrderBy != "" {
+		clauses, err := filter.ParseOrderBy(opts.OrderBy, TokenColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid order_by: %v", err)
+		}
+		for _, c := range clauses {
+			q = q.Order(c.GORMExpr())
+		}
+	}
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	offset := 0
+	if opts.PageToken != "" {
+		if dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {
+			offset, _ = strconv.Atoi(string(dec))
+		}
+	}
+	if err := q.Limit(pageSize).Offset(offset).Find(&models).Error; err != nil {
+		return nil, "", fmt.Errorf("list Token: %w", err)
+	}
+	out := make([]*Token, len(models))
+	for i := range models {
+		out[i] = fromModel_Token(&models[i])
+	}
+	nextToken := ""
+	if len(models) == pageSize {
+		nextToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(offset + pageSize)))
+	}
+	return out, nextToken, nil
+}
+
+func (r *TokenRepository) Create(ctx context.Context, entity *Token) (*Token, error) {
+	if entity.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	m := toModel_Token(entity)
+	if ToModelTokenOnCreate != nil {
+		ToModelTokenOnCreate(entity, m)
+	}
+	if err := r.conn(ctx).Create(m).Error; err != nil {
+		// Map driver constraint violations to clean sentinels so callers see
+		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
+		if ce := persistence.ConstraintError(err); ce != nil {
+			return nil, ce
+		}
+		return nil, fmt.Errorf("create Token: %w", err)
+	}
+	return fromModel_Token(m), nil
+}
+
+func (r *TokenRepository) Update(ctx context.Context, key string, entity *Token, fieldMask ...string) (*Token, error) {
+	m := toModel_Token(entity)
+	m.ID = key
+	if ToModelTokenOnUpdate != nil {
+		ToModelTokenOnUpdate(entity, m)
+	}
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
+	if len(fieldMask) > 0 {
+		dbCols := make([]string, 0, len(fieldMask))
+		for _, f := range fieldMask {
+			col, ok := TokenColumns[f]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
+			}
+			dbCols = append(dbCols, col)
+		}
+		// Select makes GORM write the named columns even when their value is
+		// the zero value (false, 0, ""); a bare struct Updates would skip them.
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update Token: %w", err)
+		}
+	} else {
+		// No field mask: full update of every writable column via a map, so
+		// zero values (false, 0, "") persist — a struct Updates skips zero fields
+		// and would silently drop "disable this" / "clear that" updates.
+		updates := map[string]interface{}{
+			"label": m.Label,
+		}
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update Token: %w", err)
+		}
+	}
+	return r.Get(ctx, key)
+}
+
+func (r *TokenRepository) Delete(ctx context.Context, key string) error {
+	res := r.conn(ctx).Where("id = ?", key).Unscoped().Delete(&TokenModel{})
+	if res.Error != nil {
+		return fmt.Errorf("delete Token: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return persistence.ErrNotFound
+	}
+	return nil
+}
+
+func (r *TokenRepository) Undelete(_ context.Context, _ string) (*Token, error) {
+	return nil, persistence.ErrNotFound
+}
+
+func (r *TokenRepository) BatchGet(ctx context.Context, keys []string) ([]*Token, error) {
+	if len(keys) == 0 {
+		return []*Token{}, nil
+	}
+	var models []TokenModel
+	q := r.conn(ctx).Where("id IN ?", keys)
+	if err := q.Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("batch get Token: %w", err)
+	}
+	byID := make(map[string]*Token, len(models))
+	for i := range models {
+		byID[models[i].ID] = fromModel_Token(&models[i])
+	}
+	out := make([]*Token, 0, len(keys))
+	for _, k := range keys {
+		p, ok := byID[k]
+		if !ok {
+			return nil, persistence.ErrNotFound
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *TokenRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*Token, string]) ([]*Token, error) {
+	if len(items) == 0 {
+		return []*Token{}, nil
+	}
+	out := make([]*Token, 0, len(items))
+	run := func(txRepo *TokenRepository) error {
+		for _, it := range items {
+			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
+			if err != nil {
+				return err
+			}
+			out = append(out, updated)
+		}
+		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&TokenRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&TokenRepository{db: tx})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *TokenRepository) BatchDelete(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	uniq := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
+		res := q.Unscoped().Delete(&TokenModel{})
+		if res.Error != nil {
+			return fmt.Errorf("batch delete Token: %w", res.Error)
+		}
+		if res.RowsAffected != int64(len(uniq)) {
+			return persistence.ErrNotFound
+		}
+		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
+	})
+}
+
+// compile-time check.
+var _ persistence.BatchRepository[*Token, string] = (*TokenRepository)(nil)

@@ -7,7 +7,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2
 	github.com/infobloxopen/devedge-sdk v0.39.0
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2

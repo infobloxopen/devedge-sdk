@@ -15,7 +15,7 @@ import (
 
 // NewMembershipEntRepository wires the generated ent client into a
 // persistence.Repository[*Membership, string].
-func NewMembershipEntRepository(client *ent.Client) persistence.Repository[*Membership, string] {
+func NewMembershipEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*Membership, string] {
 	membershipClient := func(ctx context.Context) *ent.MembershipClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -24,8 +24,12 @@ func NewMembershipEntRepository(client *ent.Client) persistence.Repository[*Memb
 		}
 		return client.Membership
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*Membership, string]{
 		Create_: func(ctx context.Context, entity *Membership) (*Membership, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID

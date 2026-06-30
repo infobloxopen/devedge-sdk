@@ -21,7 +21,7 @@ import (
 // NewAPIKeyEntRepository wires the generated ent client into a
 // persistence.Repository[*APIKey, string].
 // enc may be nil only if no secret values will be written.
-func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistence.Repository[*APIKey, string] {
+func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...persistence.RepoOption) persistence.Repository[*APIKey, string] {
 	apikeyClient := func(ctx context.Context) *ent.APIKeyClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -30,9 +30,13 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor) persistenc
 		}
 		return client.APIKey
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*APIKey, string]{
 		Enc: enc,
 		Create_: func(ctx context.Context, entity *APIKey) (*APIKey, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID

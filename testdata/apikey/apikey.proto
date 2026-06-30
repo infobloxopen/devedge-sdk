@@ -62,6 +62,17 @@ message APIKeySummary {
   string label      = 4;
 }
 
+// Token is a BC-12 resource-identity fixture: its id is USER_SETTABLE
+// (AIP-133), so the generated Create on BOTH backends must reject an empty id
+// with InvalidArgument and never persist an empty id. It is a standalone storable
+// resource (it has an id field) with no service — the storage/ent plugins emit a
+// repository for any message with an id, so no RPC plumbing is needed to exercise
+// the Create id-guard.
+message Token {
+  string id    = 1 [(infoblox.field.v1.opts) = {id: {strategy: STRATEGY_USER_SETTABLE}}];
+  string label = 2;
+}
+
 service APIKeyService {
   rpc CreateAPIKey(CreateAPIKeyRequest) returns (APIKey) {
     option (google.api.http) = {post: "/v1/apikeys", body: "api_key"};

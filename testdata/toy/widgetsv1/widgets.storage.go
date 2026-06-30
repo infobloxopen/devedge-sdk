@@ -110,11 +110,15 @@ func ParseWidgetName(name string) (string, error) {
 }
 
 // WidgetRepository is a GORM-backed persistence.Repository for *Widget.
-type WidgetRepository struct{ db *gorm.DB }
+type WidgetRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewWidgetRepository creates a repository backed by db.
-func NewWidgetRepository(db *gorm.DB) *WidgetRepository {
-	return &WidgetRepository{db: db}
+func NewWidgetRepository(db *gorm.DB, opts ...persistence.RepoOption) *WidgetRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &WidgetRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *WidgetRepository) conn(ctx context.Context) *gorm.DB {
@@ -185,6 +189,9 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 }
 
 func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_Widget(entity)
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelWidgetOnCreate != nil {

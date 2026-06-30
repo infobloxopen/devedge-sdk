@@ -19,7 +19,7 @@ import (
 
 // NewFleetEntRepository wires the generated ent client into a
 // persistence.Repository[*Fleet, string].
-func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, string] {
+func NewFleetEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*Fleet, string] {
 	fleetClient := func(ctx context.Context) *ent.FleetClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -28,8 +28,12 @@ func NewFleetEntRepository(client *ent.Client) persistence.Repository[*Fleet, st
 		}
 		return client.Fleet
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*Fleet, string]{
 		Create_: func(ctx context.Context, entity *Fleet) (*Fleet, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID
