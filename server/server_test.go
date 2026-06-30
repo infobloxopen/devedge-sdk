@@ -1,9 +1,12 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -22,6 +25,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
 	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
+	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
 
@@ -279,6 +283,102 @@ func TestNew_PrincipalFunc_AuthorizesDocumentedGrant(t *testing.T) {
 	defer cancel2()
 	if err := conn.Invoke(denyCtx, probeMethod, &emptypb.Empty{}, &emptypb.Empty{}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied for unauthenticated caller, got %v", err)
+	}
+}
+
+// notFoundMethod is a public method whose handler returns a raw persistence
+// sentinel, used by the BC-04 access-log regression test.
+const notFoundMethod = "/test.v1.Svc/NotFound"
+
+// notFoundServiceDesc is a one-method gRPC service whose handler returns
+// persistence.ErrNotFound — a raw sentinel that ErrorMapperUnary maps to
+// codes.NotFound. It drives the BC-04 regression: the access log must record
+// the mapped client-visible code, not the raw sentinel (which status.Code()
+// reports as Unknown).
+var notFoundServiceDesc = grpc.ServiceDesc{
+	ServiceName: "test.v1.Svc",
+	HandlerType: (*any)(nil),
+	Methods: []grpc.MethodDesc{{
+		MethodName: "NotFound",
+		Handler: func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			in := new(emptypb.Empty)
+			if err := dec(in); err != nil {
+				return nil, err
+			}
+			h := func(ctx context.Context, req any) (any, error) { return nil, persistence.ErrNotFound }
+			if interceptor == nil {
+				return h(ctx, in)
+			}
+			return interceptor(ctx, in, &grpc.UnaryServerInfo{Server: srv, FullMethod: notFoundMethod}, h)
+		},
+	}},
+}
+
+// TestAccessLog_RecordsMappedCode_NotRawSentinel is the BC-04 regression guard
+// (devedge-sdk#134). When a handler returns a raw persistence sentinel, the
+// ErrorMapper interceptor remaps it to the canonical gRPC code the client sees
+// (NotFound). Before the fix, ErrorMapper was OUTER to LoggingUnary, so on the
+// error-return path the logging interceptor read status.Code(raw-sentinel) =
+// Unknown before the remap — the access log disagreed with the client and with
+// the RED metrics. With ErrorMapper now inner to Logging, the logged grpc.code
+// must equal the client-observed code.
+func TestAccessLog_RecordsMappedCode_NotRawSentinel(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	s, err := server.New(server.Config{
+		GRPCAddr: ":0",
+		Logger:   logger,
+		// Public so the request reaches the handler (we are testing the handler
+		// error path, not authz).
+		Rules: []authz.MethodRule{{Method: notFoundMethod, Public: true}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.GRPCServer().RegisterService(&notFoundServiceDesc, struct{}{})
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = s.GRPCServer().Serve(lis) }()
+	defer s.GRPCServer().Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	invokeErr := conn.Invoke(ctx, notFoundMethod, &emptypb.Empty{}, &emptypb.Empty{})
+
+	// The client must see the mapped code (proves ErrorMapper still maps).
+	if got := status.Code(invokeErr); got != codes.NotFound {
+		t.Fatalf("client code = %v, want NotFound (ErrorMapper must still map the sentinel)", got)
+	}
+
+	// The access log must record the SAME code the client saw, not Unknown.
+	var summary map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal slog record %q: %v", line, err)
+		}
+		if m["msg"] == "grpc request handled" {
+			summary = m
+		}
+	}
+	if summary == nil {
+		t.Fatalf("no access-log summary record found in:\n%s", buf.String())
+	}
+	if got := summary["grpc.code"]; got != codes.NotFound.String() {
+		t.Errorf("access-log grpc.code = %v, want %q (BC-04: must equal the client-visible code, not the raw-sentinel Unknown)", got, codes.NotFound.String())
 	}
 }
 
