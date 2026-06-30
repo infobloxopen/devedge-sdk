@@ -14,7 +14,16 @@ import (
 
 // renderTemplate executes the named template (under templates/) against m.
 func renderTemplate(name string, m *Model) ([]byte, error) {
-	t, err := template.New(name).Option("missingkey=error").ParseFS(templatesFS, "templates/"+name)
+	return renderTemplateDelims(name, "{{", "}}", m)
+}
+
+// renderTemplateDelims is renderTemplate with explicit action delimiters. The
+// GitHub Actions workflow template (image.yml) is rendered with "[[" / "]]" so the
+// workflow's own ${{ ... }} expressions and docker/metadata-action's {{ ... }}
+// placeholders pass through verbatim instead of being parsed as Go template
+// actions — only our [[ .Field ]] substitutions are evaluated.
+func renderTemplateDelims(name, left, right string, m *Model) ([]byte, error) {
+	t, err := template.New(name).Delims(left, right).Option("missingkey=error").ParseFS(templatesFS, "templates/"+name)
 	if err != nil {
 		return nil, fmt.Errorf("parse template %s: %w", name, err)
 	}
@@ -56,6 +65,11 @@ func renderTemplates(dir string, m *Model) error {
 		{"Makefile.tmpl", "Makefile", 0o644},
 		{"README.md.tmpl", "README.md", 0o644},
 		{"ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), 0o644},
+		// Container image: a distroless, static build + the GHCR publish workflow.
+		// Emitted for every service regardless of --deploy (the image is the unit
+		// of delivery; the k8s overlay references it and compose builds it).
+		{"Dockerfile.tmpl", "Dockerfile", 0o644},
+		{"dockerignore.tmpl", ".dockerignore", 0o644},
 	}
 	// The ent backend pins entc (entgo.io/ent/cmd/ent) via a build-tagged tools.go
 	// so `go mod tidy` keeps the entc-only deps for `go generate ./gen/ent`.
@@ -70,6 +84,16 @@ func renderTemplates(dir string, m *Model) error {
 		if err := writeFile(dir, o.rel, content, o.perm); err != nil {
 			return fmt.Errorf("write %s: %w", o.rel, err)
 		}
+	}
+	// The GHCR image-publish workflow is rendered with "[[" / "]]" delimiters so the
+	// workflow's GitHub Actions ${{ ... }} and docker/metadata-action {{ ... }} pass
+	// through untouched (see renderTemplateDelims).
+	imageWorkflow, err := renderTemplateDelims("image.yml.tmpl", "[[", "]]", m)
+	if err != nil {
+		return err
+	}
+	if err := writeFile(dir, filepath.Join(".github", "workflows", "image.yml"), imageWorkflow, 0o644); err != nil {
+		return fmt.Errorf("write .github/workflows/image.yml: %w", err)
 	}
 	if err := renderDeploy(dir, m); err != nil {
 		return err
