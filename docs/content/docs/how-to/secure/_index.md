@@ -5,9 +5,9 @@ sidebar:
   open: true
 ---
 
-The SDK's security surface: how to prove invariants in CI and how secret fields are handled end-to-end.
+This section covers the two parts of the SDK's security surface: verifying your authorization coverage in CI, and controlling how secret field values are stored, redacted, and transported. Use these guides when you need to confirm that your service enforces access control correctly or when you need to protect sensitive data in your domain model.
 
-For the conceptual overview of the security model see [Security Posture](../../explanation/security-posture/).
+For a conceptual overview of the security model, see [Security posture](../../explanation/security-posture/).
 
 {{< cards >}}
   {{< card link="security-check/" title="Security Check" icon="shield-check" subtitle="Prove authz completeness, unknown-principal denial, tenant isolation, and no-secret-leak in CI." >}}

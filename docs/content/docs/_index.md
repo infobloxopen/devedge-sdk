@@ -4,36 +4,41 @@ next: getting-started
 weight: 1
 ---
 
-Welcome to the **devedge-sdk** documentation.
+**devedge-sdk** is the runtime library that production Infoblox services import. It gives you a
+gRPC/HTTP service with authorization, tenant isolation, persistence, and observability
+already wired — so you write business logic, not plumbing.
 
-devedge-sdk is the runtime library that production Infoblox services import. It is the
-companion to [devedge](https://github.com/infobloxopen/devedge) (the local dev edge /
-deployment substrate): devedge is **dev- and deploy-time** tooling; devedge-sdk is the
-**runtime library**.
+devedge-sdk is the companion to [devedge](https://github.com/infobloxopen/devedge), the
+local dev and deployment tooling. devedge handles dev- and deploy-time concerns;
+devedge-sdk is the runtime library your service binary imports.
 
-## What it gives you
+## What the SDK provides
 
-- **A running, AIP-correct service from one proto.** `server.New` assembles a gRPC server plus an
-  optional HTTP/JSON gateway with the framework interceptor chain wired (request-ID → error mapper →
-  tenant-ID → fail-closed authz → field-mask → ETag/412 → read-mask → validate-only → dedup) and the
-  Google-AIP semantics that go with it: field-mask `PATCH`, ETag/412 concurrency, pagination,
-  filtering, soft-delete, batch, request de-duplication, and long-running operations.
-- **Secure by default, provable in CI.** Authorization is fail-closed — `(infoblox.authz.v1.rule)`
-  declares each method's requirement and the service refuses to boot if any served method is
-  undeclared; every query is tenant-scoped by `account-id`; secret-annotated fields
-  (`(infoblox.field.v1.opts).secret`) are encrypted at rest and never returned. The `seccheck`
-  package proves authz completeness, unknown-principal denial, cross-account isolation, clean error
-  messages, and no-secret-leak — all in CI.
-- **Pluggable seams with dev defaults.** Persistence (a neutral `Repository[T,K]` seam: in-memory dev
-  store → generated GORM/ent shapes), transactions and DDD **aggregates**, domain **events** (a
-  transactional outbox with an in-memory bus → Kafka), the authz decision point, and the secret
-  encryptor each ship a dev-suitable default and swap for a production backend **without changing
-  service code**.
-- **Operational foundation included.** Observability (OTel traces + metrics + logs), health/readiness
-  probes, resilience interceptors (timeouts, rate limiting, circuit breaker), configuration, and
-  deployment artifacts (Kubernetes + Docker Compose) — all wired by the scaffold, zero hand-authoring.
+- **A service from one proto.** `server.New` assembles a gRPC server and an optional
+  HTTP/JSON gateway, AIP-correct by default. It wires the full interceptor chain
+  (request-ID → error mapper → tenant-ID → fail-closed authz → field-mask → ETag/412 →
+  read-mask → validate-only → dedup) and the Google-AIP semantics that go with it:
+  field-mask `PATCH`, ETag/412 concurrency, pagination, filtering, soft-delete, batch,
+  request de-duplication, and long-running operations.
+- **Fail-closed authorization.** The SDK is secure by default, and the security
+  invariants are provable in CI. `(infoblox.authz.v1.rule)` declares each method's
+  requirement. The service refuses to start if any served method is undeclared. Every
+  query is scoped to the caller's `account-id`. Fields annotated with
+  `(infoblox.field.v1.opts).secret` are encrypted at rest and never returned in
+  responses. The `seccheck` package verifies authz completeness, unknown-principal
+  denial, cross-account isolation, clean error messages, and no secret leak — all in CI.
+- **Swappable backends.** Each integration point ships a usable dev default, not just a
+  swap point, and accepts a production backend without requiring changes to service code.
+  The integration points are: persistence (a `Repository[T,K]` seam, with an in-memory
+  store and generated GORM/ent adapters), transactions and DDD aggregates, domain events
+  (a transactional outbox backed by an in-memory bus or Kafka), the authz decision point,
+  and the secret encryptor.
+- **Operational foundation.** The operational foundation is included: the scaffold wires
+  observability (OTel traces, metrics, and logs), health and readiness probes, resilience
+  interceptors (timeouts, rate limiting, and circuit breaker), configuration, and
+  deployment artifacts (Kubernetes and Docker Compose), with no hand-authoring required.
 
-## Documentation funnel
+## Documentation sections
 
 {{< cards >}}
   {{< card link="getting-started/" title="Getting Started" icon="play" subtitle="Install the SDK and stand up a running, fail-closed service in five minutes." >}}

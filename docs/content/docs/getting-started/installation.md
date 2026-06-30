@@ -3,6 +3,10 @@ title: Installation
 weight: 1
 ---
 
+devedge-sdk is a Go module that provides the server, authz, persistence, and secret packages
+your service builds on. This page walks you through adding the module to a Go project and
+installing the optional code-generation tools. Follow it before the [Quickstart](../quickstart/).
+
 ## Prerequisites
 
 devedge-sdk is a Go module. To build a service with it you need:
@@ -56,16 +60,17 @@ import (
 ```
 
 The core packages depend only on the standard library plus gRPC and protobuf. The SDK has
-**no ORM dependency** and **no policy-engine dependency** — those live in adapters built *on*
-the SDK, or in the generated storage code's own module (so `gorm.io/gorm` never enters the
-SDK's `go.mod`).
+**no ORM dependency** and **no policy-engine dependency** — those live in adapters built on the
+SDK, or in the generated storage code's own module, so `gorm.io/gorm` never enters the SDK's
+`go.mod`.
 
-## Install the scaffold CLI (recommended)
+## Scaffold CLI
 
-The fastest way to start is the `devedge-sdk` CLI. It scaffolds a complete, building, authz-gated,
-persisted service in one command — declaring the **public API surface** as an [`apx`](https://github.com/infobloxopen/apx)
-`app` module and generating the **internal models** locally with the SDK plugins (which it installs and
-invokes for you):
+The fastest way to start is the `devedge-sdk` CLI, the recommended path over installing the
+plugins by hand. It scaffolds a complete, building, authz-gated, persisted service in one command.
+It declares the public API surface as an [`apx`](https://github.com/infobloxopen/apx) `app` module,
+generates the internal models locally with the SDK plugins, and installs and invokes those plugins
+for you:
 
 ```bash
 go install github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk@latest
@@ -78,7 +83,7 @@ smoke test, then runs the first `buf generate`. See the [Quickstart](../quicksta
 The manual plugin install below is what the CLI does under the hood — useful when wiring an existing repo
 by hand (see [Define a service](../../how-to/model-and-persist/define-a-service/)).
 
-## Install the codegen plugins
+## Codegen plugins
 
 The codegen plugins are `main` packages under the SDK repo. Install them onto your `PATH` so
 `buf generate` can invoke them:
@@ -111,8 +116,10 @@ Its `google/api/*.proto` imports (`annotations.proto`, `http.proto`) come from t
 
 ## Verify
 
-`go list -m` only works **inside a module** — run it from a directory with a `go.mod` (or create one
-first with `go mod init`), otherwise it fails with `go: cannot find main module`:
+{{< callout type="info" >}}
+**`go list -m` only works inside a module.** Run it from a directory with a `go.mod`, or create one
+first with `go mod init`. Outside a module it fails with `go: cannot find main module`.
+{{< /callout >}}
 
 ```bash
 # In a module (or: `go mod init example.com/scratch` in an empty dir first):

@@ -5,9 +5,9 @@ aliases:
   - /docs/guides/resilience/
 ---
 
-The SDK ships three resilience policy interceptors — request timeouts, rate limiting, and a
-circuit-breaker seam — all inserted into the default unary chain. Concrete algorithms sit behind
-interfaces so you can swap implementations (or turn them off) without changing core.
+The SDK provides three resilience interceptors — request timeouts, rate limiting, and circuit breaking — inserted at fixed positions in the default gRPC unary interceptor chain. Each policy sits behind an interface so you can supply your own implementation or turn the policy off without touching other parts of the server configuration.
+
+Use this page when you need to tune how your service handles slow handlers, excessive inbound load, or cascading failures from downstream dependencies.
 
 ## Defaults
 
@@ -19,8 +19,7 @@ interfaces so you can swap implementations (or turn them off) without changing c
 
 ## Request timeout
 
-Every unary handler is bounded by a context deadline. The default is 30 seconds. A handler that
-exceeds the deadline receives `codes.DeadlineExceeded`; the client sees it immediately.
+Every unary handler runs under a context deadline. The default is 30 seconds. A handler that exceeds the deadline receives `codes.DeadlineExceeded`; the client sees the error immediately.
 
 ```go
 import (
@@ -51,20 +50,19 @@ Resilience: server.ResilienceConfig{
 },
 ```
 
-> **Note:** LRO operations return quickly (they hand off to a background goroutine and return an
-> Operation immediately), so the default 30 s timeout is safe for them.
+{{< callout type="info" >}}
+**LRO (long-running operation) handlers are safe under the default 30-second timeout.** LRO handlers return quickly — they hand off to a background goroutine and return an `Operation` immediately — so the 30-second deadline is not a concern for them.
+{{< /callout >}}
 
-Handlers that run long should respect `ctx.Done()` for clean early exit — which they must already
-do for tracing, deduplication, and LRO cancellation.
+Handlers that run for a long time should respect `ctx.Done()` for clean early exit, which is also required for tracing, deduplication, and LRO cancellation.
 
 ## Rate limiting
 
-Rate limiting is **opt-in**. Set `RateLimiter` to any `resilience.RateLimiter` implementation.
-The interceptor is inserted **before authz** to shed load as early as possible.
+Rate limiting is **opt-in**. Set `RateLimiter` to any `resilience.RateLimiter` implementation. The interceptor runs **before authz**, so it sheds load as early as possible in the chain.
 
 ### Built-in token bucket
 
-The SDK ships a stdlib token bucket (no extra dependencies):
+The SDK includes a token-bucket implementation that uses only the standard library:
 
 ```go
 import "github.com/infobloxopen/devedge-sdk/resilience"
@@ -78,7 +76,7 @@ srv, err := server.New(server.Config{
 })
 ```
 
-### Custom / distributed limiter
+### Custom or distributed limiter
 
 Implement the `RateLimiter` interface to use Redis, a service mesh policy, or any other backend:
 
@@ -107,12 +105,11 @@ srv, err := server.New(server.Config{
 })
 ```
 
-Swapping the limiter requires no change to core — only a config field assignment.
+Swapping in a different limiter requires no change to the core — you assign a different value to the `RateLimiter` config field and nothing else.
 
 ## Circuit breaker
 
-The SDK ships the `CircuitBreaker` interface and `BreakerUnary` interceptor; **no concrete breaker
-library is baked in**. Choose any library and wrap it behind the interface.
+The SDK defines the `CircuitBreaker` interface and the `BreakerUnary` interceptor. No concrete circuit-breaker library is included. You choose a library and wrap it behind the interface.
 
 ### Interface
 
@@ -124,8 +121,7 @@ type CircuitBreaker interface {
 
 ### Example: sony/gobreaker
 
-`sony/gobreaker` is a popular, well-maintained circuit-breaker library. The SDK does not depend on
-it; add it to your service:
+`sony/gobreaker` is a widely used circuit-breaker library. Add it to your service:
 
 ```sh
 go get github.com/sony/gobreaker
@@ -169,13 +165,11 @@ srv, err := server.New(server.Config{
 })
 ```
 
-The breaker is inserted **just outside the handler** (innermost framework position, after all other
-framework interceptors). When the circuit opens, it returns an error without calling the handler.
+The breaker interceptor runs at the innermost framework position, just outside the handler and after all other framework interceptors. When the circuit is open, the interceptor returns an error without calling the handler.
 
 ### Mapping open-circuit errors to gRPC codes
 
-When the circuit opens, `Execute` returns an error. Wrap it in the appropriate gRPC status before
-returning from your adapter so clients receive a meaningful code:
+When the circuit is open, `Execute` returns an error. Wrap it in the appropriate gRPC status before returning from your adapter so clients receive a meaningful code:
 
 ```go
 func (a *gobreakerAdapter) Execute(ctx context.Context, fn func() (any, error)) (any, error) {
@@ -187,9 +181,9 @@ func (a *gobreakerAdapter) Execute(ctx context.Context, fn func() (any, error)) 
 }
 ```
 
-## Chain placement summary
+## Chain placement
 
-The resilience interceptors are inserted at fixed positions in the default chain:
+The resilience interceptors occupy fixed positions in the default unary chain:
 
 ```
 RequestIDUnary

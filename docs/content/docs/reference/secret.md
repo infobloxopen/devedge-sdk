@@ -7,11 +7,15 @@ weight: 3
 import "github.com/infobloxopen/devedge-sdk/secret"
 ```
 
-Package `secret` provides encrypt, decrypt, and hash operations for secret fields. It is the seam
-behind the `(infoblox.field.v1.opts).secret` annotation: generated storage code calls an
-`Encryptor` to hash and encrypt secret fields and never stores plaintext.
+Package `secret` provides encrypt, decrypt, and hash operations for secret fields. It implements
+the `Encryptor` interface that generated storage code calls when a proto field carries the
+`(infoblox.field.v1.opts).secret` annotation. The generated storage code calls the `Encryptor` to
+hash and encrypt those fields and never stores their plaintext. Use this package when you need to
+supply or swap the encryption backend for a service that stores secret fields.
 
 ## Encryptor
+
+`Encryptor` is the interface that both built-in backends implement.
 
 ```go
 type Encryptor interface {
@@ -21,47 +25,53 @@ type Encryptor interface {
 }
 ```
 
-Three operations:
+The three methods serve distinct storage roles:
 
-- **`Encrypt` / `Decrypt`** — recoverable, for storing and retrieving the value (the `_cipher`
-  column).
-- **`Hash`** — deterministic and one-way, for indexed lookups by value (the `_hash` column). The
-  same plaintext always yields the same hash, so `LookupBy<Field>Hash` can find a record without
-  the plaintext.
+- **`Encrypt` / `Decrypt`** — reversible operations that write and read the `<field>_cipher` column.
+- **`Hash`** — a deterministic one-way operation that writes the `<field>_hash` column. Because the
+  same plaintext always produces the same hash, `LookupBy<Field>Hash` can locate a record without
+  decrypting it.
 
-Both shipped implementations satisfy this interface, so they are interchangeable with no other
-code change.
+Both built-in implementations satisfy `Encryptor`, so you can swap backends without changing any
+other code.
 
-## NewDev — AES-256-GCM (development)
+## NewDev
 
 ```go
 func NewDev(key []byte) Encryptor
 ```
-Returns a dev-suitable `Encryptor` using **AES-256-GCM** for encrypt/decrypt and **HMAC-SHA256**
-for hash. **Panics if `len(key) < 32`** (the key is truncated/copied to 32 bytes). The key lives
-in process — fine for local dev and tests, **not** for production.
+
+Returns an `Encryptor` that uses AES-256-GCM for encrypt/decrypt and HMAC-SHA256 for hash. The key
+is held in process memory and is copied to exactly 32 bytes: if you pass a longer key, only the
+first 32 bytes are used.
+
+{{< callout type="warning" >}}
+**Do not use `NewDev` in production.** Use `NewVaultTransit` instead. `NewDev` panics if
+`len(key) < 32`.
+{{< /callout >}}
 
 ```go
 enc := secret.NewDev(devKey) // devKey must be >= 32 bytes
 ```
 
-Implementation notes: `Encrypt` generates a fresh random GCM nonce per call and prepends it to the
-ciphertext, base64-encoding the result; `Decrypt` reverses it; `Hash` is `base64(HMAC-SHA256(key,
-plaintext))`.
+**How it works:** `Encrypt` generates a fresh random GCM nonce on each call and prepends it to the
+ciphertext, then base64-encodes the result. `Decrypt` reverses that process. `Hash` returns
+`base64(HMAC-SHA256(key, plaintext))`.
 
-## NewVaultTransit — HashiCorp Vault (production)
+## NewVaultTransit
 
 ```go
 func NewVaultTransit(addr, token, keyName string) *VaultTransitEncryptor
 ```
-Returns an `Encryptor` backed by Vault's Transit Secrets Engine over plain HTTP — **no Vault SDK
-dependency**.
 
-| Arg | Meaning |
+Returns an `Encryptor` backed by HashiCorp Vault's Transit Secrets Engine. Use this backend in
+production. The implementation uses plain HTTP with no Vault SDK dependency.
+
+| Parameter | Description |
 |---|---|
 | `addr` | Vault server address, e.g. `http://localhost:8200` |
-| `token` | a Vault token with encrypt/decrypt policy on `keyName` |
-| `keyName` | the Transit key name — **must already exist** in Vault |
+| `token` | A Vault token with encrypt/decrypt policy on `keyName` |
+| `keyName` | The Transit key name — must already exist in Vault |
 
 ```go
 type VaultTransitEncryptor struct { /* unexported */ }
@@ -72,26 +82,28 @@ func (v *VaultTransitEncryptor) Hash(ctx context.Context, plaintext string) (str
 func (v *VaultTransitEncryptor) Rewrap(ctx context.Context, ciphertext string) (string, error)
 ```
 
-- `Encrypt` → `POST /v1/transit/encrypt/<keyName>`; `Decrypt` → `POST /v1/transit/decrypt/<keyName>`.
-- `Hash` is computed **locally** (HMAC-SHA256 keyed on `sha256(token)`) so lookups need no Vault
-  round-trip and stay deterministic.
-- `Rewrap` (`POST /v1/transit/rewrap/<keyName>`) re-encrypts existing ciphertext under the latest
-  key version **without revealing plaintext** — use it for key rotation.
+- **`Encrypt`** calls `POST /v1/transit/encrypt/<keyName>`.
+- **`Decrypt`** calls `POST /v1/transit/decrypt/<keyName>`.
+- **`Hash`** runs locally as `HMAC-SHA256` keyed on `sha256(token)`, so hash lookups require no
+  Vault round-trip and remain deterministic.
+- **`Rewrap`** calls `POST /v1/transit/rewrap/<keyName>` to re-encrypt existing ciphertext under
+  the latest key version without exposing the plaintext. Use this during key rotation.
 
-Each request sets `X-Vault-Token` and `Content-Type: application/json`; a non-200 response becomes
-an error carrying Vault's status and body.
+Each request sets `X-Vault-Token` and `Content-Type: application/json`. A non-200 response becomes
+an error that carries Vault's status code and response body.
 
-See the [Secret Fields guide](../../how-to/secure/secret-fields/) for engine setup and policy.
+See the [Secret Fields guide](../../how-to/secure/secret-fields/) for Vault engine setup and policy
+configuration.
 
-## How storage uses it
+## Storage integration
 
 `protoc-gen-storage` emits `<field>_hash` and `<field>_cipher` columns for each secret field and
-calls the `Encryptor` in `Create`/`Update`:
+calls the `Encryptor` in `Create` and `Update`:
 
 ```go
 h, _ := enc.Hash(ctx, entity.KeyValue)    // → KeyValueHash  (indexed, for lookup)
 c, _ := enc.Encrypt(ctx, entity.KeyValue) // → KeyValueCipher (recoverable)
 ```
 
-The `Repository` constructor takes the `Encryptor` when the message has secret fields. See
+The `Repository` constructor accepts the `Encryptor` when the message has secret fields. See
 [Secret fields](../../how-to/model-and-persist/model-a-resource/#secret-fields).

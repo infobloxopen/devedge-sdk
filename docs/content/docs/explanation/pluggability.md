@@ -3,55 +3,60 @@ title: Pluggability Model
 weight: 2
 ---
 
-devedge-sdk is structured around a single architectural principle: **the core is dep-light; every
-heavy dependency lives in a clearly separated adapter.** This is the pluggability model. It is what
-allows the SDK to instrument freely, ship dev defaults for every concern, and let services swap
-production backends without changing service code.
+The pluggability model is the way devedge-sdk separates a lightweight core from
+optional, heavy-dependency adapters. The core packages — `server`, `middleware`,
+`persistence`, `config`, `health`, `resilience` — depend only on the Go standard
+library plus gRPC/protobuf. Every heavy dependency (ORM, policy engine, secret
+manager, Kafka client, OTel SDK) lives in a clearly separated adapter sub-package.
+Use this page to understand how the core and adapter layers fit together and what
+that means when you add a new backend to your service.
 
-## The dep-light core
+## Core packages
 
-The core packages (`server`, `middleware`, `persistence`, `config`, `health`, `resilience`, …) depend
-only on the **Go standard library plus gRPC/protobuf**. No ORM, no policy engine, no Vault SDK,
-no Kafka client, no OTel SDK enters the core's dependency closure. This is enforced by CI guard
-tests (`go list -deps ./server | grep gorm` must be empty, and so on).
+The core packages import only the **Go standard library plus gRPC/protobuf**. No ORM, no
+policy engine, no Vault SDK, no Kafka client, and no OTel SDK enters the core's dependency
+closure. CI guard tests enforce this boundary — for example, `go list -deps ./server | grep gorm`
+must be empty.
 
-The benefit: when you import `server` or `middleware`, you do not pull in any of those heavy
-transitive dependencies. The service's `go.sum` stays lean; compile times stay fast; no version
-conflicts arise from indirect ORM or policy-engine imports.
+This means that when you import `server` or `middleware`, you do not pull in any of those heavy
+transitive dependencies. Your service's `go.sum` stays lean, compile times stay fast, and no
+version conflicts arise from indirect ORM or policy-engine imports.
 
 ## Seams and adapters
 
-Every pluggable concern follows the same shape:
+Every pluggable concern follows the same three-part shape:
 
-1. **A narrow interface in core.** For example, `persistence.Repository[T,K]`, `secret.Encryptor`,
-   `authz.Authorizer`, `health.Check`, `resilience.CircuitBreaker`.
-2. **A dev-suitable default in core (or a nearby package).** `persistence.MemoryRepository`,
-   `secret.NewDev`, `authz.NewDevAuthorizer` — all run in-process, zero external services.
-3. **A production adapter in a sub-package.** `secret/vault` (Vault Transit), `events/kafkabus`
-   (Kafka), `observability/otel` (OTel SDK + exporters). These are the **only** packages that
-   import the heavy dependency.
+1. **A narrow interface in core** — for example, `persistence.Repository[T,K]`,
+   `secret.Encryptor`, `authz.Authorizer`, `health.Check`, `resilience.CircuitBreaker`.
+2. **A development-suitable default in core (or a nearby package)** — for example,
+   `persistence.MemoryRepository`, `secret.NewDev`, `authz.NewDevAuthorizer`. These run
+   in-process with no external services required.
+3. **A production adapter in a sub-package** — for example, `secret/vault` (Vault Transit),
+   `events/kafkabus` (Kafka), `observability/otel` (OTel SDK and exporters). These are the only
+   packages that import the heavy dependency.
 
-A service starts with the dev default. When ready, it imports the adapter sub-package, passes the
-adapter to the same constructor, and ships. Nothing else changes.
+A service starts with the development default. When ready for production, you import the adapter
+sub-package, pass the adapter to the same constructor, and ship. Nothing else in the service
+changes.
 
-## Observability as a worked example
+## Observability
 
-The OTel seam illustrates this most clearly:
+The OTel seam illustrates the pattern:
 
 - **Core imports the OTel API** (`go.opentelemetry.io/otel`, `…/trace`, `…/metric`,
   `…/propagation`). The API is itself a vendor-neutral, pluggable no-op by default — instrumentation
   in core costs nothing until an SDK is installed.
-- **`observability/otel` is the only package that imports the OTel SDK + exporters.** It installs
+- **`observability/otel` is the only package that imports the OTel SDK and exporters.** It installs
   the global `TracerProvider`/`MeterProvider` and the W3C propagator. This is the same pattern as
   `events/kafkabus` being the only package that imports the Kafka client.
 - **Calling `otel.Setup` is the only opt-in step.** Without it, everything is inert: no-op
   providers, no propagator, zero overhead. With it, every span, metric, and log correlation that
   core already emits flows to the configured backend.
 
-This means a future Prometheus-pull exporter, or a different tracing backend, slots in as an
-**additional adapter** with no change to core.
+A future Prometheus-pull exporter or a different tracing backend slots in as an additional adapter
+with no change to core.
 
-## Persistence as a worked example
+## Persistence
 
 The persistence seam exposes `Repository[T,K]`:
 
@@ -65,7 +70,9 @@ hand-written Repository        — any other backend (sqlc, DynamoDB, …)
 Service code only depends on `persistence.Repository[T,K]`. The backend is a constructor argument.
 `server.New` does not know or care which adapter was passed.
 
-## Authz as a worked example
+## Authorization
+
+Authorization (authz) follows the same shape:
 
 ```
 authz.NewDevAuthorizer(grants)  — in-process, grants-based dev default
@@ -73,13 +80,15 @@ opa.NewAuthorizer(…)            — OPA sidecar adapter (in the private intern
 cedar.NewAuthorizer(…)          — Cedar adapter (future)
 ```
 
-`server.Config.Authorizer` is typed `authz.Authorizer`. The fail-closed property is in the
-interceptor, not in the adapter — both dev and OPA adapters deny undeclared methods by the same
-boot-gate check.
+`server.Config.Authorizer` is typed `authz.Authorizer`. The fail-closed property lives in the
+interceptor, not in the adapter — both the development and OPA adapters deny undeclared methods by
+the same boot-gate check.
 
-## The dep-light guarantee in practice
+## Dependency boundary reference
 
-| Package | What it imports | What it does NOT import |
+The table below summarizes what each package imports and what it keeps out.
+
+| Package | What it imports | What it does not import |
 |---|---|---|
 | `server`, `middleware` | stdlib, gRPC, OTel API | ORM, policy engine, Vault, Kafka |
 | `config` | stdlib only | koanf (opt-in via `config/koanf`) |
@@ -87,18 +96,20 @@ boot-gate check.
 | `observability/otel` | OTel SDK + OTLP exporter | nothing extra; this IS the heavy package |
 | `events/kafkabus` | Kafka client | nothing extra; this IS the heavy package |
 
-CI enforces this: any PR that adds a transitive ORM import to `server` or `middleware` fails the
-guard test.
+{{< callout type="warning" >}}
+**Any PR that adds a transitive ORM import to `server` or `middleware` fails the CI guard test.**
+Check the guard output before merging if you add a new dependency to either package.
+{{< /callout >}}
 
-## What this means for you
+## Working with adapters
 
-- **Scaffold a service with the dev defaults.** Everything works in-process; no external services
-  needed to run or test the service locally.
-- **Swap adapters at the edge, not in the service.** When you want Vault for secret fields, import
-  `secret` and pass `secret.NewVaultTransit(…)` to the repository constructor. The handler and
-  the repository interface are unchanged.
-- **Add a new backend without touching core.** A third-party team can ship a new authz adapter or
-  a new storage adapter as a separate module. The core never changes; the seam is stable.
+- **Scaffold with the development defaults.** Everything works in-process; no external services are
+  needed to run or test your service locally.
+- **Swap adapters at the service boundary, not inside service code.** When you want Vault for secret
+  fields, import `secret` and pass `secret.NewVaultTransit(…)` to the repository constructor. The
+  handler and the repository interface stay unchanged.
+- **Add a new backend without touching core.** A third-party team can ship a new authz adapter or a
+  new storage adapter as a separate module. The core never changes; the seam is stable.
 
 See [Architecture](../../concepts/architecture/) for the full interceptor chain, and the
 [How-to Guides](../../how-to/) for the practical steps in each area.

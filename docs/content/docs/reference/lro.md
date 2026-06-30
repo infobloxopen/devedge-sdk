@@ -7,15 +7,15 @@ weight: 7
 import "github.com/infobloxopen/devedge-sdk/lro"
 ```
 
-Package `lro` implements the **AIP-151 long-running operation** pattern: a server-side primitive for
-work that outlives a single request (exports, imports, migrations). A handler starts the work, gets
-back an `Operation` immediately with `Done=false`, and the client polls until it completes.
+Package `lro` implements the [AIP-151](https://google.aip.dev/151) long-running operation (LRO) pattern. It gives you a server-side store and manager for work that outlives a single request — exports, imports, migrations, and similar jobs. A handler starts the work and immediately returns an `Operation` with `Done=false`; the client polls until the operation completes.
 
-`lro` is a **runtime helper, not a codegen surface** — there is no proto annotation that turns an RPC
-into an LRO. You start async work from inside an ordinary handler with a `Manager`, and you expose
-the operation lifecycle (get / list / cancel) through RPCs you declare yourself (a
-`google.longrunning.Operations`-style service, or your own). The server holds the store for you; the
-wiring of operation-facing RPCs is the consumer's.
+Use `lro` when an RPC handler needs to start asynchronous work and let the client track progress separately. The server holds the LRO store for you; wiring the operation-facing RPCs is your responsibility.
+
+`lro` is a runtime helper, not a codegen surface: there is no proto annotation that turns an RPC into an LRO. You start async work from inside an ordinary handler with a `Manager`, and you expose the operation lifecycle (get, list, cancel) through RPCs you declare yourself.
+
+{{< callout type="info" >}}
+**The SDK provides the operation engine, not a generated API.** `lro` ships the `Manager`, `Store`, `Operation`, and cancellation primitives. To expose operations over gRPC and the HTTP gateway, declare `GetOperation`, `ListOperations`, and `CancelOperation` RPCs that map to `Manager.Store()` and `Manager.Cancel()`, and a proto `Operation` message that you map to and from `lro.Operation`. [AIP-151's `google.longrunning.Operations`](https://google.aip.dev/151) is the canonical shape to model them on.
+{{< /callout >}}
 
 ## Types
 
@@ -62,11 +62,9 @@ var ErrAlreadyDone // Cancel on a completed operation
 var ErrCancelled   // set as Operation.Err when cancelled before completion
 ```
 
-## Starting async work from a handler
+## Starting async work
 
-`Manager.Submit` records a pending operation and runs `fn` on a **background-derived context** (so
-the work outlives the gRPC call per AIP-151) that `Manager.Cancel` can still cancel. It returns the
-pending `Operation` immediately:
+`Manager.Submit` records a pending operation and runs `fn` on a background-derived context, so the work outlives the gRPC call as AIP-151 requires. The background context remains cancellable via `Manager.Cancel`. `Submit` returns the pending `Operation` immediately:
 
 ```go
 type exportServer struct {
@@ -87,10 +85,11 @@ func (s *exportServer) CreateExport(ctx context.Context, req *pb.CreateExportReq
 }
 ```
 
-If `fn` returns a value it lands in `Operation.Response`; if it returns an error, in `Operation.Err`.
-`MemoryStore.Update` is idempotent, so a cancelled operation is not overwritten by a late completion.
+When `fn` returns a value, it lands in `Operation.Response`. When `fn` returns an error, it lands in `Operation.Err`. `MemoryStore.Update` is idempotent, so a cancelled operation is not overwritten by a late completion.
 
-## Polling, waiting, and cancelling
+## Polling and cancelling
+
+Three operations cover an operation's lifecycle: `WaitOperation` blocks until the operation is done, `store.Get` reads its current status once, and `mgr.Cancel` stops it.
 
 ```go
 // Block until done (or ctx deadline). poll defaults to 100ms when <= 0.
@@ -103,9 +102,9 @@ op, err := store.Get(ctx, name) // lro.ErrNotFound if unknown/expired
 err := mgr.Cancel(ctx, name)    // lro.ErrAlreadyDone if it already completed
 ```
 
-## Wiring the store on the server
+## Store configuration
 
-`server.New` provides a store so you don't have to construct one for the common case:
+`server.New` provides a default store so you do not need to construct one for the common case:
 
 ```go
 srv, _ := server.New(server.Config{
@@ -117,13 +116,4 @@ store := srv.LROStore()       // the configured store
 mgr := lro.NewManager(store)  // build a Manager over it for your handlers
 ```
 
-The default `LROStore` is `lro.NewMemoryStore(1h)` — completed operations are purged an hour after
-they finish. Swap in a persistent `Store` implementation for operations that must survive a restart.
-
-{{< callout type="info" >}}
-**Scope.** The SDK ships the operation *engine* (Manager / Store / Operation / cancellation), not a
-generated Operations API. To expose operations over gRPC + the HTTP gateway, declare `GetOperation`,
-`ListOperations`, and `CancelOperation` RPCs (mapping to `Manager.Store()` / `Manager.Cancel`) and a
-proto `Operation` message you map to/from `lro.Operation`. AIP-151's `google.longrunning.Operations`
-is the canonical shape to model them on.
-{{< /callout >}}
+The default `LROStore` is `lro.NewMemoryStore(1h)`: completed operations are purged one hour after they finish. Swap in a persistent `Store` implementation for operations that must survive a process restart.

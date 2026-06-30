@@ -3,27 +3,26 @@ title: Tenant Isolation
 weight: 3
 ---
 
-Infoblox services are multi-tenant: many accounts share one deployment, and a resource created
-by one account must be **invisible** to every other. devedge-sdk enforces this at the storage
-layer, not in handler code — so it cannot be forgotten.
+Infoblox services are multi-tenant: many accounts share a single deployment. Tenant isolation is the guarantee that a resource created by one account is never visible to another account. devedge-sdk enforces this guarantee at the storage layer — in generated repository code — rather than in handler code, so it cannot be omitted by accident.
 
-## The tenant flows from metadata to the query
+Use this page when you need to understand how the SDK enforces data separation, what each storage backend does to scope queries, and how to verify isolation in a test.
 
-1. An incoming request carries the tenant in the gRPC metadata key **`account-id`**.
-2. The **`TenantIDUnary`** interceptor reads it onto `ctx`:
+## Tenant propagation
 
-   ```go
-   func TenantIDFromContext(ctx context.Context) string // returns "" if absent
-   func WithTenantID(ctx context.Context, tenantID string) context.Context // tests / non-gRPC paths
-   ```
+An incoming gRPC request carries the tenant identifier in the metadata key `account-id`. The `TenantIDUnary` interceptor reads that value and stores it on the request context. Generated repositories then read it from the context before executing any query.
 
-3. Generated repositories read `middleware.TenantIDFromContext(ctx)` and **scope every query**
-   by it. The tenant is never passed as a handler argument; it travels on the context.
+The relevant context functions are:
 
-## GORM shape — scoped WHERE clauses
+```go
+func TenantIDFromContext(ctx context.Context) string // returns "" if absent
+func WithTenantID(ctx context.Context, tenantID string) context.Context // tests / non-gRPC paths
+```
 
-When a message has an `account_id` field, `protoc-gen-storage` adds an `account_id = ?` clause to
-every read, update, and delete. The generated `Get` looks like:
+The tenant identifier is never passed as a handler argument. It travels on the context from the interceptor to the repository.
+
+## GORM scoping
+
+When a protobuf message has an `account_id` field, `protoc-gen-storage` adds an `account_id = ?` clause to every read, update, and delete query. The generated `Get` method illustrates the pattern:
 
 ```go
 func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error) {
@@ -43,46 +42,32 @@ func (r *APIKeyRepository) Get(ctx context.Context, key string) (*APIKey, error)
 }
 ```
 
-The same scoping is applied in `List`, `Update`, `Delete`, and the generated
-`LookupBy<Field>Hash` methods. A cross-tenant read therefore returns `ErrNotFound` — the
-resource simply does not exist *for that tenant* — rather than a permission error that would leak
-its existence.
+The same scoping applies in `List`, `Update`, `Delete`, and the generated `LookupBy<Field>Hash` methods. A cross-tenant read returns `ErrNotFound` rather than a permission error. This hides the existence of the resource from the requesting tenant.
 
-## Two layers: which status a caller actually sees
+## Authorization and scoping layers
 
-The NotFound behavior above is the **repository** layer. End to end, two layers act in order, and
-**authz runs first**:
+Two layers act in sequence on every request. The caller's final status depends on which layer rejects the request.
 
-1. **Authz (per-tenant grant).** `grpcauthz` checks the request's principal — derived from the same
-   `account-id` metadata — against the authorizer's grants. A tenant with **no grant** for the
-   resource type is denied with `PermissionDenied` (**HTTP 403**) *before* the handler or repository
-   runs. With the single-tenant dev grant most examples use (`{Tenant: "alice", …}`), a request as
-   `account-id: bob` matches no grant and is **403**, regardless of who owns the resource.
-2. **Repository (tenant scoping).** Only once a request *is* authorized for the resource type does it
-   reach the tenant-scoped query, where reading another tenant's specific resource returns
-   `NotFound` (**HTTP 404**) — the existence-hiding behavior above.
+1. **Authorization (per-tenant grant).** `grpcauthz` checks the request's principal — derived from the same `account-id` metadata — against the authorizer's grants. A tenant with no grant for the resource type receives `PermissionDenied` (HTTP 403) before the handler or repository runs. With a single-tenant dev grant such as `{Tenant: "alice", …}`, a request carrying `account-id: bob` matches no grant and is rejected with 403, regardless of who owns the resource.
+2. **Repository (tenant scoping).** Once a request is authorized for the resource type, it reaches the tenant-scoped query. Reading another tenant's specific resource returns `NotFound` (HTTP 404), hiding that the resource exists.
 
-So the "→ NotFound" guarantee is what a caller sees when it is **authorized for the resource type
-but does not own the specific resource** (e.g. two tenants both granted `read api_keys`). A caller
-with no grant at all sees **403**, not 404. To observe the 404 isolation path end to end, grant both
-tenants the verb/resource and let the repository hide the row; `seccheck.AssertCrossAccountIsolation`
-exercises the repository layer directly, which is why it asserts NotFound.
+The 404 response therefore applies only when a caller is authorized for the resource type but does not own the specific resource — for example, when two tenants are both granted the `read api_keys` verb. A caller with no grant at all receives 403.
 
-## ent shape — the query interceptor
+{{< callout type="info" >}}
+**`seccheck.AssertCrossAccountIsolation` exercises the repository layer directly.** It asserts `NotFound` because it calls the repository with a valid tenant context, bypassing the authorization layer. To observe the 404 path end to end, grant both test tenants the verb and resource, then let the repository hide the row.
+{{< /callout >}}
 
-The ent shape enforces the same invariant through a **query interceptor** installed by the generated
-`entrepo.TenantMixin` (embedded automatically whenever the message has an `account_id`). The
-interceptor runs on every `Get`/`List`/edge-traversal query and scopes it to
-`middleware.TenantIDFromContext(ctx)` — so the bound holds even for ad-hoc graph traversals, not just
-the CRUD methods. It applies the scope by calling a generated `WhereAccountID` method on the query
-type: `protoc-gen-ent` emits one per tenant resource in `ent/<resource>_filter.ent.go`, so isolation
-is wired without any consumer code. (Soft-delete works the same way via `SoftDeleteMixin` and a
-generated `WhereDeleteTimeIsNil`.)
+## Ent scoping
 
-## Proving it: `seccheck.AssertCrossAccountIsolation`
+The ent backend enforces the same guarantee through a query interceptor installed by the generated `entrepo.TenantMixin`. This mixin is embedded automatically whenever the protobuf message has an `account_id` field. The interceptor runs on every `Get`, `List`, and edge-traversal query and scopes it to the tenant returned by `middleware.TenantIDFromContext(ctx)`.
 
-Isolation is verified, not assumed. `seccheck` ships a check you wire into a normal Go test:
-create a resource as Principal A, then attempt to read and list it as Principal B.
+`protoc-gen-ent` emits a `WhereAccountID` method per tenant resource in `ent/<resource>_filter.ent.go`. The interceptor calls this method to apply the scope, so isolation is wired without any code you need to write. Soft-delete works the same way: `SoftDeleteMixin` installs a `WhereDeleteTimeIsNil` scope that the interceptor also applies.
+
+Because the interceptor runs on graph traversals as well as CRUD methods, the isolation bound holds even for ad-hoc ent queries.
+
+## Verifying isolation
+
+`seccheck` provides a check you wire into a normal Go test. The check creates a resource as one principal, then attempts to read and list it as a second principal.
 
 ```go
 cfg := seccheck.IsolationConfig{
@@ -114,13 +99,10 @@ findings := seccheck.AssertCrossAccountIsolation(context.Background(), cfg)
 seccheck.RunT(t, findings) // ZERO findings expected
 ```
 
-For isolation to hold, `ReadFn` must return **`codes.NotFound`** and `ListFn` must return
-**count 0** — anything else is an `Error` finding that fails the test. The SDK's own apikey
-fixture runs this against **both** the GORM and ent repositories and expects zero findings.
+For isolation to hold, `ReadFn` must return `codes.NotFound` and `ListFn` must return count 0. Any other result produces an `Error` finding that fails the test. The SDK's own apikey fixture runs this check against both the GORM and ent repositories and expects zero findings.
 
 {{< callout type="info" >}}
-The `account-id` metadata key is the same one used for the unknown-principal authz check — the
-tenant and the authz principal share an origin, so a request that is authorized is also scoped.
+**The `account-id` metadata key is shared by both tenant scoping and authorization.** The identifier that scopes a request's repository queries is the same one used for the unknown-principal authz check — the tenant and the authz principal share an origin.
 {{< /callout >}}
 
 See [Security check](../../how-to/secure/security-check/) for the full set of assertions.

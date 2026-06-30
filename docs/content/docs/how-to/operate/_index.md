@@ -5,7 +5,7 @@ sidebar:
   open: true
 ---
 
-Operational how-tos: wiring observability, health probes, resilience policies, and deployment targets.
+This section covers how to operate a devedge-sdk service in production. Use the guides below to wire observability, configure health and readiness probes, apply resilience policies, and deploy to Kubernetes or Docker Compose.
 
 {{< cards >}}
   {{< card link="observability/" title="Observability" icon="chart-bar" subtitle="Traces, RED metrics, and trace-correlated logs — wired and backend-neutral." >}}

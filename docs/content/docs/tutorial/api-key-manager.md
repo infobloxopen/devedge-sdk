@@ -3,22 +3,24 @@ title: "Tutorial: API Key Manager"
 weight: 1
 ---
 
-In this tutorial you build an **API Key Manager** service end to end: a multi-tenant store of
-customer API keys where the raw key material is encrypted at rest, never returned after creation,
-and invisible across accounts. Along the way you exercise every part of the SDK.
+This tutorial walks you through building an **API Key Manager** service: a multi-tenant store of
+customer API keys where raw key material is encrypted at rest, never returned after creation, and
+invisible across accounts.
 
-This mirrors the [`testdata/apikey`](https://github.com/infobloxopen/devedge-sdk/tree/main/testdata/apikey)
-fixture that ships with the SDK, so every snippet is real.
+Follow this tutorial to learn how the proto annotation contract, storage codegen, the `Encryptor`
+seam, and the `seccheck` security suite fit together. Every snippet comes from the
+[`testdata/apikey`](https://github.com/infobloxopen/devedge-sdk/tree/main/testdata/apikey)
+fixture that ships with the SDK.
 
 {{< callout type="info" >}}
-**What you'll learn:** the proto annotation contract, codegen for three shapes at once, the
+**What you learn:** the proto annotation contract, codegen for three shapes at once, the
 `Encryptor` seam, the full `seccheck` suite, and booting against Postgres with `de project up`.
 {{< /callout >}}
 
 ## Step 1 — Define `apikey.proto`
 
-The `key_value` field holds the raw key material, so it is annotated `secret`. `account_id` makes
-the resource tenant-scoped. Each RPC declares its authz rule and HTTP mapping.
+The `key_value` field holds the raw key material and is annotated `secret`. The `account_id` field
+makes the resource tenant-scoped. Each RPC declares its authz rule and HTTP mapping.
 
 ```proto {filename="apikey.proto"}
 syntax = "proto3";
@@ -69,8 +71,9 @@ message DeleteAPIKeyResponse {}
 
 ## Step 2 — Run `buf generate`
 
-Configure every plugin. Because the storage shapes pull in `gorm.io/gorm` / `entgo.io/ent`,
-generate into a module that has those deps (the fixture has its own `go.mod`).
+Configure all plugins in a `buf.gen.yaml` template. The storage shapes pull in `gorm.io/gorm` and
+`entgo.io/ent`, so generate into a module that already has those dependencies. The fixture uses its
+own `go.mod` for exactly this reason.
 
 ```yaml {filename="buf.gen.apikey.yaml"}
 version: v2
@@ -104,14 +107,14 @@ buf generate --template buf.gen.apikey.yaml
 go generate ./testdata/apikey/ent   # build the ent client from the generated schema
 ```
 
-You now have, among others:
+After generation you have, among others:
 
 - `apikeyv1/apikey.authz.go` — `APIKeyServiceAuthzRules`
 - `apikeyv1/apikey.svc.go` — the service scaffold
 - `apikeyv1/apikey.storage.go` — `APIKeyModel` + `APIKeyRepository` (GORM)
 - `ent/schema/api_key.go` + the ent client — the ent shape
 
-Because `key_value` is `secret`, the GORM model has **no `key_value` column** — only
+Because `key_value` is annotated `secret`, the GORM model has **no `key_value` column** — only
 `key_value_hash` (indexed) and `key_value_cipher`. The constructor takes an `Encryptor`:
 
 ```go
@@ -120,8 +123,8 @@ func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor) *APIKeyRepository
 
 ## Step 3 — Wire the encryptor
 
-Pick the encryptor by environment. Dev uses AES-256-GCM in-process; production uses Vault Transit.
-Both satisfy `secret.Encryptor`, so the repository code is identical.
+Select the encryptor based on the environment. Dev uses AES-256-GCM in-process; production uses
+Vault Transit. Both satisfy `secret.Encryptor`, so the repository code is the same in both cases.
 
 ```go {filename="wire.go"}
 package main
@@ -148,14 +151,15 @@ func newRepo(db *gorm.DB) *apikeyv1.APIKeyRepository {
 }
 ```
 
-In the create handler you hand the raw `key_value` to the repository **once**; the framework hashes
-and encrypts it, and you return it to the caller this one time only. On `GetAPIKey`/`ListAPIKeys`
-the field comes back empty — `fromModel` never sets it.
+In the create handler, pass the raw `key_value` to the repository once. The framework hashes and
+encrypts it, and the create response returns it to the caller that one time. On subsequent
+`GetAPIKey` and `ListAPIKeys` calls the field is empty — `fromModel` does not set it.
 
 ## Step 4 — Write `security_test.go`
 
-This is where the SDK's guarantees become assertions. Wire all of the `seccheck` checks. The
-isolation check below is taken from the fixture's real `security_isolation_test.go`.
+The `seccheck` package turns the SDK's security invariants into runnable test assertions. Wire all
+five checks as shown below. The isolation check is taken from the fixture's
+`security_isolation_test.go`.
 
 ```go {filename="security_test.go"}
 package apikeyv1_test
@@ -248,29 +252,29 @@ func TestSecurity(t *testing.T) {
 }
 ```
 
-Run it:
+Run the suite:
 
 ```bash
 go test ./testdata/apikey/... -run TestSecurity -v
 ```
 
-All five checks should report **zero failures**. The fixture runs the isolation check against
-**both** the GORM and the ent repository — proving the same invariant holds in both shapes.
+All five checks report **zero failures**. The fixture runs the isolation check against **both** the
+GORM and the ent repository, verifying that the same invariant holds in each storage shape.
 
 ## Step 5 — Boot with Postgres via `de project up`
 
-For an end-to-end run against a real database, use devedge to bring up the project (server +
-Postgres). The dev edge wires the indirect-DSN hotload convention so rotated credentials reload
-without a restart.
+To run end-to-end against a real database, use `de project up` to start the service and its
+Postgres backing store. The dev environment wires the indirect-DSN hotload convention so that
+rotated credentials reload without a service restart.
 
 ```bash
 de project up        # boots the service + a Postgres backing store
 ```
 
-Then exercise the HTTP gateway (mapped from the proto's `google.api.http` options). The service is
-wired with `PrincipalFunc: grpcauthz.DevPrincipalFunc()` and a dev grant for `group:admins` (see the
-[server reference](../../reference/server.md)), and `server.New`'s gateway forwards the
-`account-id`/`groups` headers — so the caller's identity reaches authz:
+Then exercise the HTTP gateway, which is mapped from the proto's `google.api.http` options. The
+service is wired with `PrincipalFunc: grpcauthz.DevPrincipalFunc()` and a dev grant for
+`group:admins` (see the [server reference](../../reference/server.md)). The `server.New` gateway
+forwards the `account-id` and `groups` headers so the caller's identity reaches authz:
 
 ```bash
 # Create a key (returns key_value exactly once). The mapping is {post: "/v1/apikeys",
@@ -290,7 +294,7 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/v1/apikeys/$ID -H 'accou
 
 {{< callout type="info" >}}
 **403 vs 404 here.** Authz runs before the tenant-scoped repository (see
-[Tenant isolation](../../concepts/tenant-isolation/#two-layers-which-status-a-caller-actually-sees)).
+[Tenant isolation](../../concepts/tenant-isolation/#authorization-and-scoping-layers)).
 With a single-tenant grant, `bob` matches no grant and gets **403**. To see the repository's
 existence-hiding **404** instead — `bob` is authorized for `api_keys` but still cannot see `alice`'s
 specific key — grant both tenants, e.g. `authz.Grant{Tenant: "*", Subjects: []string{"group:admins"}, …}`.
@@ -298,7 +302,7 @@ The `seccheck.AssertCrossAccountIsolation` check exercises that repository layer
 why it asserts `NotFound`.
 {{< /callout >}}
 
-When you're done:
+When you are done:
 
 ```bash
 de project down
@@ -306,15 +310,16 @@ de project down
 
 ## What you built
 
-- A **contract-first** service: authz and secret semantics declared in proto, enforced by the
+- **Contract-first service** — authz and secret semantics are declared in proto and enforced by the
   framework.
-- **Secret-at-rest**: `key_value` hashed + encrypted, never stored or returned as plaintext.
-- **Two storage shapes** from one proto: GORM and ent, both tenant-isolated.
-- A **security suite** that proves authz completeness, fail-closed denial, cross-account
-  isolation, clean errors, and no-leak responses — all in CI.
+- **Secret at rest** — `key_value` is hashed and encrypted; it is never stored or returned as
+  plaintext after creation.
+- **Two storage shapes from one proto** — GORM and ent, both tenant-isolated.
+- **Security suite** — asserts authz completeness, fail-closed denial, cross-account isolation,
+  clean errors, and no-leak responses in CI.
 
-## Where to go next
+## See also
 
-- [Secret Fields](../../how-to/secure/secret-fields/) — production secret handling with Vault Transit.
-- [Storage shapes](../../how-to/model-and-persist/storage-shapes/) — when to reach for ent's privacy layer.
-- [server reference](../../reference/server.md) — every `Config` knob.
+- [Secret fields](../../how-to/secure/secret-fields/) — production secret handling with Vault Transit.
+- [Storage shapes](../../how-to/model-and-persist/storage-shapes/) — when to use ent's privacy layer.
+- [Server reference](../../reference/server.md) — every `Config` option.
