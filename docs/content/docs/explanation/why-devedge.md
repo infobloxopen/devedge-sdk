@@ -8,7 +8,7 @@ multi-tenancy, secret handling, observability, resilience, and health probes —
 that imports it. It gives you a secure, AIP-correct foundation so you can focus on business logic
 rather than rebuilding the same infrastructure on every service.
 
-Use devedge-sdk when you are building a multi-tenant Infoblox platform service that carries
+Use devedge-sdk when you are building a multi-tenant platform service that carries
 production traffic. See [When to use it](#when-to-use-it) for the full criteria.
 
 ## What the SDK provides
@@ -54,7 +54,7 @@ fact:
 
 devedge-sdk is the right foundation when:
 
-- You are building a **multi-tenant Infoblox platform service** that carries production traffic.
+- You are building a **multi-tenant platform service** that carries production traffic.
 - You need **AIP-correct** (resource-oriented, standard methods, field masks, filtering,
   pagination, soft-delete, ETag/412 concurrency, LRO) semantics without implementing them.
 - You want **authz and secret handling provably correct in CI**, not assumed.
@@ -66,7 +66,7 @@ It is not the right choice for:
 - Pure batch / offline workloads with no gRPC or HTTP surface.
 - Services that are not multi-tenant and have no need for the authz/secret-handling machinery.
 
-## Fit in the Infoblox stack
+## Where it fits
 
 devedge-sdk is the **runtime library** — the module your service imports. Its companion,
 [devedge](https://github.com/infobloxopen/devedge), is the **dev- and deploy-time CLI**: it

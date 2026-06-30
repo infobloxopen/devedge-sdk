@@ -1,6 +1,6 @@
 # Compatibility with `atlas-authz-middleware`
 
-The established Infoblox gRPC authz middleware is the public
+The established gRPC authz middleware in the wider Go ecosystem is the public
 `github.com/infobloxopen/atlas-authz-middleware/grpc_opa`. `devedge-sdk`'s
 `grpcauthz` is **rough-compatible** with it: the same constructor shape and
 functional-option pattern, so adopting the SDK is a small change, not a rewrite.

@@ -3,7 +3,7 @@ title: Tenant Isolation
 weight: 3
 ---
 
-Infoblox services are multi-tenant: many accounts share a single deployment. Tenant isolation is the guarantee that a resource created by one account is never visible to another account. devedge-sdk enforces this guarantee at the storage layer — in generated repository code — rather than in handler code, so it cannot be omitted by accident.
+Multi-tenant services let many accounts share a single deployment. Tenant isolation is the guarantee that a resource created by one account is never visible to another account. devedge-sdk enforces this guarantee at the storage layer — in generated repository code — rather than in handler code, so it cannot be omitted by accident.
 
 Use this page when you need to understand how the SDK enforces data separation, what each storage backend does to scope queries, and how to verify isolation in a test.
 

@@ -3,7 +3,7 @@ title: Architecture
 weight: 1
 ---
 
-devedge-sdk is the runtime layer of the Infoblox developer experience. It sits between the proto
+devedge-sdk is the runtime layer of the contract-first developer experience. It sits between the proto
 contract your team authors and the engine and policy backends your platform team operates. It translates what you declare in .proto
 annotations into enforced behavior at runtime — authorization, secret handling, tenant scoping,
 and persistence — without requiring you to wire those concerns by hand.

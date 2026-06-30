@@ -11,13 +11,13 @@ layout: hextra-home
 
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Build Infoblox services&nbsp;<br class="hx:sm:block hx:hidden" />the contract-first way
+  Build production services&nbsp;<br class="hx:sm:block hx:hidden" />the contract-first way
 {{< /hextra/hero-headline >}}
 </div>
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A Go service framework for Infoblox services. Define authorization and secrets&nbsp;<br class="hx:sm:block hx:hidden" />in your proto once — the framework enforces them at every layer.
+  A Go service framework for multi-tenant services. Define authorization and secrets&nbsp;<br class="hx:sm:block hx:hidden" />in your proto once — the framework enforces them at every layer.
 {{< /hextra/hero-subtitle >}}
 </div>
 
