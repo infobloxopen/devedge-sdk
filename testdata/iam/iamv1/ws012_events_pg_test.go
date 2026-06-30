@@ -184,10 +184,26 @@ func TestWS012_P3_ComposedHost_EventFlow_RealPostgres(t *testing.T) {
 	}
 
 	// Module B's subscriber receives it through the HOST-OWNED relay→bus→consumer
-	// pipeline — not a direct call (the two modules never import each other).
+	// pipeline — not a direct call (the two modules never import each other). Gate the
+	// shutdown below on the DURABLE delivery proof — the idempotency marker COMMITTED in
+	// the billing schema — NOT the in-memory got flag. consumer.deliver sets got at the
+	// TOP of the handler's transaction, but the marker (and the real exactly-once effect)
+	// only lands when that tx commits a moment later. Cancelling the host — whose context
+	// the consumer's tx runs under — on the in-memory signal races that commit: under
+	// -race / CI load the cancel can abort the COMMIT, rolling the marker back (the
+	// observed flake: got == "u-42" but 0 markers).
+	billingMarkers := func() int64 {
+		var n int64
+		if cerr := billingDB.WithContext(context.Background()).
+			Table(billingNS.QualifyTable("idempotency_markers")).
+			Count(&n).Error; cerr != nil {
+			t.Fatalf("count billing idempotency markers: %v", cerr)
+		}
+		return n
+	}
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if v, _ := got.Load().(string); v == "u-42" {
+		if billingMarkers() == 1 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -216,14 +232,9 @@ func TestWS012_P3_ComposedHost_EventFlow_RealPostgres(t *testing.T) {
 
 	// The delivery committed module B's idempotency marker IN THE BILLING SCHEMA (the
 	// engine-level proof the event flowed through the consumer's exactly-once path, not
-	// a side channel).
-	var markers int64
-	if cerr := billingDB.WithContext(context.Background()).
-		Table(billingNS.QualifyTable("idempotency_markers")).
-		Count(&markers).Error; cerr != nil {
-		t.Fatalf("count billing idempotency markers: %v", cerr)
-	}
-	if markers != 1 {
+	// a side channel). The wait loop above already gated on this marker before we
+	// cancelled, so the count is stable here.
+	if markers := billingMarkers(); markers != 1 {
 		t.Errorf("expected exactly 1 idempotency marker in the billing schema (delivery proof), got %d", markers)
 	}
 

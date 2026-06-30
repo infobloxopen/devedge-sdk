@@ -4,7 +4,7 @@ next: getting-started
 weight: 1
 ---
 
-**devedge-sdk** is the runtime library that production Infoblox services import. It gives you a
+**devedge-sdk** is the runtime library that production services import. It gives you a
 gRPC/HTTP service with authorization, tenant isolation, persistence, and observability
 already wired — so you write business logic, not plumbing.
 

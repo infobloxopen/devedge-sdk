@@ -6,7 +6,7 @@
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-**A complete, secure-by-default Infoblox microservice from a single proto.** Define a resource and its
+**A complete, secure-by-default microservice from a single proto.** Define a resource and its
 methods in proto; devedge-sdk gives you a running gRPC + REST service with Google-AIP semantics,
 fail-closed authorization, multi-tenant isolation, and a persistence/eventing layer wired in — every
 backend a swappable seam, every security invariant provable in CI.
