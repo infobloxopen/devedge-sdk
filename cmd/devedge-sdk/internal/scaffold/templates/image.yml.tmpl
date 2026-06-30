@@ -77,6 +77,12 @@ jobs:
           esac
 
       - name: Build and push (ko — distroless static, multi-arch, no Dockerfile)
+        env:
+          # Reproducible build: trim build-machine paths from the binary (the binary
+          # no longer embeds /home/runner/... — same source builds byte-identically
+          # anywhere; debug symbols are kept). ko already defaults to -trimpath; we
+          # set it explicitly so the intent is visible and survives a ko default change.
+          GOFLAGS: -trimpath
         run: |
           ko build --bare \
             --platform=linux/amd64,linux/arm64 \
