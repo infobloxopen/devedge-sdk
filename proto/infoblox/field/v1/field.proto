@@ -28,6 +28,12 @@ message FieldOptions {
   string column_name = 5;  // override the default snake_case column name
   string column_type = 6;  // override the DB column type (e.g. "varchar(255)")
 
+  // Identity. Declare on a resource's id field to control how the primary
+  // identifier is produced. When absent, the id field is treated as
+  // SERVER_GENERATED with the UUID7 generator: the framework mints a fresh id
+  // on Create if the caller leaves it empty, and honors a caller-supplied id.
+  IdOptions id = 7;
+
   // Relationships. Declare on the proto field that holds the related resource.
   // The codegen plugins generate the appropriate ORM association or graph edge.
   HasOne     has_one      = 20;
@@ -71,6 +77,27 @@ message ManyToMany {
   string foreign_key = 2;
   // association_foreign_key is the other model's FK column in the join table.
   string association_foreign_key = 3;
+}
+
+// IdOptions controls how a resource's primary identifier is produced. Declare it
+// on the resource's id field. Server-generated identity (the default) lets a
+// caller omit the id so the framework mints one; an empty id is never persisted.
+message IdOptions {
+  // Strategy selects who supplies the identifier.
+  enum Strategy {
+    STRATEGY_UNSPECIFIED      = 0;  // treated as STRATEGY_SERVER_GENERATED
+    STRATEGY_SERVER_GENERATED = 1;  // framework mints the id when the caller omits it
+    STRATEGY_USER_SETTABLE    = 2;  // caller must supply the id (AIP-133 user-specified ids)
+  }
+  // Generator selects the identifier format used for STRATEGY_SERVER_GENERATED.
+  enum Generator {
+    GENERATOR_UNSPECIFIED = 0;  // treated as GENERATOR_UUID7
+    GENERATOR_UUID7       = 1;  // time-ordered UUID (default; index-friendly)
+    GENERATOR_UUID4       = 2;  // random UUID
+    GENERATOR_CUSTOM      = 3;  // use the host-registered IDGenerator
+  }
+  Strategy  strategy  = 1;
+  Generator generator = 2;
 }
 
 extend google.protobuf.FieldOptions {

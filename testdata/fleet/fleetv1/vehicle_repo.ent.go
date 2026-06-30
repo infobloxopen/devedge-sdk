@@ -15,7 +15,7 @@ import (
 
 // NewVehicleEntRepository wires the generated ent client into a
 // persistence.Repository[*Vehicle, string].
-func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle, string] {
+func NewVehicleEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*Vehicle, string] {
 	vehicleClient := func(ctx context.Context) *ent.VehicleClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -24,8 +24,12 @@ func NewVehicleEntRepository(client *ent.Client) persistence.Repository[*Vehicle
 		}
 		return client.Vehicle
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*Vehicle, string]{
 		Create_: func(ctx context.Context, entity *Vehicle) (*Vehicle, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID

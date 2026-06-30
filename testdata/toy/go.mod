@@ -34,3 +34,5 @@ require (
 )
 
 replace github.com/infobloxopen/devedge-sdk => ../../
+
+replace github.com/infobloxopen/apis/proto/infoblox/field => /Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field

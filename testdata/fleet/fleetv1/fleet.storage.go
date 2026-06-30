@@ -91,11 +91,15 @@ var FleetColumns = map[string]string{
 }
 
 // FleetRepository is a GORM-backed persistence.Repository for *Fleet.
-type FleetRepository struct{ db *gorm.DB }
+type FleetRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewFleetRepository creates a repository backed by db.
-func NewFleetRepository(db *gorm.DB) *FleetRepository {
-	return &FleetRepository{db: db}
+func NewFleetRepository(db *gorm.DB, opts ...persistence.RepoOption) *FleetRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &FleetRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *FleetRepository) conn(ctx context.Context) *gorm.DB {
@@ -175,6 +179,9 @@ func (r *FleetRepository) List(ctx context.Context, opts persistence.ListOptions
 }
 
 func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_Fleet(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
@@ -505,11 +512,15 @@ var VehicleColumns = map[string]string{
 }
 
 // VehicleRepository is a GORM-backed persistence.Repository for *Vehicle.
-type VehicleRepository struct{ db *gorm.DB }
+type VehicleRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewVehicleRepository creates a repository backed by db.
-func NewVehicleRepository(db *gorm.DB) *VehicleRepository {
-	return &VehicleRepository{db: db}
+func NewVehicleRepository(db *gorm.DB, opts ...persistence.RepoOption) *VehicleRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &VehicleRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *VehicleRepository) conn(ctx context.Context) *gorm.DB {
@@ -586,6 +597,9 @@ func (r *VehicleRepository) List(ctx context.Context, opts persistence.ListOptio
 }
 
 func (r *VehicleRepository) Create(ctx context.Context, entity *Vehicle) (*Vehicle, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_Vehicle(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {

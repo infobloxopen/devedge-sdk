@@ -80,11 +80,15 @@ var AccountColumns = map[string]string{
 }
 
 // AccountRepository is a GORM-backed persistence.Repository for *Account.
-type AccountRepository struct{ db *gorm.DB }
+type AccountRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewAccountRepository creates a repository backed by db.
-func NewAccountRepository(db *gorm.DB) *AccountRepository {
-	return &AccountRepository{db: db}
+func NewAccountRepository(db *gorm.DB, opts ...persistence.RepoOption) *AccountRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &AccountRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *AccountRepository) conn(ctx context.Context) *gorm.DB {
@@ -152,6 +156,9 @@ func (r *AccountRepository) List(ctx context.Context, opts persistence.ListOptio
 }
 
 func (r *AccountRepository) Create(ctx context.Context, entity *Account) (*Account, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_Account(entity)
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelAccountOnCreate != nil {
@@ -408,11 +415,15 @@ var UserColumns = map[string]string{
 }
 
 // UserRepository is a GORM-backed persistence.Repository for *User.
-type UserRepository struct{ db *gorm.DB }
+type UserRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewUserRepository creates a repository backed by db.
-func NewUserRepository(db *gorm.DB) *UserRepository {
-	return &UserRepository{db: db}
+func NewUserRepository(db *gorm.DB, opts ...persistence.RepoOption) *UserRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &UserRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *UserRepository) conn(ctx context.Context) *gorm.DB {
@@ -489,6 +500,9 @@ func (r *UserRepository) List(ctx context.Context, opts persistence.ListOptions)
 }
 
 func (r *UserRepository) Create(ctx context.Context, entity *User) (*User, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_User(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
@@ -774,11 +788,15 @@ var GroupColumns = map[string]string{
 }
 
 // GroupRepository is a GORM-backed persistence.Repository for *Group.
-type GroupRepository struct{ db *gorm.DB }
+type GroupRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewGroupRepository creates a repository backed by db.
-func NewGroupRepository(db *gorm.DB) *GroupRepository {
-	return &GroupRepository{db: db}
+func NewGroupRepository(db *gorm.DB, opts ...persistence.RepoOption) *GroupRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &GroupRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *GroupRepository) conn(ctx context.Context) *gorm.DB {
@@ -855,6 +873,9 @@ func (r *GroupRepository) List(ctx context.Context, opts persistence.ListOptions
 }
 
 func (r *GroupRepository) Create(ctx context.Context, entity *Group) (*Group, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_Group(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
@@ -1176,11 +1197,15 @@ var MembershipColumns = map[string]string{
 }
 
 // MembershipRepository is a GORM-backed persistence.Repository for *Membership.
-type MembershipRepository struct{ db *gorm.DB }
+type MembershipRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
 
 // NewMembershipRepository creates a repository backed by db.
-func NewMembershipRepository(db *gorm.DB) *MembershipRepository {
-	return &MembershipRepository{db: db}
+func NewMembershipRepository(db *gorm.DB, opts ...persistence.RepoOption) *MembershipRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &MembershipRepository{db: db, idGen: cfg.IDGenerator}
 }
 
 func (r *MembershipRepository) conn(ctx context.Context) *gorm.DB {
@@ -1257,6 +1282,9 @@ func (r *MembershipRepository) List(ctx context.Context, opts persistence.ListOp
 }
 
 func (r *MembershipRepository) Create(ctx context.Context, entity *Membership) (*Membership, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_Membership(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
@@ -1512,13 +1540,15 @@ var ApiKeyColumns = map[string]string{
 
 // ApiKeyRepository is a GORM-backed persistence.Repository for *ApiKey.
 type ApiKeyRepository struct {
-	db  *gorm.DB
-	enc secret.Encryptor
+	db    *gorm.DB
+	enc   secret.Encryptor
+	idGen persistence.IDGenerator
 }
 
 // NewApiKeyRepository creates a repository backed by db and enc.
-func NewApiKeyRepository(db *gorm.DB, enc secret.Encryptor) *ApiKeyRepository {
-	return &ApiKeyRepository{db: db, enc: enc}
+func NewApiKeyRepository(db *gorm.DB, enc secret.Encryptor, opts ...persistence.RepoOption) *ApiKeyRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &ApiKeyRepository{db: db, enc: enc, idGen: cfg.IDGenerator}
 }
 
 func (r *ApiKeyRepository) conn(ctx context.Context) *gorm.DB {
@@ -1595,6 +1625,9 @@ func (r *ApiKeyRepository) List(ctx context.Context, opts persistence.ListOption
 }
 
 func (r *ApiKeyRepository) Create(ctx context.Context, entity *ApiKey) (*ApiKey, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
 	m := toModel_ApiKey(entity)
 	if m.AccountId == "" {
 		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {

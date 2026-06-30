@@ -28,7 +28,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/inflect v0.19.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
 	github.com/infobloxopen/devedge-sdk/persistence/entrepo v0.0.0
 	github.com/jinzhu/inflection v1.0.0 // indirect
@@ -60,3 +60,5 @@ require (
 replace github.com/infobloxopen/devedge-sdk => ../..
 
 replace github.com/infobloxopen/devedge-sdk/persistence/entrepo => ../../persistence/entrepo
+
+replace github.com/infobloxopen/apis/proto/infoblox/field => /Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field

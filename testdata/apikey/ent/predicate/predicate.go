@@ -8,3 +8,6 @@ import (
 
 // APIKey is the predicate function for apikey builders.
 type APIKey func(*sql.Selector)
+
+// Token is the predicate function for token builders.
+type Token func(*sql.Selector)

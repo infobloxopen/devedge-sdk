@@ -121,3 +121,5 @@ replace github.com/infobloxopen/devedge-sdk => ../..
 replace github.com/infobloxopen/devedge-sdk/persistence/gormtx => ../../persistence/gormtx
 
 replace github.com/infobloxopen/devedge-sdk/persistence/entrepo => ../../persistence/entrepo
+
+replace github.com/infobloxopen/apis/proto/infoblox/field => /Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field

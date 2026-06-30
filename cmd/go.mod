@@ -41,3 +41,12 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 )
+
+// TEMPORARY DEV BRIDGE — REMOVE BEFORE RELEASE (BC-12 resource identity).
+// The IdOptions annotation this module's codegen consumes is unreleased: it lands
+// in github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2. Until that
+// tag exists, point the require at the local apis working tree so the GOWORK=off
+// build (which ignores go.work) can resolve fieldv1.IdOptions_*. At release:
+//   1) drop this replace, and
+//   2) bump the require above to: github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2
+replace github.com/infobloxopen/apis/proto/infoblox/field => /Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field

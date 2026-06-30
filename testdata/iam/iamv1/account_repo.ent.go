@@ -15,7 +15,7 @@ import (
 
 // NewAccountEntRepository wires the generated ent client into a
 // persistence.Repository[*Account, string].
-func NewAccountEntRepository(client *ent.Client) persistence.Repository[*Account, string] {
+func NewAccountEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*Account, string] {
 	accountClient := func(ctx context.Context) *ent.AccountClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -24,8 +24,12 @@ func NewAccountEntRepository(client *ent.Client) persistence.Repository[*Account
 		}
 		return client.Account
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*Account, string]{
 		Create_: func(ctx context.Context, entity *Account) (*Account, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			b := accountClient(ctx).Create().
 				SetID(entity.GetId()).
 				SetDisplayName(entity.GetDisplayName())

@@ -16,7 +16,7 @@ import (
 
 // NewGroupEntRepository wires the generated ent client into a
 // persistence.Repository[*Group, string].
-func NewGroupEntRepository(client *ent.Client) persistence.Repository[*Group, string] {
+func NewGroupEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*Group, string] {
 	groupClient := func(ctx context.Context) *ent.GroupClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -25,8 +25,12 @@ func NewGroupEntRepository(client *ent.Client) persistence.Repository[*Group, st
 		}
 		return client.Group
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*Group, string]{
 		Create_: func(ctx context.Context, entity *Group) (*Group, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID

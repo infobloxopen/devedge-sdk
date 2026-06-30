@@ -17,7 +17,7 @@ import (
 
 // NewAPIKeySummaryEntRepository wires the generated ent client into a
 // persistence.Repository[*APIKeySummary, string].
-func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*APIKeySummary, string] {
+func NewAPIKeySummaryEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*APIKeySummary, string] {
 	apikeyClient := func(ctx context.Context) *ent.APIKeyClient {
 		if h, ok := persistence.TxFromContext(ctx); ok {
 			if tx, ok := h.(*ent.Tx); ok {
@@ -26,8 +26,12 @@ func NewAPIKeySummaryEntRepository(client *ent.Client) persistence.Repository[*A
 		}
 		return client.APIKey
 	}
+	idGen := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...).IDGenerator
 	return &entrepo.EntRepository[*APIKeySummary, string]{
 		Create_: func(ctx context.Context, entity *APIKeySummary) (*APIKeySummary, error) {
+			if entity.GetId() == "" {
+				entity.Id = idGen.NewID()
+			}
 			tenantID := middleware.TenantIDFromContext(ctx)
 			if entity.GetAccountId() == "" && tenantID != "" {
 				entity.AccountId = tenantID

@@ -146,8 +146,8 @@ func TestRenderStorageFile_secretField(t *testing.T) {
 	mustContain(t, out, `column:api_key_cipher`)
 	mustNotContain(t, out, "`gorm:\"column:api_key\"`")
 
-	// Constructor must take enc secret.Encryptor.
-	mustContain(t, out, "func NewCredentialRepository(db *gorm.DB, enc secret.Encryptor)")
+	// Constructor must take enc secret.Encryptor (plus the BC-12 variadic option).
+	mustContain(t, out, "func NewCredentialRepository(db *gorm.DB, enc secret.Encryptor, opts ...persistence.RepoOption)")
 
 	// Repo struct must have enc field.
 	mustContain(t, out, "enc secret.Encryptor")
@@ -179,9 +179,46 @@ func TestRenderStorageFile_noSecretNoImport(t *testing.T) {
 	// No secret import when no secret fields.
 	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/secret"`)
 
-	// Constructor must NOT take enc.
-	mustContain(t, out, "func NewPlainRepository(db *gorm.DB)")
+	// Constructor must NOT take enc (it does take the BC-12 variadic option).
+	mustContain(t, out, "func NewPlainRepository(db *gorm.DB, opts ...persistence.RepoOption)")
 	mustNotContain(t, out, "enc secret.Encryptor")
+}
+
+// TestRenderStorageFile_resourceIdentity covers BC-12 on the GORM backend: the
+// Create id-guard and the per-annotation generator wiring.
+func TestRenderStorageFile_resourceIdentity(t *testing.T) {
+	base := messageInfo{
+		MessageName:  "Plain",
+		PbPkgName:    "plainv1",
+		PbImportPath: "example/plain/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "value", GoType: "string", SnakeName: "value"},
+		},
+	}
+
+	// Default (no id annotation) => SERVER_GENERATED + UUID7: mint on empty id.
+	out := renderStorageFile("plainv1storage", []messageInfo{base}, nil)
+	mustContain(t, out, "persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)")
+	mustContain(t, out, "if entity.GetId() == \"\" {\n\t\tentity.Id = r.idGen.NewID()")
+	mustNotContain(t, out, "id is required")
+
+	// UUID4 generator selection.
+	u4 := base
+	u4.IdGenerator = fieldv1.IdOptions_GENERATOR_UUID4
+	mustContain(t, renderStorageFile("plainv1storage", []messageInfo{u4}, nil), "persistence.NewRepoConfig(persistence.UUID4Generator()")
+
+	// CUSTOM generator => the package default.
+	cust := base
+	cust.IdGenerator = fieldv1.IdOptions_GENERATOR_CUSTOM
+	mustContain(t, renderStorageFile("plainv1storage", []messageInfo{cust}, nil), "persistence.NewRepoConfig(persistence.DefaultIDGenerator")
+
+	// USER_SETTABLE => reject empty id with InvalidArgument; never mint.
+	us := base
+	us.IdStrategy = fieldv1.IdOptions_STRATEGY_USER_SETTABLE
+	out = renderStorageFile("plainv1storage", []messageInfo{us}, nil)
+	mustContain(t, out, "status.Error(codes.InvalidArgument, \"id is required\")")
+	mustNotContain(t, out, "r.idGen.NewID()")
 }
 
 // T001: tenant isolation tests.

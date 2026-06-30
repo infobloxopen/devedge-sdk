@@ -146,6 +146,19 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						hasMany = fopts.GetHasMany()
 						belongsTo = fopts.GetBelongsTo()
 						manyToMany = fopts.GetManyToMany()
+						// BC-12 resource identity: the (infoblox.field.v1.opts).id
+						// annotation on the id field controls how the primary key is
+						// produced (server-generated vs user-settable; which built-in
+						// generator). Captured on the message so the Create_ closure can
+						// emit the generate/guard. Absent annotation => the message's
+						// zero IdStrategy/IdGenerator, which render treats as
+						// SERVER_GENERATED + UUID7 (the default).
+						if string(field.Desc.Name()) == "id" {
+							if id := fopts.GetId(); id != nil {
+								msg.IdStrategy = id.GetStrategy()
+								msg.IdGenerator = id.GetGenerator()
+							}
+						}
 					}
 				}
 				// F031 DDD: (infoblox.ddd.v1.references) is a CROSS-aggregate link —
