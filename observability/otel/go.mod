@@ -13,7 +13,7 @@ go 1.25.5
 
 require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
-	github.com/infobloxopen/devedge-sdk v0.35.0
+	github.com/infobloxopen/devedge-sdk v0.36.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
