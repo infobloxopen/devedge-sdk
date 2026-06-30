@@ -17,5 +17,3 @@ use (
 	./persistence/entrepo
 	./persistence/gormtx
 )
-
-replace github.com/infobloxopen/apis/proto/infoblox/field => /Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field

@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	entgo.io/ent v0.14.6
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.1
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2
 	github.com/infobloxopen/devedge-sdk v0.39.0
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2
@@ -121,5 +121,3 @@ replace github.com/infobloxopen/devedge-sdk => ../..
 replace github.com/infobloxopen/devedge-sdk/persistence/gormtx => ../../persistence/gormtx
 
 replace github.com/infobloxopen/devedge-sdk/persistence/entrepo => ../../persistence/entrepo
-
-replace github.com/infobloxopen/apis/proto/infoblox/field => /Users/dgarcia/go/src/github.com/infobloxopen/apis/proto/infoblox/field
