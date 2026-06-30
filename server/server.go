@@ -32,6 +32,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/lro"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
+	"github.com/infobloxopen/devedge-sdk/quota"
 	"github.com/infobloxopen/devedge-sdk/resilience"
 )
 
@@ -60,6 +61,24 @@ type Config struct {
 	// development set grpcauthz.DevPrincipalFunc() to derive the principal from
 	// request metadata; in production supply one backed by a verified token.
 	PrincipalFunc grpcauthz.PrincipalFunc
+	// FeatureSource, when set, makes the gate entitlement-aware (P12): server.New
+	// wraps Authorizer with authz.WithEntitlement so the SAME decision enforces
+	// both a method's permission AND its declared entitlement Features
+	// (MethodRule.Features). Dev default is authz.StaticFeatures; production binds
+	// the licensing/entitlement service (the OPA sidecar already returns the
+	// combined decision, so it is wired here as the Authorizer and NOT wrapped).
+	// Nil = permission-only authz (unchanged).
+	FeatureSource authz.FeatureSource
+	// AlertSink receives alerts when a method declared authz.ModeAlert fails its
+	// policy decision but is allowed through (P12 observation mode). Defaults to a
+	// structured-log sink on Logger.
+	AlertSink authz.AlertSink
+	// UsageMeter, when set, enforces declared per-method quotas (MethodRule.Quota,
+	// P13) with a reserve→commit/release lifecycle around the handler — separate
+	// from the authz decision, running just after authz so the principal/tenant is
+	// established. Dev default is quota.NewMemoryMeter; production binds the
+	// token-allocation/usage service. Nil = no quota enforcement.
+	UsageMeter quota.Meter
 	// Interceptors are additional unary interceptors appended after the
 	// framework chain. They run post-handler too (an interceptor may observe or
 	// wrap the response), so a gRPC-side cross-cutting extension (e.g. an audit
@@ -184,11 +203,24 @@ func New(cfg Config) (*Server, error) {
 	// override; the generated Register<Svc> contributes the rest via AddRules).
 	s := &Server{cfg: cfg, rules: append([]authz.MethodRule(nil), cfg.Rules...)}
 
+	// P12: make the gate entitlement-aware when a FeatureSource is configured, so
+	// the same decision enforces permission AND declared Features. The OPA sidecar
+	// already returns the combined rbac+entitlement decision, so production wires
+	// it as the Authorizer with FeatureSource nil (no wrap).
+	authorizer := cfg.Authorizer
+	if cfg.FeatureSource != nil {
+		authorizer = authz.WithEntitlement(authorizer, cfg.FeatureSource)
+	}
+	alertSink := cfg.AlertSink
+	if alertSink == nil {
+		alertSink = authz.NewLogAlertSink(cfg.Logger)
+	}
 	authzOpts := []grpcauthz.Option{
 		// The interceptor reads the LIVE accumulated set so rules contributed by
 		// Register<Svc> (AddRules) after New are enforced.
 		grpcauthz.WithRuleSource(func() []authz.MethodRule { return s.rules }),
-		grpcauthz.WithAuthorizer(cfg.Authorizer),
+		grpcauthz.WithAuthorizer(authorizer),
+		grpcauthz.WithAlertSink(alertSink),
 	}
 	if cfg.PrincipalFunc != nil {
 		authzOpts = append(authzOpts, grpcauthz.WithPrincipalFunc(cfg.PrincipalFunc))
@@ -219,6 +251,13 @@ func New(cfg Config) (*Server, error) {
 		// It is trace-correlated and redacts secret-annotated payload fields.
 		middleware.LoggingUnary(cfg.Logger),
 		grpcauthz.UnaryServerInterceptor("sdk", authzOpts...),
+	)
+	// P13: enforce declared per-method quotas immediately after authz (so the
+	// authorized principal/tenant is on the context) and before the handler.
+	if cfg.UsageMeter != nil {
+		chain = append(chain, quota.UnaryServerInterceptor(cfg.UsageMeter, func() []authz.MethodRule { return s.rules }))
+	}
+	chain = append(chain,
 		middleware.FieldMaskUnarySource(func() map[string]string { return s.verbMap() }),
 		etag.PreconditionUnary(),
 		middleware.ReadMaskUnary(),

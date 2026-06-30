@@ -1,6 +1,7 @@
 package authzpb_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
@@ -25,7 +26,7 @@ func TestRulesFromGlobal(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing rule for %s", w.Method)
 		}
-		if g != w {
+		if !reflect.DeepEqual(g, w) {
 			t.Fatalf("%s = %+v, want %+v", w.Method, g, w)
 		}
 	}
@@ -57,7 +58,7 @@ func TestCodegenMatchesReflection(t *testing.T) {
 		if !ok {
 			t.Fatalf("codegen rule %s not found via reflection", r.Method)
 		}
-		if got != r {
+		if !reflect.DeepEqual(got, r) {
 			t.Fatalf("mismatch for %s: reflection=%+v codegen=%+v", r.Method, got, r)
 		}
 	}
