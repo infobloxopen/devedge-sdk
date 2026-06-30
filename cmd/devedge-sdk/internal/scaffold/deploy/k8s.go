@@ -183,8 +183,10 @@ const k8sValuesOverlayTmpl = `# Thin values overlay for {{.Service}} — the ONL
 #   kubectl create configmap {{.Service}}-values -n {{.Namespace}} \
 #     --from-file=values.yaml=deploy/k8s/values.yaml --dry-run=client -o yaml | kubectl apply -f -
 image:
+  # Published by .github/workflows/image.yml to GHCR on merge to main (and v* tags).
   repository: {{.ImageRepo}}
-  tag: ""   # defaults to the chart appVersion; set to your release tag
+  tag: ""   # published tags: latest, <branch>, sha-<short>, and <version> on a v* tag.
+            # Empty defaults to the chart appVersion; pin a tag here for a release.
 
 config:
   # The config.ServerOptions env prefix this service loads with (config.Env).
@@ -246,8 +248,9 @@ framework** to an OCI registry.
 
 ## Wire it up
 
-1. Edit ` + "`values.yaml`" + `: set ` + "`image.repository`" + ` (and ` + "`image.tag`" + ` for a pinned
-   release), the OTEL collector endpoint, and the DSN.
+1. Edit ` + "`values.yaml`" + `: ` + "`image.repository`" + ` is prefilled with the image
+   ` + "`.github/workflows/image.yml`" + ` publishes to GHCR on merge to main; set ` + "`image.tag`" + `
+   to pin a release, plus the OTEL collector endpoint and the DSN.
 2. Point ` + "`oci-repository.yaml`" + ` ` + "`spec.url`" + ` at your published chart registry
    (default ` + "`{{.ChartRepo}}/{{.ChartName}}`" + `).
 3. Apply the overlay as a ConfigMap the HelmRelease references:

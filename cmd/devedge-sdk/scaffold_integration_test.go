@@ -63,6 +63,10 @@ func TestScaffold_GORM_BuildsAndPasses(t *testing.T) {
 		"cmd/orders/main.go",
 		"cmd/orders/orders_smoke_test.go",
 		".github/workflows/apx-release.yml",
+		// Container image: distroless/static build + GHCR publish-on-merge workflow.
+		"Dockerfile",
+		".dockerignore",
+		".github/workflows/image.yml",
 	} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
 			t.Fatalf("expected scaffold file %s: %v", rel, err)
@@ -124,6 +128,10 @@ func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 		"cmd/orders/main.go",
 		"cmd/orders/orders_smoke_test.go",
 		".github/workflows/apx-release.yml",
+		// Container image: distroless/static build + GHCR publish-on-merge workflow.
+		"Dockerfile",
+		".dockerignore",
+		".github/workflows/image.yml",
 	} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
 			t.Fatalf("expected scaffold file %s: %v", rel, err)

@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+
+# Container image for {{.Service}} — a statically-linked Go binary on a distroless
+# base. Built and published to GHCR by .github/workflows/image.yml on merge to main
+# (and on v* tags) at ghcr.io/<owner>/<repo> (repo-namespaced, NON-NESTED).
+#
+# The build is self-contained GIVEN the generated code in gen/. gen/ is git-ignored,
+# so the publish workflow runs `make bootstrap` (tools + generate) BEFORE this build;
+# `docker compose build` (deploy/compose) works the same way once gen/ exists.
+
+# ---- build ------------------------------------------------------------------
+# Run the builder on the NATIVE build platform and CROSS-COMPILE to the target arch.
+# CGO is off (both backends use pure-Go drivers — glebarez/modernc sqlite, pgx), so
+# Go cross-compiles with no C toolchain — far faster than emulating the whole build
+# under QEMU per --platform. Keep `golang:` in sync with go.mod's `go` directive.
+FROM --platform=$BUILDPLATFORM golang:1.25 AS build
+
+ARG TARGETOS
+ARG TARGETARCH
+# BINARY selects which cmd/<name> to build. A single-binary service defaults to its
+# own name; a multi-binary repo overrides it per image (see image.yml's matrix).
+ARG BINARY={{.BinName}}
+# VERSION is stamped into main.version (the OTel resource service.version). The
+# workflow passes the resolved image version (git tag, else short commit sha).
+ARG VERSION=0.0.0-dev
+
+WORKDIR /src
+
+# Prime the module cache from just the manifests so a code-only change does not
+# re-download dependencies.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+        -o /out/{{.BinName}} ./cmd/${BINARY}
+
+# ---- runtime ----------------------------------------------------------------
+# distroless/static: no shell, no libc, no package manager — only CA certs, tzdata,
+# and a nonroot user. The static binary is the entire payload, so the image is tiny
+# and has a minimal attack surface.
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=build /out/{{.BinName}} /usr/local/bin/{{.BinName}}
+
+# gRPC + HTTP/JSON gateway. Informational only — the listen addresses come from the
+# config env ({{.ServiceUpper}}_GRPC_ADDR / {{.ServiceUpper}}_HTTP_ADDR).
+EXPOSE {{.GRPCPort}} {{.HTTPPort}}
+
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/{{.BinName}}"]

@@ -115,6 +115,33 @@ For console traces in local dev, set `Exporter: "stdout"` in the `otel.Config` i
 `trace_id`/`span_id`; secret-annotated fields are redacted before they reach any log sink (payloads
 only log at Debug).
 
+## Container image & deploy
+
+The service ships as a **distroless, statically-linked** container image. The `Dockerfile`
+cross-compiles the binary `CGO_ENABLED=0` and ships it on `gcr.io/distroless/static-debian12`
+(no shell, no libc, nonroot) — the binary is the entire payload.
+
+`.github/workflows/image.yml` builds and publishes the image to **GitHub Container Registry on
+merge to `main`** (and on `v*` tags), repo-namespaced and non-nested:
+
+```
+ghcr.io/<owner>/{{.RepoName}}
+```
+
+Published tags: `latest` (default branch), the branch name, the short commit SHA, and the semver
+version on a `v*` tag. `gen/` is git-ignored, so the workflow runs `make bootstrap` (generate)
+before the Docker build — and `docker compose build` (see `deploy/compose/`) works the same way
+once `gen/` exists. To add a second binary later, add a row to the workflow's `matrix.include`
+with a `-<name>` suffix (e.g. `ghcr.io/<owner>/{{.RepoName}}-worker`); the build stays non-nested.
+
+Deploy artifacts live under `deploy/` (rendered by `--deploy`):
+
+- **`deploy/k8s/`** — a Flux `HelmRelease` + `OCIRepository` + thin `values.yaml` overlay that
+  points `image.repository` at the published image above. The chart itself is framework-owned and
+  pulled from its registry — you only edit the overlay. See `deploy/k8s/README.md`.
+- **`deploy/compose/`** — a Docker Compose file that builds the `Dockerfile` and wires the same
+  config env, healthcheck, and graceful-shutdown window as the chart.
+
 ## Layout
 
 This service follows the **composable shape** (WS-012): an importable *module* (owns domain
@@ -128,6 +155,9 @@ module/migrations/           the module's migration files (a host runs them)
 cmd/{{.BinName}}/main.go      the thin STANDALONE host (process wiring → servicekit.Run)
 gen/                         GENERATED, git-ignored — never edit by hand
 Makefile                     tools / generate / bootstrap / build / test / run
+Dockerfile                   distroless, static image build (./cmd/{{.BinName}})
+deploy/                      k8s (Flux) + compose deploy artifacts referencing the image
+.github/workflows/           ci.yml (build/test) + image.yml (publish to GHCR) + apx-release.yml
 ```
 
 ## Governing the public API (apx)
