@@ -43,6 +43,81 @@ func writeFile(dir, rel string, content []byte, perm os.FileMode) error {
 	return os.WriteFile(full, content, perm)
 }
 
+// artifactWriter writes rendered artifacts and records what it wrote vs. skipped.
+// With force=false it never clobbers an existing file (the retrofit path —
+// `add deploy` — must not touch a service's hand-edited tree); with force=true it
+// always overwrites (the new-service path, where the tree is freshly created).
+type artifactWriter struct {
+	force   bool
+	Written []string
+	Skipped []string
+}
+
+func (w *artifactWriter) write(dir, rel string, content []byte, perm os.FileMode) error {
+	if !w.force {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err == nil {
+			w.Skipped = append(w.Skipped, rel)
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := writeFile(dir, rel, content, perm); err != nil {
+		return fmt.Errorf("write %s: %w", rel, err)
+	}
+	w.Written = append(w.Written, rel)
+	return nil
+}
+
+// renderImageArtifacts renders the GHCR image-publish workflow (.github/workflows/
+// image.yml) through w (so the retrofit can skip a file that already exists). The
+// workflow builds the image with ko (no Dockerfile). It is rendered with "[[" /
+// "]]" delimiters so the workflow's GitHub Actions ${{ ... }} expressions pass
+// through verbatim. Shared by new-service rendering and the `add deploy` retrofit
+// so both produce a BYTE-IDENTICAL workflow.
+func renderImageArtifacts(dir string, m *Model, w *artifactWriter) error {
+	content, err := renderTemplateDelims("image.yml.tmpl", "[[", "]]", m)
+	if err != nil {
+		return err
+	}
+	return w.write(dir, filepath.Join(".github", "workflows", "image.yml"), content, 0o644)
+}
+
+// appendMakefileImageTarget appends the `make image` target (a local ko build that
+// auto-detects the docker socket) to dir/Makefile. It is idempotent: it does
+// nothing if the Makefile already declares an `image:` target, and returns false if
+// the target was already present or there is no Makefile to append to (a non-
+// standard repo). Shared by new-service rendering and the `add deploy` retrofit so
+// the local-build target is identical either way.
+func appendMakefileImageTarget(dir string, m *Model) (bool, error) {
+	path := filepath.Join(dir, "Makefile")
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.HasPrefix(line, "image:") {
+			return false, nil // already has an image target
+		}
+	}
+	frag, err := renderTemplate("image.mk.tmpl", m)
+	if err != nil {
+		return false, err
+	}
+	out := existing
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, frag...)
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return false, fmt.Errorf("append image target to Makefile: %w", err)
+	}
+	return true, nil
+}
+
 // renderTemplates renders the Phase-1 templates into dir (T-204). The proto file
 // REPLACES the example proto apx init wrote; the rest are new files.
 func renderTemplates(dir string, m *Model) error {
@@ -65,11 +140,6 @@ func renderTemplates(dir string, m *Model) error {
 		{"Makefile.tmpl", "Makefile", 0o644},
 		{"README.md.tmpl", "README.md", 0o644},
 		{"ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), 0o644},
-		// Container image: a distroless, static build + the GHCR publish workflow.
-		// Emitted for every service regardless of --deploy (the image is the unit
-		// of delivery; the k8s overlay references it and compose builds it).
-		{"Dockerfile.tmpl", "Dockerfile", 0o644},
-		{"dockerignore.tmpl", ".dockerignore", 0o644},
 	}
 	// The ent backend pins entc (entgo.io/ent/cmd/ent) via a build-tagged tools.go
 	// so `go mod tidy` keeps the entc-only deps for `go generate ./gen/ent`.
@@ -85,17 +155,17 @@ func renderTemplates(dir string, m *Model) error {
 			return fmt.Errorf("write %s: %w", o.rel, err)
 		}
 	}
-	// The GHCR image-publish workflow is rendered with "[[" / "]]" delimiters so the
-	// workflow's GitHub Actions ${{ ... }} and docker/metadata-action {{ ... }} pass
-	// through untouched (see renderTemplateDelims).
-	imageWorkflow, err := renderTemplateDelims("image.yml.tmpl", "[[", "]]", m)
-	if err != nil {
+	// Container image: the GHCR publish workflow (ko builds a distroless static
+	// image — no Dockerfile). Emitted for every service regardless of --deploy (the
+	// image is the unit of delivery; the k8s overlay + compose both reference it).
+	// force=true: the new-service tree is freshly created, so always write.
+	if err := renderImageArtifacts(dir, m, &artifactWriter{force: true}); err != nil {
 		return err
 	}
-	if err := writeFile(dir, filepath.Join(".github", "workflows", "image.yml"), imageWorkflow, 0o644); err != nil {
-		return fmt.Errorf("write .github/workflows/image.yml: %w", err)
+	if _, err := appendMakefileImageTarget(dir, m); err != nil {
+		return err
 	}
-	if err := renderDeploy(dir, m); err != nil {
+	if err := renderDeploy(dir, m, &artifactWriter{force: true}); err != nil {
 		return err
 	}
 	return appendGitignore(dir, m)
@@ -105,7 +175,7 @@ func renderTemplates(dir string, m *Model) error {
 // repo. Each target is an adapter behind the deploy seam; the service repo gets
 // only the rendered artifacts (for k8s: a Flux HelmRelease + OCIRepository +
 // values overlay — never the framework-owned chart, which stays embedded).
-func renderDeploy(dir string, m *Model) error {
+func renderDeploy(dir string, m *Model, w *artifactWriter) error {
 	if len(m.DeployTargets) == 0 {
 		return nil
 	}
@@ -114,8 +184,8 @@ func renderDeploy(dir string, m *Model) error {
 		return fmt.Errorf("render deploy: %w", err)
 	}
 	for _, a := range arts {
-		if err := writeFile(dir, a.Path, a.Contents, 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", a.Path, err)
+		if err := w.write(dir, a.Path, a.Contents, 0o644); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -25,7 +25,7 @@ func TestRenderDeploy_EmitsBothTargets(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := renderDeploy(dir, m); err != nil {
+	if err := renderDeploy(dir, m, &artifactWriter{force: true}); err != nil {
 		t.Fatalf("renderDeploy: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestRenderDeploy_None(t *testing.T) {
 		t.Fatalf("DeployTargets = %v, want empty for --deploy none", m.DeployTargets)
 	}
 	dir := t.TempDir()
-	if err := renderDeploy(dir, m); err != nil {
+	if err := renderDeploy(dir, m, &artifactWriter{force: true}); err != nil {
 		t.Fatalf("renderDeploy: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "deploy")); !os.IsNotExist(err) {

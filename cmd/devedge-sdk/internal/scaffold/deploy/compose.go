@@ -24,6 +24,7 @@ func (composeTarget) Render(svc ServiceView, opts Options) ([]Artifact, error) {
 		GracePeriodSeconds: opts.GracePeriodSeconds,
 		HasPostgres:        hasPG,
 		PostgresImage:      pg.Image,
+		ImageRepo:          imageRepoFromModule(svc.Module, svc.Name),
 	}
 	b, err := renderText("docker-compose.yml", composeTmpl, data)
 	if err != nil {
@@ -42,6 +43,7 @@ type composeData struct {
 	GracePeriodSeconds int
 	HasPostgres        bool
 	PostgresImage      string
+	ImageRepo          string
 }
 
 func postgresDep(svc ServiceView) (Dependency, bool) {
@@ -61,13 +63,15 @@ const composeTmpl = `# Docker Compose deploy for {{.Service}} — a local/lightw
 # /healthz healthcheck, OTEL_* export, and a stop_grace_period matching the
 # service's graceful shutdown (signal.NotifyContext on SIGTERM).
 #
-#   docker compose -f deploy/compose/docker-compose.yml up --build
+# The image is built by ko (no Dockerfile) and published to GHCR by
+# .github/workflows/image.yml. To run a LOCAL build instead of the published image:
+#   IMAGE=$(ko build --local --bare ./cmd/{{.Service}}) \
+#     docker compose -f deploy/compose/docker-compose.yml up
+# Otherwise this pulls the published image:
+#   docker compose -f deploy/compose/docker-compose.yml up
 services:
   {{.Service}}:
-    build:
-      # Build context is the repo root; supply a Dockerfile or override 'image:'.
-      context: ../..
-    image: {{.Service}}:dev
+    image: ${IMAGE:-{{.ImageRepo}}:latest}
     ports:
       - "{{.GRPCPort}}:{{.GRPCPort}}"   # gRPC
       - "{{.HTTPPort}}:{{.HTTPPort}}"   # HTTP/JSON gateway

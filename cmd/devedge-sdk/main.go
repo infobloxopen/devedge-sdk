@@ -32,6 +32,7 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newNewCmd())
+	root.AddCommand(newAddCmd())
 	return root
 }
 
@@ -135,5 +136,86 @@ path so the generated go.mod + imports are correct, e.g.
 	c.Flags().BoolVar(&force, "force", false, "scaffold into a non-empty directory")
 	c.Flags().BoolVar(&aggregate, "aggregate", false, "scaffold the resource as a DDD aggregate root (owns a member resource) and wire the TxRunner + AggregateRepository + transactional-outbox Publisher/Dispatcher in main")
 	c.Flags().StringVar(&deployTgts, "deploy", "", "deploy targets to render (comma-separated): k8s,compose (default both); \"none\" to skip. k8s emits a Flux HelmRelease+OCIRepository+values overlay (framework-owned Helm chart); compose emits docker-compose.yml")
+	return c
+}
+
+func newAddCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "add",
+		Short: "Add artifacts to an existing service (deploy, ...)",
+	}
+	c.AddCommand(newAddDeployCmd())
+	return c
+}
+
+func newAddDeployCmd() *cobra.Command {
+	var (
+		dir        string
+		name       string
+		grpcPort   string
+		httpPort   string
+		deployTgts string
+		imageOnly  bool
+		force      bool
+	)
+	c := &cobra.Command{
+		Use:   "deploy",
+		Short: "Add container image + deploy artifacts to an EXISTING devedge-sdk service",
+		Long: `Retrofit an existing service (scaffolded by 'devedge-sdk new service') with the
+container-image and deploy artifacts that new services now ship:
+
+  - Dockerfile                       distroless, static, multi-arch build of ./cmd/<svc>
+  - .dockerignore
+  - .github/workflows/image.yml      publishes ghcr.io/<owner>/<repo> on merge to main (+ v* tags)
+  - deploy/k8s, deploy/compose       unless --image-only
+
+The service name, Go module, and backend (gorm|ent) are detected from the repo
+(go.mod + cmd/<name>); the artifacts are BYTE-IDENTICAL to a freshly scaffolded
+service's. Existing files are SKIPPED (use --force to overwrite), so your
+hand-edited tree is safe. Run it from the service repo root (or pass --dir).`,
+		Example: `  # from the service repo root
+  devedge-sdk add deploy
+
+  # a specific repo, image files only, choosing the binary
+  devedge-sdk add deploy --dir ./orders --image-only --name orders`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := scaffold.AddDeploy(scaffold.AddDeployOptions{
+				Dir:       dir,
+				Name:      name,
+				GRPCPort:  grpcPort,
+				HTTPPort:  httpPort,
+				Deploy:    deployTgts,
+				ImageOnly: imageOnly,
+				Force:     force,
+			}, cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
+			o := cmd.OutOrStdout()
+			for _, f := range res.Written {
+				fmt.Fprintf(o, "  + %s\n", f)
+			}
+			for _, f := range res.Skipped {
+				fmt.Fprintf(o, "  = %s (exists; --force to overwrite)\n", f)
+			}
+			if len(res.Written) == 0 {
+				fmt.Fprintf(o, "\n✓ nothing to do — %s already has all deploy artifacts\n", res.Service)
+			} else {
+				fmt.Fprintf(o, "\n✓ added %d deploy artifact(s) to %s\n", len(res.Written), res.Service)
+				fmt.Fprintf(o, "  next: commit them. On merge to main, image.yml builds the image with ko and\n")
+				fmt.Fprintf(o, "        publishes it to GHCR; the deploy/ artifacts reference it. Build it\n")
+				fmt.Fprintf(o, "        locally with `make image` (auto-detects the docker socket).\n")
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&dir, "dir", "", "service repo root (defaults to the current directory)")
+	c.Flags().StringVar(&name, "name", "", "binary/service name; auto-detected from cmd/<name> when there is exactly one")
+	c.Flags().StringVar(&grpcPort, "grpc-port", "", "gRPC port for EXPOSE + deploy values (default 9090)")
+	c.Flags().StringVar(&httpPort, "http-port", "", "HTTP port for EXPOSE + deploy values (default 8080)")
+	c.Flags().StringVar(&deployTgts, "deploy", "", "deploy targets to render (comma-separated): k8s,compose (default both); \"none\" to skip")
+	c.Flags().BoolVar(&imageOnly, "image-only", false, "render only Dockerfile + .dockerignore + image.yml (skip deploy/)")
+	c.Flags().BoolVar(&force, "force", false, "overwrite files that already exist (default: skip them)")
 	return c
 }

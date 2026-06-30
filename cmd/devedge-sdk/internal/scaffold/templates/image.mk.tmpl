@@ -1,0 +1,16 @@
+
+# Build the container image LOCALLY with ko (distroless, static — NO Dockerfile) and
+# load it into your Docker daemon. CI publishes the SAME image to GHCR on merge to
+# main via .github/workflows/image.yml. DOCKER_HOST is auto-detected from the active
+# docker context (Docker Desktop, Rancher Desktop, colima, and plain Linux all use
+# different socket paths), so the local ko build finds the daemon with no manual setup.
+# Default KO_DOCKER_REPO=ko.local loads the image into the local daemon; override it
+# to PUSH instead: KO_DOCKER_REPO=ghcr.io/you/svc make image
+.PHONY: image
+KO_DEFAULTBASEIMAGE ?= gcr.io/distroless/static-debian12:nonroot
+image: | gen
+	@command -v ko >/dev/null 2>&1 || go install github.com/google/ko@latest
+	DOCKER_HOST="$${DOCKER_HOST:-$$(docker context inspect --format '{{"{{"}} .Endpoints.docker.Host {{"}}"}}' 2>/dev/null)}" \
+	KO_DEFAULTBASEIMAGE="$(KO_DEFAULTBASEIMAGE)" \
+	KO_DOCKER_REPO="$${KO_DOCKER_REPO:-ko.local}" \
+	ko build --bare ./cmd/{{.BinName}}
