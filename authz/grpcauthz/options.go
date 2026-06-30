@@ -16,11 +16,19 @@ type rule struct {
 	verb     authz.Verb
 	resource string
 	public   bool
+	features []string         // entitlement features required (P12)
+	mode     authz.Mode       // enforce (default) | alert
+	quota    *authz.QuotaRule // declared usage quota (P13), enforced elsewhere
+}
+
+func ruleFrom(r authz.MethodRule) rule {
+	return rule{verb: r.Verb, resource: r.Resource, public: r.Public, features: r.Features, mode: r.Mode, quota: r.Quota}
 }
 
 type config struct {
 	authorizer  authz.Authorizer
 	principalFn PrincipalFunc
+	alertSink   authz.AlertSink
 	rules       map[string]rule // keyed by gRPC FullMethod; static rules from options
 	// ruleSource, when set, supplies additional rules resolved lazily at
 	// authorize-time (e.g. the server's accumulated AddRules set, which is not
@@ -37,12 +45,29 @@ func (c *config) lookup(fullMethod string) (rule, bool) {
 	if c.ruleSource != nil {
 		for _, r := range c.ruleSource() {
 			if r.Method == fullMethod {
-				return rule{verb: r.Verb, resource: r.Resource, public: r.Public}, true
+				return ruleFrom(r), true
 			}
 		}
 	}
 	r, ok := c.rules[fullMethod]
 	return r, ok
+}
+
+// allRules returns the merged declared rule set (ruleSource first, then the
+// static table), as [authz.MethodRule]s — for the boot-time completeness gate's
+// validation pass.
+func (c *config) allRules() []authz.MethodRule {
+	var out []authz.MethodRule
+	if c.ruleSource != nil {
+		out = append(out, c.ruleSource()...)
+	}
+	for m, r := range c.rules {
+		out = append(out, authz.MethodRule{
+			Method: m, Verb: r.verb, Resource: r.resource, Public: r.public,
+			Features: r.features, Mode: r.mode, Quota: r.quota,
+		})
+	}
+	return out
 }
 
 // Option configures the interceptor. The constructor + functional-option shape
@@ -94,7 +119,18 @@ func WithPublicMethod(fullMethod string) Option {
 func WithRules(rules ...authz.MethodRule) Option {
 	return func(c *config) {
 		for _, r := range rules {
-			c.rules[r.Method] = rule{verb: r.Verb, resource: r.Resource, public: r.Public}
+			c.rules[r.Method] = ruleFrom(r)
+		}
+	}
+}
+
+// WithAlertSink sets where alerts go when a [authz.ModeAlert] method's decision
+// fails but is allowed through (P12 observation mode). Defaults to a
+// structured-log sink.
+func WithAlertSink(s authz.AlertSink) Option {
+	return func(c *config) {
+		if s != nil {
+			c.alertSink = s
 		}
 	}
 }
@@ -123,6 +159,7 @@ func newConfig(opts ...Option) *config {
 	c := &config{
 		authorizer:  authz.DenyAll,
 		principalFn: func(context.Context) (authz.Principal, error) { return authz.Principal{}, nil },
+		alertSink:   authz.NewLogAlertSink(nil),
 		rules:       map[string]rule{},
 	}
 	for _, o := range opts {

@@ -83,17 +83,33 @@ func (c *config) authorize(ctx context.Context, fullMethod string) (context.Cont
 		Verb:      r.verb,
 		Resource:  authz.Resource{Type: r.resource},
 		Method:    fullMethod,
+		Features:  r.features,
 	})
 	if err != nil {
 		if c.failOpen {
 			return ctx, nil
 		}
+		// A decision ERROR is infrastructure, not a policy denial: it fails
+		// closed even in alert mode (alert only relaxes a clean deny).
 		return ctx, status.Error(codes.Internal, "authz: decision error")
 	}
 	if !dec.Allow {
-		// AIP-211 existence-hiding message.
-		return ctx, status.Errorf(codes.PermissionDenied,
-			"Permission %q denied on resource %q (or it might not exist)", r.verb, r.resource)
+		if r.mode == authz.ModeAlert {
+			// Observation mode: emit what WOULD have been denied, then allow the
+			// request through (falls past this block to stash identity below).
+			c.alertSink.Emit(ctx, authz.Alert{
+				Method:    fullMethod,
+				Principal: princ,
+				Resource:  authz.Resource{Type: r.resource},
+				Verb:      r.verb,
+				Features:  r.features,
+				Reason:    dec.Reason,
+			})
+		} else {
+			// AIP-211 existence-hiding message.
+			return ctx, status.Errorf(codes.PermissionDenied,
+				"Permission %q denied on resource %q (or it might not exist)", r.verb, r.resource)
+		}
 	}
 	if len(dec.Obligations) > 0 {
 		ctx = context.WithValue(ctx, obligationsKey{}, dec.Obligations)
@@ -124,6 +140,21 @@ func AssertMethodsDeclared(methods []string, opts ...Option) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("authz: %d method(s) undeclared (add WithMethodRule or WithPublicMethod): %v",
 			len(missing), missing)
+	}
+	// Validate the declared rules' P12/P13 fields so a malformed declaration
+	// (an unknown mode, a quota without a metric) fails closed at boot rather
+	// than silently mis-enforcing at request time.
+	var invalid []string
+	for _, r := range c.allRules() {
+		if r.Mode != "" && r.Mode != authz.ModeEnforce && r.Mode != authz.ModeAlert {
+			invalid = append(invalid, fmt.Sprintf("%s: invalid mode %q", r.Method, r.Mode))
+		}
+		if r.Quota != nil && r.Quota.Metric == "" {
+			invalid = append(invalid, fmt.Sprintf("%s: quota declared without a metric", r.Method))
+		}
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("authz: %d malformed rule(s): %v", len(invalid), invalid)
 	}
 	return nil
 }

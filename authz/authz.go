@@ -44,12 +44,16 @@ type Resource struct {
 }
 
 // AccessRequest is the engine-neutral authorization question:
-// "may Principal perform Verb on Resource?"
+// "may Principal perform Verb on Resource?" — and, when Features is set, "...and
+// is Principal's account entitled to the feature(s) this method requires?", so a
+// single decision covers AuthZ AND Entitlement (the same unified decision the
+// OPA sidecar already returns as rbac_check ∧ entitlement_check).
 type AccessRequest struct {
 	Principal Principal
 	Verb      Verb
 	Resource  Resource
 	Method    string         // transport method (e.g. gRPC FullMethod), for logging/audit
+	Features  []string       // entitlement features this method requires (P12); empty = none
 	Context   map[string]any // extra attributes for attribute/relationship decisions
 }
 
