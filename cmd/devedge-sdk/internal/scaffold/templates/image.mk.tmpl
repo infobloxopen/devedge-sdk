@@ -11,6 +11,7 @@ KO_DEFAULTBASEIMAGE ?= gcr.io/distroless/static-debian12:nonroot
 image: | gen
 	@command -v ko >/dev/null 2>&1 || go install github.com/google/ko@latest
 	DOCKER_HOST="$${DOCKER_HOST:-$$(docker context inspect --format '{{"{{"}} .Endpoints.docker.Host {{"}}"}}' 2>/dev/null)}" \
+	GOFLAGS=-trimpath \
 	KO_DEFAULTBASEIMAGE="$(KO_DEFAULTBASEIMAGE)" \
 	KO_DOCKER_REPO="$${KO_DOCKER_REPO:-ko.local}" \
 	ko build --bare ./cmd/{{.BinName}}

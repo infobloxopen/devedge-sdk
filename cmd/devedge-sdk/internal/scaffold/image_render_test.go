@@ -60,6 +60,7 @@ func TestRenderImage_MakeTarget(t *testing.T) {
 		"docker context inspect", // socket autodetect
 		"DOCKER_HOST:-",          // respect an existing DOCKER_HOST, else autodetect
 		"ko build --bare",        // ko build (ko.local => local load, no --local needed)
+		"GOFLAGS=-trimpath",      // reproducible build
 		"./cmd/orders",           // the service binary
 	} {
 		if !strings.Contains(mk, want) {
@@ -82,6 +83,7 @@ func TestRenderImage_Workflow(t *testing.T) {
 		`tags: ["v*"]`,        // and on version tags
 		"packages: write",     // GHCR push permission
 		"run: make bootstrap", // generate gen/ before the ko build
+		"GOFLAGS: -trimpath",  // reproducible build (no build-machine paths in the binary)
 		"KO_DOCKER_REPO: ghcr.io/${{ github.repository }}${{ matrix.suffix }}",  // repo-namespaced
 		"KO_DEFAULTBASEIMAGE: gcr.io/distroless/static-debian12:nonroot",        // distroless + static
 		"go install github.com/google/ko@latest",                               // ko, no Dockerfile

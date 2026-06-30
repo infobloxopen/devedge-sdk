@@ -120,7 +120,8 @@ only log at Debug).
 The service ships as a **distroless, statically-linked** container image built with
 [`ko`](https://ko.build) — **no Dockerfile**. ko compiles the binary `CGO_ENABLED=0` and lays it
 on `gcr.io/distroless/static-debian12:nonroot` (no shell, no libc, nonroot) — the binary is the
-entire payload.
+entire payload. Builds are **reproducible** (`-trimpath`): the binary embeds no build-machine paths,
+so the same source builds byte-identically in CI and locally (debug symbols are kept).
 
 `.github/workflows/image.yml` builds and publishes the image to **GitHub Container Registry on
 merge to `main`** (and on `v*` tags), repo-namespaced and non-nested:
