@@ -1,6 +1,6 @@
 # devedge-sdk — Claude Code instructions
 
-`devedge-sdk` is a clean, pluggable runtime SDK for Infoblox services (companion to
+`devedge-sdk` is a clean, pluggable runtime SDK for multi-tenant services (companion to
 [devedge](https://github.com/infobloxopen/devedge)). It follows the **agentic
 delivery lifecycle** defined in the development-hub's `CLAUDE.md` (Propose →
 Analyze → Plan → Implement → QA → Document, with model routing and a verification

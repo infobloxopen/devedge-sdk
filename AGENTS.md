@@ -65,7 +65,7 @@ after any proto or middleware change. To carve a future heavy component into its
 
 **Never:**
 - Edit `*.pb.go`, `*.svc.go`, `*.storage.go`, `*.pb.gw.go`, `*.authz.go` — fix the proto or the plugin, then re-run `make generate`
-- Import OPA, GORM, ent, or any ORM/policy-engine in `authz/`, `authz/grpcauthz/`, or `persistence/` — those packages are the engine-neutral core. The gorm/ent adapters live in their own nested modules (`persistence/gormtx`, `persistence/entrepo`), so a core import of them is a cross-module **compile error**; other engine adapters live outside the repo (e.g. `Infoblox-CTO/devedge-sdk-internal`).
+- Import OPA, GORM, ent, or any ORM/policy-engine in `authz/`, `authz/grpcauthz/`, or `persistence/` — those packages are the engine-neutral core. The gorm/ent adapters live in their own nested modules (`persistence/gormtx`, `persistence/entrepo`), so a core import of them is a cross-module **compile error**; other engine adapters live outside the repo (in a separate adapter module).
 - Return a `[secret]`-annotated field value from a List or Get response
 - Add a per-method interceptor by hand — use proto annotations to drive middleware wiring (that is the architecture's reason for being)
 - Grant a `public: true` authz exemption without a code review
@@ -92,7 +92,7 @@ Files with `// Code generated ... DO NOT EDIT.` and a `.pb.`, `.svc.`, `.storage
 
 ## Core-cleanliness invariant
 
-`authz/`, `authz/grpcauthz/`, and `persistence/` must have zero imports of OPA, GORM, ent, or any policy/ORM engine. The gorm/ent adapters are now their OWN nested modules (`persistence/gormtx`, `persistence/entrepo`), so a core import of them fails to compile across the module boundary — `make build-gowork-off` and the `cleancore_test.go` guards enforce it; other engine adapters live outside the repo (e.g. `Infoblox-CTO/devedge-sdk-internal`). Enforce via `go mod graph` if unsure.
+`authz/`, `authz/grpcauthz/`, and `persistence/` must have zero imports of OPA, GORM, ent, or any policy/ORM engine. The gorm/ent adapters are now their OWN nested modules (`persistence/gormtx`, `persistence/entrepo`), so a core import of them fails to compile across the module boundary — `make build-gowork-off` and the `cleancore_test.go` guards enforce it; other engine adapters live outside the repo (in a separate adapter module). Enforce via `go mod graph` if unsure.
 
 ## Security invariants (enforced by `seccheck` and `make security-check`)
 
