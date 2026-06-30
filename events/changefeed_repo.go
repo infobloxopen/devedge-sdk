@@ -47,6 +47,14 @@ type ChangeFeedOptions[T any] struct {
 	// storage + PII cost). Off by default; opt in per resource when a consumer
 	// needs the prior state (e.g. a diff-style audit record).
 	EmitBefore bool
+
+	// Projections are named, derived shapes (search documents, reporting rows)
+	// emitted ALONGSIDE the entity's own change event on every mutation — the P5
+	// emittable-surfaces seam: one CUD feed fans out to N consumer-shaped
+	// projections, each its own ChangeEvent type, each routed to its consumer.
+	// Empty (the default) is pure P1 (Wave 1 audit) — unchanged behaviour. See
+	// [Projection].
+	Projections []Projection[T]
 }
 
 // ChangeEmitting wraps a [persistence.Repository] so that every Create/Update/
@@ -195,7 +203,10 @@ func (r *changeEmitter[T, K]) emit(ctx context.Context, ct ChangeType, after T, 
 			ce.Before = bimg
 		}
 	}
-	return r.publish(ctx, ce)
+	if err := r.publish(ctx, ce); err != nil {
+		return err
+	}
+	return r.emitProjections(ctx, ct, tenant, after)
 }
 
 // emitDelete builds and publishes the change event for a deletion. The resource
@@ -224,7 +235,15 @@ func (r *changeEmitter[T, K]) emitDelete(ctx context.Context, key K, snapshot *T
 			ce.Before = bimg
 		}
 	}
-	return r.publish(ctx, ce)
+	if err := r.publish(ctx, ce); err != nil {
+		return err
+	}
+	// A projection can only be removed from its consumer (search index, read
+	// model) if we know its identity, which comes from the pre-delete snapshot.
+	if snapshot != nil {
+		return r.emitProjections(ctx, ChangeDelete, tenant, *snapshot)
+	}
+	return nil
 }
 
 func (r *changeEmitter[T, K]) publish(ctx context.Context, ce ChangeEvent) error {
