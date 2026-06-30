@@ -63,9 +63,7 @@ func TestScaffold_GORM_BuildsAndPasses(t *testing.T) {
 		"cmd/orders/main.go",
 		"cmd/orders/orders_smoke_test.go",
 		".github/workflows/apx-release.yml",
-		// Container image: distroless/static build + GHCR publish-on-merge workflow.
-		"Dockerfile",
-		".dockerignore",
+		// Container image: the ko-based GHCR publish-on-merge workflow (no Dockerfile).
 		".github/workflows/image.yml",
 	} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
@@ -128,9 +126,7 @@ func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 		"cmd/orders/main.go",
 		"cmd/orders/orders_smoke_test.go",
 		".github/workflows/apx-release.yml",
-		// Container image: distroless/static build + GHCR publish-on-merge workflow.
-		"Dockerfile",
-		".dockerignore",
+		// Container image: the ko-based GHCR publish-on-merge workflow (no Dockerfile).
 		".github/workflows/image.yml",
 	} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
