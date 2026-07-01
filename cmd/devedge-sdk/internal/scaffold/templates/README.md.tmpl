@@ -18,7 +18,7 @@
 before generating fails with `no required module provides package .../gen/...`. Generate first:
 
 ```sh
-make tools      # install the codegen plugins (buf, the devedge-sdk plugins) onto PATH
+make tools      # install the codegen plugins (buf, the devedge-sdk plugins) + spectral (for api-lint) onto PATH
 make generate   # buf generate -> gen/ (the {{.Backend}} models, repository, service, gateway{{- if eq (printf "%s" .Backend) "ent" }}, then entc client{{- end }})
 make test       # build + run the smoke + security tests
 ```
@@ -36,7 +36,9 @@ auto-generate on first use if `gen/` is missing, then stay fast (they do **not**
 invocation). Re-run `make generate` explicitly after editing the proto.
 
 Prerequisites: [`apx`](https://github.com/infobloxopen/apx), [`buf`](https://buf.build), and Go (see
-`go.mod` for the version).
+`go.mod` for the version). `make api-lint` additionally needs
+[`spectral`](https://github.com/stoplightio/spectral) (a Node tool, `npm install -g @stoplight/spectral-cli`)
+to lint the generated OpenAPI surface; `make tools` installs it for you when npm is present.
 
 ## Run it
 
@@ -187,10 +189,14 @@ The proto under `proto/{{.ProtoPathSuffix}}/` is the **public, apx-governed** co
 locally before you push — CI runs the same ones:
 
 ```sh
-make api-lint       # STANDARD lint of the public proto
+make api-lint       # STANDARD lint of the public proto + the generated OpenAPI surface
 make api-breaking   # compatibility check vs the last committed proto (apx breaking --against HEAD)
 make api-release    # prepare a versioned release (dry-run-equivalent; see note below)
 ```
+
+`make api-lint` lints the OpenAPI surface with [`spectral`](https://github.com/stoplightio/spectral).
+apx auto-downloads `buf` and `oasdiff` but not `spectral` (a Node tool), so `make tools` installs it via
+npm. If it is missing, run `npm install -g @stoplight/spectral-cli`.
 
 `make api-breaking` catches an accidental breaking change before it lands. It requires an initialized
 git repo with at least one commit — run `git init && git add . && git commit -m "initial"` first if

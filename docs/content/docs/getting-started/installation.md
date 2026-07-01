@@ -23,6 +23,7 @@ upgrade to a current release in that case.
 {{< /callout >}}
 | **buf** | latest | drives proto compilation and the codegen plugins ([buf.build](https://buf.build)) |
 | **apx** | 0.12.1+ | declares/governs the public API surface; the `devedge-sdk new` scaffold shells out to `apx init app` ([infobloxopen/apx](https://github.com/infobloxopen/apx)) |
+| **spectral** | 6+ | only for `make api-lint`: `apx lint` shells out to spectral to lint the generated OpenAPI surface. A Node tool — install with `npm install -g @stoplight/spectral-cli`. apx auto-downloads buf and oasdiff, but not spectral, so the scaffold's `make tools` installs it via npm ([stoplightio/spectral](https://github.com/stoplightio/spectral)) |
 | **protoc-gen-go**, **protoc-gen-go-grpc** | latest | base proto/gRPC code generation |
 | **PostgreSQL** | 14+ (prod shapes) | only needed when you use a real GORM/ent backend; the in-memory store and SQLite suffice for tests |
 | **HashiCorp Vault** | optional | only for production secret handling via Transit; dev mode uses AES-256-GCM with no external service |

@@ -9,9 +9,14 @@
 # `go list` can't resolve it yet — e.g. before `go mod download` on a fresh clone.
 SDK_VERSION ?= $(shell go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/infobloxopen/devedge-sdk 2>/dev/null || echo {{.SDKVersion}})
 
-# Install the protoc plugins `buf generate` needs onto PATH (GOPATH/bin):
+# Install the protoc plugins `buf generate` needs onto PATH (GOPATH/bin), and
+# provision spectral for `apx lint`:
 #   - the SDK plugins, pinned to SDK_VERSION;
-#   - the public plugins from their canonical modules.
+#   - the public plugins from their canonical modules;
+#   - spectral — a Node tool `apx lint` shells out to for the OpenAPI surface.
+#     apx auto-downloads buf/oasdiff but NOT spectral, so `make tools` installs it
+#     via npm (best-effort: `make bootstrap` still succeeds without npm, and
+#     `make api-lint` prints a hint if it is missing).
 tools:
 	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@$(SDK_VERSION)
 	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-svc@$(SDK_VERSION)
@@ -25,6 +30,16 @@ tools:
 	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
 	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
 	go install github.com/infobloxopen/devedge-sdk/cmd/openapiv2to3@$(SDK_VERSION)
+	@if command -v spectral >/dev/null 2>&1; then \
+		echo "  spectral present: $$(command -v spectral)"; \
+	elif command -v npm >/dev/null 2>&1; then \
+		echo "  installing spectral (apx lint's OpenAPI linter) via npm…"; \
+		npm install -g @stoplight/spectral-cli || echo "  WARN: spectral install failed — run 'npm install -g @stoplight/spectral-cli' before 'make api-lint'"; \
+	else \
+		echo "  NOTE: spectral not found and npm unavailable. 'make api-lint' lints the generated OpenAPI"; \
+		echo "        surface with spectral (apx auto-downloads buf/oasdiff but not spectral). Install"; \
+		echo "        Node.js, then 'npm install -g @stoplight/spectral-cli'."; \
+	fi
 
 # Generate the consumer-local implementation (models, repository, service
 # scaffolding, authz rules, gateway) from the public proto. Output is git-ignored.
@@ -120,6 +135,7 @@ run: | gen
 #                not the <module>/<api-id> layout apx derives by default. The
 #                command exits 0. Do NOT add --strict, which would turn it fatal.
 api-lint:
+	@command -v spectral >/dev/null 2>&1 || echo "note: 'apx lint' lints the OpenAPI surface with spectral — 'make tools' provisions it (needs npm), or run 'npm install -g @stoplight/spectral-cli'."
 	apx lint
 
 # NOTE: when there ARE violations, apx itself prints the buf violation list twice
