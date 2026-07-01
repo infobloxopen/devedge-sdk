@@ -193,6 +193,13 @@ become graph edges, which suits relationship-heavy domains. See
 [Storage Shapes](../storage-shapes/) for when to choose ent, and the
 [Codegen reference](../../../reference/codegen/) for the exact generated shape.
 
+{{< callout type="info" >}}
+**A `has_many` is not eager-loaded on a plain read.** `Get<Parent>` returns the parent with an empty
+children slice, which keeps a single-resource read from loading an unbounded set of children. To read
+a parent together with its children, use the generated `Load<Parent>Aggregate` read primitive — see
+[Aggregates → Loading and saving](../../../concepts/aggregates/#loading-and-saving).
+{{< /callout >}}
+
 ## Secret fields
 
 A field annotated with `secret` stores a value that must never appear as plaintext in the database

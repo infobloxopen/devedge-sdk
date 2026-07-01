@@ -246,6 +246,30 @@ The generated rules feed both the authz interceptor and the field-mask validator
 [servicekit reference](../../../reference/servicekit/) and the
 [server reference](../../../reference/server/).
 
+## Call the HTTP API
+
+The gateway maps each RPC to the HTTP route in its `google.api.http` option. `CreateAPIKey` sets
+`body: "api_key"`, so the JSON request body **is** the `APIKey` resource, sent at the top level — not
+wrapped in the request field name:
+
+```bash
+curl -X POST localhost:8080/v1/apikeys \
+  -H 'Content-Type: application/json' \
+  -d '{"label": "ci-token", "key_prefix": "ak_live"}'
+```
+
+The tenant comes from request metadata, not the body, and the server generates the `id` (see
+[Model a Resource → Resource name](../model-a-resource/#resource-name-aip-122)). Send only the
+resource's own writable fields.
+
+{{< callout type="warning" >}}
+**A wrapped body is silently discarded, not rejected.** grpc-gateway's default JSON marshaler runs
+with `DiscardUnknown: true`, so a body shaped like `{"api_key": {...}}` — the resource wrapped in the
+request field name — parses as an empty `APIKey` and creates a resource with no fields (HTTP 200,
+empty result). Match `body: "<field>"` and send the resource fields at the top level. This is stock
+grpc-gateway behavior; the SDK installs no custom marshaler.
+{{< /callout >}}
+
 ## Error handling
 
 The `ErrorMapperUnary` interceptor, installed automatically by `server.New`, converts persistence
