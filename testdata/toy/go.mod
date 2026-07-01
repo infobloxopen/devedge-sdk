@@ -18,7 +18,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
