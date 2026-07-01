@@ -20,8 +20,16 @@ before generating fails with `no required module provides package .../gen/...`. 
 ```sh
 make tools      # install the codegen plugins (buf, the devedge-sdk plugins) onto PATH
 make generate   # buf generate -> gen/ (the {{.Backend}} models, repository, service, gateway{{- if eq (printf "%s" .Backend) "ent" }}, then entc client{{- end }})
-make test       # build + run the smoke tests (positive CRUD + fail-closed deny)
+make test       # build + run the smoke + security tests
 ```
+
+`make test` runs two generated test files in `cmd/{{.BinName}}/`:
+
+- `{{.ServiceLower}}_smoke_test.go` — a tenant-scoped CRUD round-trip plus a fail-closed deny.
+- `{{.ServiceLower}}_security_test.go` — `seccheck` assertions that turn the SDK's security
+  invariants (complete authz rules, unknown-principal deny, tenant isolation, clean error messages,
+  no secret-field leaks) into standard `go test` failures, so a security regression fails CI the
+  moment it merges. See the [Security Check how-to](https://infobloxopen.github.io/devedge-sdk/docs/how-to/secure/security-check/).
 
 `make bootstrap` runs `tools` + `generate` in one step. `make build`, `make test`, and `make run`
 auto-generate on first use if `gen/` is missing, then stay fast (they do **not** regenerate on every
@@ -165,6 +173,8 @@ proto/{{.ProtoPathSuffix}}/    PUBLIC API (apx-governed) — edit this, then `ma
 module/module.go             the IMPORTABLE module unit (domain wiring: repo + health + descriptor)
 module/migrations/           the module's migration files (a host runs them)
 cmd/{{.BinName}}/main.go      the thin STANDALONE host (process wiring → servicekit.Run)
+cmd/{{.BinName}}/{{.ServiceLower}}_smoke_test.go      CRUD round-trip + fail-closed deny
+cmd/{{.BinName}}/{{.ServiceLower}}_security_test.go   seccheck security invariants (run in CI)
 gen/                         GENERATED, git-ignored — never edit by hand
 Makefile                     tools / generate / bootstrap / build / test / run
 deploy/                      k8s (Flux) + compose deploy artifacts referencing the image

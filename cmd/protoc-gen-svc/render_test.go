@@ -170,6 +170,10 @@ func TestRenderSvcFile_module(t *testing.T) {
 	mustContain(t, out, "github.com/infobloxopen/devedge-sdk/servicekit")
 	mustContain(t, out, "type APIKeyServiceModuleOptions struct {")
 	mustContain(t, out, "Repo persistence.Repository[*APIKey, string]")
+	// BC-09 (#139): the override seam — an optional Handler that lets a service
+	// with custom / non-CRUD methods grow in place instead of abandoning the
+	// generated module.
+	mustContain(t, out, "Handler APIKeyServiceServer")
 
 	// Constructor returns a servicekit.Module.
 	mustContain(t, out, "func APIKeyServiceModule(opts APIKeyServiceModuleOptions) servicekit.Module {")
@@ -184,8 +188,11 @@ func TestRenderSvcFile_module(t *testing.T) {
 	mustContain(t, out, `Resources: []servicekit.ResourceDescriptor{{Name: "apikey.api_key"}}`)
 
 	// Register wraps the existing WithRepository over the shared server — it does
-	// NOT reimplement registration.
+	// NOT reimplement registration. The override seam: Handler wins when set,
+	// otherwise the default CRUD path; neither set fails closed.
 	mustContain(t, out, "func (m *aPIKeyServiceModule) Register(_ context.Context, app *servicekit.App) error {")
+	mustContain(t, out, "if m.opts.Handler != nil {")
+	mustContain(t, out, "return RegisterAPIKeyService(app.Server, m.opts.Handler)")
 	mustContain(t, out, "return RegisterAPIKeyServiceWithRepository(app.Server, m.opts.Repo)")
 
 	// The Module wraps, not replaces: the existing entry points are still present.

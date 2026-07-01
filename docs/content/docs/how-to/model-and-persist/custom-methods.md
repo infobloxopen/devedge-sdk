@@ -6,8 +6,8 @@ weight: 4
 This page shows how to grow a scaffolded single-resource service into one that serves custom
 (non-CRUD) RPCs and a second resource, wired through the `servicekit` host the scaffold already
 generates. You start from a `devedge-sdk new service` project, add a custom RPC and its handler
-alongside the generated CRUD, add a child resource and its repository, and register all of it as one
-`servicekit.Module`.
+alongside the generated CRUD, add a child resource and its repository, and register your handler
+through the generated module's `Handler` seam — no forked `servicekit.Module`.
 
 Use this page when the generated CRUD is not enough — your service has business operations
 (`Checkout`, `AddItem`) or owns more than one resource. For the `servicekit` API these steps use, see
@@ -25,9 +25,10 @@ the [servicekit reference](../../../reference/servicekit/).
   database readiness check.
 
 A pure-CRUD service needs no further wiring. The generated `<Service>Module` registers the generated
-`<Service>CRUDHandler` over your repository through `Register<Service>WithRepository`, and that is
-all `Register` does. To add custom methods or a second resource, you replace that generated module
-with a hand-written one — `servicekit.Module` is the seam for it.
+`<Service>CRUDHandler` over your repository through `Register<Service>WithRepository`. To add custom
+methods or a second resource, you grow that module IN PLACE: `<Service>ModuleOptions` carries a
+`Handler` field, so you set an override handler instead of forking a hand-written `servicekit.Module`.
+The module keeps its generated `Descriptor` — methods, authz rules, resource names — for free.
 
 ## Prerequisites
 
@@ -198,86 +199,57 @@ func (h *cartHandler) GetCartSummary(ctx context.Context, req *cartdv1.GetCartSu
 }
 ```
 
-## 5. Replace the generated module with a hand-written one
+## 5. Wire the custom handler through the module's `Handler` option
 
-The generated `module/module.go` wraps `<Service>Module`, which serves only the single-resource CRUD
-path. Replace it with a hand-written `servicekit.Module` whose `Register` builds the custom handler
-over all three repositories and registers it with `Register<Service>` (not
-`Register<Service>WithRepository`).
+The generated `module/module.go` wraps `<Service>Module`, and its `<Service>ModuleOptions` carries a
+`Handler` field for exactly this: set it and the module registers your handler instead of building
+the default CRUD one. You grow the generated module IN PLACE — you do **not** fork a hand-written
+`servicekit.Module`, so the module's `Descriptor` (methods, authz rules, resource names) still comes
+from the generated proto facts for free.
 
-The cart host carries the module in `cmd/cartd/main.go`:
+Thread whatever the handler needs — here the ent client, so it can build the child and projection
+repositories — through the hand-owned `Module` constructor, and set the handler as `Handler`:
 
-```go {filename="cmd/cartd/main.go"}
-type cartdModule struct {
-    client *entclient.Client
-    db     sdkhealth.Pinger
-}
-
-func (m *cartdModule) Descriptor() servicekit.Descriptor {
-    return servicekit.Descriptor{
-        ID: "cartd",
-        Methods: []string{
-            cartdv1.CartService_CreateCart_FullMethodName,
-            cartdv1.CartService_GetCart_FullMethodName,
-            cartdv1.CartService_ListCarts_FullMethodName,
-            cartdv1.CartService_UpdateCart_FullMethodName,
-            cartdv1.CartService_DeleteCart_FullMethodName,
-            cartdv1.CartService_AddItem_FullMethodName,
-            cartdv1.CartService_RemoveItem_FullMethodName,
-            cartdv1.CartService_Checkout_FullMethodName,
-            cartdv1.CartService_GetCartSummary_FullMethodName,
-        },
-        AuthzRules: cartdv1.CartServiceAuthzRules,
-        Resources: []servicekit.ResourceDescriptor{
-            {Name: "cartd.cart"}, {Name: "cartd.cartitem"},
-        },
-    }
-}
-
-func (m *cartdModule) Register(_ context.Context, app *servicekit.App) error {
+```go {filename="module/module.go"}
+// Module now takes the ent client so it can build the child + projection
+// repositories the custom handler uses (was: a single Cart repository).
+func Module(client *entclient.Client, sqlDB sdkhealth.Pinger) servicekit.Module {
     h := &cartHandler{
-        items:   cartdv1.NewCartItemEntRepository(m.client),
-        summary: cartdv1.NewCartSummaryEntRepository(m.client),
+        items:   cartdv1.NewCartItemEntRepository(client),
+        summary: cartdv1.NewCartSummaryEntRepository(client),
     }
-    h.CartServiceCRUDHandler.Repo = cartdv1.NewCartEntRepository(m.client)
-    if err := cartdv1.RegisterCartService(app.Server, h); err != nil {
-        return err
+    // The embedded CRUD handler serves the standard methods over the Cart repo.
+    h.CartServiceCRUDHandler.Repo = cartdv1.NewCartEntRepository(client)
+
+    return &cartdModule{
+        inner: cartdv1.CartServiceModule(cartdv1.CartServiceModuleOptions{Handler: h}),
+        db:    sqlDB,
     }
-    if m.db != nil {
-        return app.Health.Register("cartd.db", sdkhealth.NewDBCheck("cartd.db", m.db))
-    }
-    return nil
 }
 ```
 
-Three things make this module serve the custom surface:
-
-1. **`Descriptor.Methods` lists every served method** — the generated CRUD plus the custom RPCs —
-   using the generated `<Service>_<Method>_FullMethodName` constants. The host uses this list to
-   detect duplicate service names across a composition.
-2. **`Descriptor.AuthzRules` is `<Service>AuthzRules`** — the full generated rule table, including the
-   custom methods' rules. `RegisterCartService` contributes the same rules to the server, and the
-   boot gate checks them.
-3. **`Register` builds the custom handler and registers it with `RegisterCartService(app.Server, h)`**
-   — the plain `Register<Service>` that takes a handler, not the repository. It constructs all three
-   generated repositories from the ent client and assigns the owner repository to the embedded
-   `CRUDHandler.Repo`.
+Setting `Handler` (instead of `Repo`) is the whole change. The module's `Register` then registers your
+handler with `Register<Service>` — which serves both the embedded CRUD methods and your custom ones —
+rather than building the CRUD-only handler over `Repo`. The generated `cartdModule` wrapper is
+unchanged: it still forwards `Descriptor` to the generated inner module and registers the database
+readiness check.
 
 {{< callout type="info" >}}
-**Use `Register<Service>`, not `Register<Service>WithRepository`, for a custom handler.** The
-`...WithRepository` helper builds the generated CRUD-only handler over one repository — it cannot
-serve your custom methods. `Register<Service>(app.Server, h)` registers your handler, which has both
-the embedded CRUD methods and the custom ones. See
-[codegen → protoc-gen-svc](../../../reference/codegen/#protoc-gen-svc).
+**`Handler` and `Repo` are alternatives.** Set `Handler` for a service with custom or non-CRUD
+methods; leave the scaffold's default `Repo` for a pure-CRUD service. `Register<Service>WithRepository`
+(the `Repo` path) builds the generated CRUD-only handler and cannot serve custom methods; `Handler`
+takes the plain `Register<Service>` path, which serves any `<Service>Server`. The module fails closed
+at registration if neither is set. See [codegen → protoc-gen-svc](../../../reference/codegen/#protoc-gen-svc).
 {{< /callout >}}
 
-## 6. Point the host at the new module
+## 6. Point the host at the module
 
-In `runHost`, hand `servicekit.Run` the hand-written module instead of `svcmodule.Module(...)`:
+The host in `cmd/cartd/main.go` builds what `Module` now needs. Open the ent client once, keep a
+`*sql.DB` on the same DSN for the readiness check, and hand both to the same `svcmodule.Module`:
 
 ```go {filename="cmd/cartd/main.go"}
 return servicekit.Run(servicekit.HostConfig{
-    Modules:       []servicekit.Module{&cartdModule{client: client, db: sqlDB}},
+    Modules:       []servicekit.Module{svcmodule.Module(client, sqlDB)},
     GRPCAddr:      grpcAddr,
     HTTPAddr:      httpAddr,
     Authorizer:    authorizer,
@@ -288,7 +260,7 @@ return servicekit.Run(servicekit.HostConfig{
 ```
 
 The host still opens the database, runs the migration (now covering the child resource's model), and
-owns the process — only the module changed. See the
+owns the process — only what it hands `Module` changed. See the
 [servicekit reference](../../../reference/servicekit/#hostconfig) for every `HostConfig` field.
 
 ## Verify

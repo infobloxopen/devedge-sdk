@@ -137,6 +137,11 @@ func renderTemplates(dir string, m *Model) error {
 		{"migrations.README.md.tmpl", filepath.Join("module", "migrations", "README.md"), 0o644},
 		{mainTemplate(m.Backend), filepath.Join("cmd", m.BinName, "main.go"), 0o644},
 		{"smoke_test.go.tmpl", filepath.Join("cmd", m.BinName, m.ServiceLower+"_smoke_test.go"), 0o644},
+		// seccheck turns the SDK's security invariants into go test assertions so
+		// "provable security in CI" is true for the shipped artifact out of the box
+		// (BC-11): it runs under the scaffold's `make test` / `go test ./...` with
+		// no extra harness.
+		{"security_test.go.tmpl", filepath.Join("cmd", m.BinName, m.ServiceLower+"_security_test.go"), 0o644},
 		{"Makefile.tmpl", "Makefile", 0o644},
 		{"README.md.tmpl", "README.md", 0o644},
 		{"ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), 0o644},

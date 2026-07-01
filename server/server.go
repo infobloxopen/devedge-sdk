@@ -238,7 +238,6 @@ func New(cfg Config) (*Server, error) {
 	//     — bounds the handler call itself.
 	chain := []grpc.UnaryServerInterceptor{
 		middleware.RequestIDUnary(),
-		middleware.ErrorMapperUnary(),
 		middleware.TenantIDUnary(),
 	}
 	// Rate-limit: shed load early, before logging and authz.
@@ -247,9 +246,18 @@ func New(cfg Config) (*Server, error) {
 	}
 	chain = append(chain,
 		// LoggingUnary sits after request-ID/tenant (so the record carries both)
-		// and before authz (so it captures the final code, e.g. PermissionDenied).
-		// It is trace-correlated and redacts secret-annotated payload fields.
+		// and OUTER to ErrorMapperUnary + authz (so it captures the final code the
+		// client sees — the mapped persistence code, e.g. NotFound, and
+		// PermissionDenied from authz). It is trace-correlated and redacts
+		// secret-annotated payload fields.
 		middleware.LoggingUnary(cfg.Logger),
+		// ErrorMapperUnary sits INNER to LoggingUnary so the access log records the
+		// mapped client-visible code, not the raw persistence sentinel (BC-04 /
+		// #134: status.Code(raw-sentinel) is Unknown — the log would disagree with
+		// both the client and the RED metrics). It stays OUTER to authz and the
+		// handler chain so every persistence sentinel is still mapped before the
+		// client (incl. the etag/field-mask interceptors below).
+		middleware.ErrorMapperUnary(),
 		grpcauthz.UnaryServerInterceptor("sdk", authzOpts...),
 	)
 	// P13: enforce declared per-method quotas immediately after authz (so the

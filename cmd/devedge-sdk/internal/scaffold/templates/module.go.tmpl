@@ -53,12 +53,45 @@ func Migrations() fs.FS {
 // Module returns the importable servicekit.Module for {{.BinName}}, bound to repo
 // (the domain repository) and sqlDB (used for the DB readiness check). A host
 // registers the returned module on a shared server — standalone or composed.
+//
+// Growing past pure CRUD: the generated {{.ServiceType}}ModuleOptions exposes a
+// Handler override seam. When you add a custom or non-CRUD RPC to the proto (say
+// a Checkout method), the generated CRUD handler leaves it Unimplemented — so
+// implement it IN PLACE by embedding the generated handler and setting Handler
+// below, instead of hand-rolling a separate servicekit.Module. See
+// new{{.Resource}}Handler (commented below) and the "custom methods" how-to.
 func Module(repo persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string], sqlDB sdkhealth.Pinger) servicekit.Module {
 	return &{{.ServiceLower}}Module{
-		inner: {{.GoPkg}}.{{.ServiceType}}Module({{.GoPkg}}.{{.ServiceType}}ModuleOptions{Repo: repo}),
-		db:    sqlDB,
+		inner: {{.GoPkg}}.{{.ServiceType}}Module({{.GoPkg}}.{{.ServiceType}}ModuleOptions{
+			Repo: repo,
+			// Custom / non-CRUD methods? Override in place — see the recipe below:
+			//   Handler: new{{.Resource}}Handler(repo),
+		}),
+		db: sqlDB,
 	}
 }
+
+// Custom methods — grow in place. When the proto adds an RPC that is NOT an AIP
+// standard method, the generated CRUD handler leaves it Unimplemented. Implement
+// it by embedding the generated handler (so CRUD keeps working) and overriding
+// just the new method, then wire your handler via the Handler option in Module
+// above. This keeps everything on the generated module — no forked
+// servicekit.Module. Uncomment and fill in when you add your first custom RPC:
+//
+//	type {{.ResourceSnake}}Handler struct {
+//		*{{.GoPkg}}.{{.ServiceType}}CRUDHandler // default CRUD stays intact
+//	}
+//
+//	func new{{.Resource}}Handler(repo persistence.Repository[*{{.GoPkg}}.{{.Resource}}, string]) *{{.ResourceSnake}}Handler {
+//		return &{{.ResourceSnake}}Handler{ {{.GoPkg}}.New{{.ServiceType}}Handler(repo) }
+//	}
+//
+//	// func (h *{{.ResourceSnake}}Handler) Checkout{{.Resource}}(ctx context.Context, req *{{.GoPkg}}.Checkout{{.Resource}}Request) (*{{.GoPkg}}.{{.Resource}}, error) {
+//	// 	// ... custom logic; h.Repo is the embedded CRUD handler's repository ...
+//	// }
+//
+// A second resource with its own service gets its own generated module — compose
+// both by handing the host several modules (see the composable-services how-to).
 
 // {{.ServiceLower}}Module decorates the generated module with the hand-written
 // extras: it forwards Descriptor to the generated facts and, in Register, wires

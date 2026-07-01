@@ -5,6 +5,7 @@ package iamv1
 
 import (
 	"context"
+	"errors"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
@@ -78,13 +79,22 @@ func RegisterAccountServiceWithRepository(s *server.Server, repo persistence.Rep
 }
 
 // AccountServiceModuleOptions are the hand-written parts the generated AccountServiceModule needs that
-// the generator cannot derive from the proto. P1 carries the repository the
-// module's CRUD path registers over; later phases add custom health checks,
-// event handlers, background jobs, and handler overrides here.
+// the generator cannot derive from the proto: the repository the module's CRUD
+// path registers over, OR an override handler for a service that adds custom or
+// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).
 type AccountServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
-	// registers over (via RegisterAccountServiceWithRepository). Required.
+	// registers over (via RegisterAccountServiceWithRepository). Required
+	// unless Handler is set.
 	Repo persistence.Repository[*Account, string]
+
+	// Handler is an OPTIONAL override: when set, the module registers it (via
+	// RegisterAccountService) instead of constructing the default CRUD handler over Repo.
+	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
+	// module: embed the default handler (NewAccountServiceHandler(repo)) in your own
+	// type, implement the extra methods, and pass it here. When Handler is set,
+	// Repo may be nil (your handler owns its repositories).
+	Handler AccountServiceServer
 }
 
 // AccountServiceModule returns the importable servicekit.Module for AccountService: an introspectable
@@ -113,9 +123,16 @@ func (m *accountServiceModule) Descriptor() servicekit.Descriptor {
 	}
 }
 
-// Register implements servicekit.Module: wire AccountService onto the shared server via
-// the existing RegisterAccountServiceWithRepository (gRPC + REST gateway + authz rules).
+// Register implements servicekit.Module: wire AccountService onto the shared server. When
+// opts.Handler is set it registers that handler (via RegisterAccountService); otherwise it
+// takes the default CRUD path (RegisterAccountServiceWithRepository over opts.Repo).
 func (m *accountServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	if m.opts.Handler != nil {
+		return RegisterAccountService(app.Server, m.opts.Handler)
+	}
+	if m.opts.Repo == nil {
+		return errors.New("AccountServiceModuleOptions: one of Repo or Handler is required")
+	}
 	return RegisterAccountServiceWithRepository(app.Server, m.opts.Repo)
 }
 
@@ -183,13 +200,22 @@ func RegisterUserServiceWithRepository(s *server.Server, repo persistence.Reposi
 }
 
 // UserServiceModuleOptions are the hand-written parts the generated UserServiceModule needs that
-// the generator cannot derive from the proto. P1 carries the repository the
-// module's CRUD path registers over; later phases add custom health checks,
-// event handlers, background jobs, and handler overrides here.
+// the generator cannot derive from the proto: the repository the module's CRUD
+// path registers over, OR an override handler for a service that adds custom or
+// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).
 type UserServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
-	// registers over (via RegisterUserServiceWithRepository). Required.
+	// registers over (via RegisterUserServiceWithRepository). Required
+	// unless Handler is set.
 	Repo persistence.Repository[*User, string]
+
+	// Handler is an OPTIONAL override: when set, the module registers it (via
+	// RegisterUserService) instead of constructing the default CRUD handler over Repo.
+	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
+	// module: embed the default handler (NewUserServiceHandler(repo)) in your own
+	// type, implement the extra methods, and pass it here. When Handler is set,
+	// Repo may be nil (your handler owns its repositories).
+	Handler UserServiceServer
 }
 
 // UserServiceModule returns the importable servicekit.Module for UserService: an introspectable
@@ -218,9 +244,16 @@ func (m *userServiceModule) Descriptor() servicekit.Descriptor {
 	}
 }
 
-// Register implements servicekit.Module: wire UserService onto the shared server via
-// the existing RegisterUserServiceWithRepository (gRPC + REST gateway + authz rules).
+// Register implements servicekit.Module: wire UserService onto the shared server. When
+// opts.Handler is set it registers that handler (via RegisterUserService); otherwise it
+// takes the default CRUD path (RegisterUserServiceWithRepository over opts.Repo).
 func (m *userServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	if m.opts.Handler != nil {
+		return RegisterUserService(app.Server, m.opts.Handler)
+	}
+	if m.opts.Repo == nil {
+		return errors.New("UserServiceModuleOptions: one of Repo or Handler is required")
+	}
 	return RegisterUserServiceWithRepository(app.Server, m.opts.Repo)
 }
 
@@ -288,13 +321,22 @@ func RegisterGroupServiceWithRepository(s *server.Server, repo persistence.Repos
 }
 
 // GroupServiceModuleOptions are the hand-written parts the generated GroupServiceModule needs that
-// the generator cannot derive from the proto. P1 carries the repository the
-// module's CRUD path registers over; later phases add custom health checks,
-// event handlers, background jobs, and handler overrides here.
+// the generator cannot derive from the proto: the repository the module's CRUD
+// path registers over, OR an override handler for a service that adds custom or
+// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).
 type GroupServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
-	// registers over (via RegisterGroupServiceWithRepository). Required.
+	// registers over (via RegisterGroupServiceWithRepository). Required
+	// unless Handler is set.
 	Repo persistence.Repository[*Group, string]
+
+	// Handler is an OPTIONAL override: when set, the module registers it (via
+	// RegisterGroupService) instead of constructing the default CRUD handler over Repo.
+	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
+	// module: embed the default handler (NewGroupServiceHandler(repo)) in your own
+	// type, implement the extra methods, and pass it here. When Handler is set,
+	// Repo may be nil (your handler owns its repositories).
+	Handler GroupServiceServer
 }
 
 // GroupServiceModule returns the importable servicekit.Module for GroupService: an introspectable
@@ -323,9 +365,16 @@ func (m *groupServiceModule) Descriptor() servicekit.Descriptor {
 	}
 }
 
-// Register implements servicekit.Module: wire GroupService onto the shared server via
-// the existing RegisterGroupServiceWithRepository (gRPC + REST gateway + authz rules).
+// Register implements servicekit.Module: wire GroupService onto the shared server. When
+// opts.Handler is set it registers that handler (via RegisterGroupService); otherwise it
+// takes the default CRUD path (RegisterGroupServiceWithRepository over opts.Repo).
 func (m *groupServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	if m.opts.Handler != nil {
+		return RegisterGroupService(app.Server, m.opts.Handler)
+	}
+	if m.opts.Repo == nil {
+		return errors.New("GroupServiceModuleOptions: one of Repo or Handler is required")
+	}
 	return RegisterGroupServiceWithRepository(app.Server, m.opts.Repo)
 }
 
@@ -393,13 +442,22 @@ func RegisterMembershipServiceWithRepository(s *server.Server, repo persistence.
 }
 
 // MembershipServiceModuleOptions are the hand-written parts the generated MembershipServiceModule needs that
-// the generator cannot derive from the proto. P1 carries the repository the
-// module's CRUD path registers over; later phases add custom health checks,
-// event handlers, background jobs, and handler overrides here.
+// the generator cannot derive from the proto: the repository the module's CRUD
+// path registers over, OR an override handler for a service that adds custom or
+// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).
 type MembershipServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
-	// registers over (via RegisterMembershipServiceWithRepository). Required.
+	// registers over (via RegisterMembershipServiceWithRepository). Required
+	// unless Handler is set.
 	Repo persistence.Repository[*Membership, string]
+
+	// Handler is an OPTIONAL override: when set, the module registers it (via
+	// RegisterMembershipService) instead of constructing the default CRUD handler over Repo.
+	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
+	// module: embed the default handler (NewMembershipServiceHandler(repo)) in your own
+	// type, implement the extra methods, and pass it here. When Handler is set,
+	// Repo may be nil (your handler owns its repositories).
+	Handler MembershipServiceServer
 }
 
 // MembershipServiceModule returns the importable servicekit.Module for MembershipService: an introspectable
@@ -427,9 +485,16 @@ func (m *membershipServiceModule) Descriptor() servicekit.Descriptor {
 	}
 }
 
-// Register implements servicekit.Module: wire MembershipService onto the shared server via
-// the existing RegisterMembershipServiceWithRepository (gRPC + REST gateway + authz rules).
+// Register implements servicekit.Module: wire MembershipService onto the shared server. When
+// opts.Handler is set it registers that handler (via RegisterMembershipService); otherwise it
+// takes the default CRUD path (RegisterMembershipServiceWithRepository over opts.Repo).
 func (m *membershipServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	if m.opts.Handler != nil {
+		return RegisterMembershipService(app.Server, m.opts.Handler)
+	}
+	if m.opts.Repo == nil {
+		return errors.New("MembershipServiceModuleOptions: one of Repo or Handler is required")
+	}
 	return RegisterMembershipServiceWithRepository(app.Server, m.opts.Repo)
 }
 
@@ -497,13 +562,22 @@ func RegisterApiKeyServiceWithRepository(s *server.Server, repo persistence.Repo
 }
 
 // ApiKeyServiceModuleOptions are the hand-written parts the generated ApiKeyServiceModule needs that
-// the generator cannot derive from the proto. P1 carries the repository the
-// module's CRUD path registers over; later phases add custom health checks,
-// event handlers, background jobs, and handler overrides here.
+// the generator cannot derive from the proto: the repository the module's CRUD
+// path registers over, OR an override handler for a service that adds custom or
+// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).
 type ApiKeyServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
-	// registers over (via RegisterApiKeyServiceWithRepository). Required.
+	// registers over (via RegisterApiKeyServiceWithRepository). Required
+	// unless Handler is set.
 	Repo persistence.Repository[*ApiKey, string]
+
+	// Handler is an OPTIONAL override: when set, the module registers it (via
+	// RegisterApiKeyService) instead of constructing the default CRUD handler over Repo.
+	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
+	// module: embed the default handler (NewApiKeyServiceHandler(repo)) in your own
+	// type, implement the extra methods, and pass it here. When Handler is set,
+	// Repo may be nil (your handler owns its repositories).
+	Handler ApiKeyServiceServer
 }
 
 // ApiKeyServiceModule returns the importable servicekit.Module for ApiKeyService: an introspectable
@@ -532,8 +606,15 @@ func (m *apiKeyServiceModule) Descriptor() servicekit.Descriptor {
 	}
 }
 
-// Register implements servicekit.Module: wire ApiKeyService onto the shared server via
-// the existing RegisterApiKeyServiceWithRepository (gRPC + REST gateway + authz rules).
+// Register implements servicekit.Module: wire ApiKeyService onto the shared server. When
+// opts.Handler is set it registers that handler (via RegisterApiKeyService); otherwise it
+// takes the default CRUD path (RegisterApiKeyServiceWithRepository over opts.Repo).
 func (m *apiKeyServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	if m.opts.Handler != nil {
+		return RegisterApiKeyService(app.Server, m.opts.Handler)
+	}
+	if m.opts.Repo == nil {
+		return errors.New("ApiKeyServiceModuleOptions: one of Repo or Handler is required")
+	}
 	return RegisterApiKeyServiceWithRepository(app.Server, m.opts.Repo)
 }

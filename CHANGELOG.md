@@ -47,3 +47,28 @@ under [History](#history).
   surface (a tenant-scoped projection over `APIKey`) round-trips owner-write → surface-read on
   ent and GORM with no hand-written persistence code at all
   (`testdata/apikey/.../multisurface_test.go`).
+- The generated `servicekit` module has a handler-override seam: `<Service>ModuleOptions` carries an
+  optional `Handler`. A service that adds a custom or non-CRUD method sets `Handler` (an override
+  that embeds the generated CRUD handler) instead of forking a hand-written module, and keeps the
+  generated `Descriptor` — methods, authz rules, resource names. When `Handler` is unset the module
+  takes the default `Repo` CRUD path; neither set fails closed at registration.
+
+### Scaffold
+
+- A new service is generated with a `<svc>_security_test.go` alongside its smoke test. It runs the
+  `seccheck` assertions — complete authz rules, unknown-principal deny, tenant isolation, clean error
+  messages, no secret-field leaks — as standard `go test` sub-tests, so "provable security in CI" is
+  true for the generated service out of the box (its CI runs `go test ./...`). See the
+  [Security Check how-to](docs/content/docs/how-to/secure/security-check.md).
+- The generated `module/module.go` surfaces the module `Handler` seam: `Module()` shows the override
+  option and an in-place recipe, so a scaffolded service grows past pure CRUD on the generated module
+  instead of forking one. See the
+  [custom-methods how-to](docs/content/docs/how-to/model-and-persist/custom-methods.md).
+
+### Observability
+
+- The access log records the gRPC code the client sees. The `LoggingUnary` interceptor now sits
+  outside `ErrorMapperUnary`, so a handler that returns a persistence sentinel (mapped to, e.g.,
+  `NotFound`) is logged as that mapped code rather than the raw-sentinel `Unknown` — the access log,
+  the client response, and the RED metrics now agree, keeping SLO/error-budget dashboards keyed on
+  `grpc.code` correct.

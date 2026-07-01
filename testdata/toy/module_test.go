@@ -127,6 +127,87 @@ func TestWidgetServiceModule_RunServes(t *testing.T) {
 	}
 }
 
+// archivingWidgetHandler is a custom handler that grows the generated service in
+// place (BC-09 / #139): it embeds the generated CRUD handler (so the AIP standard
+// methods keep working) and implements ArchiveWidget — a custom method the CRUD
+// handler leaves Unimplemented. This is exactly the shape a scaffolded service
+// wires through the module's Handler option instead of forking servicekit.Module.
+type archivingWidgetHandler struct {
+	*widgetsv1.WidgetServiceCRUDHandler
+}
+
+// ArchiveWidget overrides the Unimplemented default, reaching the embedded CRUD
+// handler's repository to prove the override composes with generated CRUD.
+func (h *archivingWidgetHandler) ArchiveWidget(ctx context.Context, req *widgetsv1.ArchiveWidgetRequest) (*widgetsv1.ArchiveWidgetResponse, error) {
+	w, err := h.Repo.Get(ctx, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return &widgetsv1.ArchiveWidgetResponse{Widget: w}, nil
+}
+
+// TestWidgetServiceModule_HandlerOverride_ServesCustomMethod proves the BC-09
+// handler-override seam (#139): a service with a custom method wires its
+// overridden handler through WidgetServiceModuleOptions.Handler and grows IN
+// PLACE on the generated module. The custom method (ArchiveWidget, Unimplemented
+// on the default CRUD handler) is served, and the AIP standard methods still work
+// through the embedded default handler.
+func TestWidgetServiceModule_HandlerOverride_ServesCustomMethod(t *testing.T) {
+	repo := persistence.NewMemoryRepository[*widgetsv1.Widget, string](func(w *widgetsv1.Widget) string { return w.Id })
+	handler := &archivingWidgetHandler{widgetsv1.NewWidgetServiceHandler(repo)}
+	// Handler set, Repo left nil: the module registers the override handler.
+	mod := widgetsv1.WidgetServiceModule(widgetsv1.WidgetServiceModuleOptions{Handler: handler})
+
+	authorizer := authz.NewDevAuthorizer(authz.Grant{
+		Tenant: "*", Subjects: []string{"group:admin"}, Verbs: []authz.Verb{"*"}, Resource: "*",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr := freeLoopbackAddr(t)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- servicekit.Run(servicekit.HostConfig{
+			Modules:       []servicekit.Module{mod},
+			GRPCAddr:      addr,
+			Authorizer:    authorizer,
+			PrincipalFunc: grpcauthz.DevPrincipalFunc(),
+			Context:       ctx,
+		})
+	}()
+
+	conn := dialWithRetry(t, addr)
+	defer conn.Close()
+	client := widgetsv1.NewWidgetServiceClient(conn)
+	md := metadata.New(map[string]string{"account-id": "t1", "subject": "u1", "groups": "admin"})
+	rctx := metadata.NewOutgoingContext(context.Background(), md)
+
+	// The embedded default CRUD handler still serves the standard methods.
+	if _, err := client.CreateWidget(rctx, &widgetsv1.CreateWidgetRequest{Widget: &widgetsv1.Widget{Id: "w1", Name: "first"}}); err != nil {
+		t.Fatalf("CreateWidget via override module: %v", err)
+	}
+
+	// The custom method — Unimplemented on the default handler — is served because
+	// the override was registered through the module's Handler seam.
+	resp, err := client.ArchiveWidget(rctx, &widgetsv1.ArchiveWidgetRequest{Id: "w1"})
+	if err != nil {
+		t.Fatalf("ArchiveWidget via override module: %v (want the override to serve it, not Unimplemented)", err)
+	}
+	if resp.GetWidget().GetId() != "w1" {
+		t.Errorf("ArchiveWidget returned widget id %q, want w1", resp.GetWidget().GetId())
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("servicekit.Run returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("servicekit.Run did not return within 10s after cancel")
+	}
+}
+
 // freeLoopbackAddr binds :0 on loopback, reads the assigned port, closes the
 // listener, and returns the addr for servicekit.Run to bind. A brief race window
 // exists between close and re-bind; acceptable for a hermetic unit test.

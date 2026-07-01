@@ -62,6 +62,8 @@ func TestScaffold_GORM_BuildsAndPasses(t *testing.T) {
 		"module/migrations/README.md",
 		"cmd/orders/main.go",
 		"cmd/orders/orders_smoke_test.go",
+		// BC-11: provable-security-in-CI test generated into the scaffold.
+		"cmd/orders/orders_security_test.go",
 		".github/workflows/apx-release.yml",
 		// Container image: the ko-based GHCR publish-on-merge workflow (no Dockerfile).
 		".github/workflows/image.yml",
@@ -125,6 +127,8 @@ func TestScaffold_ENT_BuildsAndPasses(t *testing.T) {
 		"module/migrations/README.md",
 		"cmd/orders/main.go",
 		"cmd/orders/orders_smoke_test.go",
+		// BC-11: provable-security-in-CI test generated into the scaffold.
+		"cmd/orders/orders_security_test.go",
 		".github/workflows/apx-release.yml",
 		// Container image: the ko-based GHCR publish-on-merge workflow (no Dockerfile).
 		".github/workflows/image.yml",

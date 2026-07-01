@@ -5,6 +5,7 @@ package widgetsv1
 
 import (
 	"context"
+	"errors"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
@@ -100,13 +101,22 @@ func RegisterWidgetServiceWithRepository(s *server.Server, repo persistence.Repo
 }
 
 // WidgetServiceModuleOptions are the hand-written parts the generated WidgetServiceModule needs that
-// the generator cannot derive from the proto. P1 carries the repository the
-// module's CRUD path registers over; later phases add custom health checks,
-// event handlers, background jobs, and handler overrides here.
+// the generator cannot derive from the proto: the repository the module's CRUD
+// path registers over, OR an override handler for a service that adds custom or
+// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).
 type WidgetServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
-	// registers over (via RegisterWidgetServiceWithRepository). Required.
+	// registers over (via RegisterWidgetServiceWithRepository). Required
+	// unless Handler is set.
 	Repo persistence.Repository[*Widget, string]
+
+	// Handler is an OPTIONAL override: when set, the module registers it (via
+	// RegisterWidgetService) instead of constructing the default CRUD handler over Repo.
+	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
+	// module: embed the default handler (NewWidgetServiceHandler(repo)) in your own
+	// type, implement the extra methods, and pass it here. When Handler is set,
+	// Repo may be nil (your handler owns its repositories).
+	Handler WidgetServiceServer
 }
 
 // WidgetServiceModule returns the importable servicekit.Module for WidgetService: an introspectable
@@ -144,8 +154,15 @@ func (m *widgetServiceModule) Descriptor() servicekit.Descriptor {
 	}
 }
 
-// Register implements servicekit.Module: wire WidgetService onto the shared server via
-// the existing RegisterWidgetServiceWithRepository (gRPC + REST gateway + authz rules).
+// Register implements servicekit.Module: wire WidgetService onto the shared server. When
+// opts.Handler is set it registers that handler (via RegisterWidgetService); otherwise it
+// takes the default CRUD path (RegisterWidgetServiceWithRepository over opts.Repo).
 func (m *widgetServiceModule) Register(_ context.Context, app *servicekit.App) error {
+	if m.opts.Handler != nil {
+		return RegisterWidgetService(app.Server, m.opts.Handler)
+	}
+	if m.opts.Repo == nil {
+		return errors.New("WidgetServiceModuleOptions: one of Repo or Handler is required")
+	}
 	return RegisterWidgetServiceWithRepository(app.Server, m.opts.Repo)
 }
