@@ -84,8 +84,6 @@ github.com/hashicorp/hcl/v2 v2.18.1 h1:6nxnOJFku1EuSawSD81fuviYUV8DxFr3fp2dUi3ZY
 github.com/hashicorp/hcl/v2 v2.18.1/go.mod h1:ThLC89FV4p9MPW804KVbe/cEXoQ8NZEh+JtMeeGErHE=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2 h1:zy9xbPUzqs6nt6M7Bvcdlufkc/+cd8tIj4ATGa6Z22I=
-github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 h1:DtpOUmrhU8No79EYswX7+7DCSzu5o6gpUmVqT9PF6ug=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
