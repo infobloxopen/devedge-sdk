@@ -21,8 +21,8 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 h1:5VipnvEpbqr2gA2VbM+nYVbkIF2
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0/go.mod h1:Hyl3n6Twe1hvtd9XUXDec4pTvgMSEixRuQKPTMH2bNs=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2 h1:zy9xbPUzqs6nt6M7Bvcdlufkc/+cd8tIj4ATGa6Z22I=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.2/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
-github.com/infobloxopen/devedge-sdk v0.40.0 h1:XI5/SVH8NDeKlSVAkj6MgvBcsW1/OAUqSX4FZB0Y5Do=
-github.com/infobloxopen/devedge-sdk v0.40.0/go.mod h1:lqGI6nnzzR4/AgFE3m5xFBtPa8m3fTpd4Axuvoa4cIw=
+github.com/infobloxopen/devedge-sdk v0.41.0 h1:l65QQs2DzdHfAi7rZDuvj8JBGPnbo+fDj/ywaLqbrfg=
+github.com/infobloxopen/devedge-sdk v0.41.0/go.mod h1:lqGI6nnzzR4/AgFE3m5xFBtPa8m3fTpd4Axuvoa4cIw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
