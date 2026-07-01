@@ -59,6 +59,37 @@ grpcurl -plaintext -H 'account-id: t1' -H 'groups: admin' \
 Swap the dev authorizer and `PrincipalFunc` in `cmd/{{.BinName}}/main.go` for a real policy +
 verified-token function in production — nothing else changes.
 
+## Call it over HTTP
+
+The same RPCs are reachable over the JSON gateway on `:{{.HTTPPort}}`, with the caller's identity in
+`account-id` / `groups` headers. Two gateway mappings are easy to get wrong:
+
+**Create** maps `body: "{{.ResourceSnake}}"`, so the JSON body **is** the `{{.Resource}}` sent at the
+top level — not wrapped in a request field named `{{.ResourceSnake}}`:
+
+```sh
+curl -X POST localhost:{{.HTTPPort}}/v1/{{.ResourcePlural}} \
+  -H 'account-id: t1' -H 'groups: admin' -H 'Content-Type: application/json' \
+  -d '{"display_name": "first"}'
+```
+
+**Update** maps `{patch: "/v1/{{.ResourcePlural}}/{id}", body: "{{.ResourceSnake}}"}`: the id is in the
+URL path, the body is again the bare `{{.Resource}}`, and the fields to change ride in an `update_mask`
+**query parameter** — one repeated param per field, in proto snake_case:
+
+```sh
+curl -X PATCH 'localhost:{{.HTTPPort}}/v1/{{.ResourcePlural}}/<id>?update_mask=display_name&update_mask=description' \
+  -H 'account-id: t1' -H 'groups: admin' -H 'Content-Type: application/json' \
+  -d '{"display_name": "renamed", "description": "updated"}'
+```
+
+> **A misplaced `update_mask` silently updates nothing.** `update_mask` is a `repeated string`, so it
+> must be repeated query params (`?update_mask=a&update_mask=b`). An `update_mask` in the JSON body,
+> comma-joining (`?update_mask=a,b`), or camelCase (`?update_mask=displayName`) parses as no mask: the
+> call returns HTTP 200 with a fresh etag and zero fields changed. The same flattening applies to
+> Create — a wrapped body (`{"{{.ResourceSnake}}": {...}}`) decodes to an empty resource, not an error.
+> Full encoding table: the [gateway `update_mask` reference](https://infobloxopen.github.io/devedge-sdk/docs/reference/persistence/#update_mask-encoding-over-the-gateway).
+
 ## Configuration
 
 The service loads its settings through the SDK's `config.Load` seam with the following precedence
