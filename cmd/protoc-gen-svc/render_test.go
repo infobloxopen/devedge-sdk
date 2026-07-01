@@ -34,6 +34,39 @@ func TestRenderSvcFile_validGo(t *testing.T) {
 	}
 }
 
+// enumService is the CRUD service with an allowed_values (BC-08) string-backed
+// enum field `status` on its resource.
+func enumService() serviceInfo {
+	s := crudService()
+	s.EnumFields = []enumField{
+		{Getter: "GetStatus", ProtoName: "status", Allowed: []string{"ACTIVE", "CHECKED_OUT", "ABANDONED"}},
+	}
+	return s
+}
+
+// BC-08: a resource carrying allowed_values gets a generated validate<Resource>
+// that Create and Update call before persistence; the output stays valid Go.
+func TestRenderSvcFile_enumValidation(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{enumService()})
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated output is not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+	mustContain(t, out, "func validateAPIKey(m *APIKey) error {")
+	mustContain(t, out, `case "ACTIVE", "CHECKED_OUT", "ABANDONED":`)
+	mustContain(t, out, "status.Errorf(codes.InvalidArgument")
+	// Create and Update call the validator before delegating to the repository.
+	mustContain(t, out, "if err := validateAPIKey(req.GetApiKey()); err != nil {")
+	// status/codes are imported because the validator needs them.
+	mustContain(t, out, `"google.golang.org/grpc/status"`)
+}
+
+// A resource WITHOUT allowed_values generates no validator and no call.
+func TestRenderSvcFile_noEnumValidation(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
+	mustNotContain(t, out, "func validateAPIKey")
+	mustNotContain(t, out, "if err := validateAPIKey")
+}
+
 func TestRenderSvcFile_register(t *testing.T) {
 	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
 

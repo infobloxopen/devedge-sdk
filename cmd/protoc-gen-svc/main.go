@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/pluginpb"
 
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 )
@@ -52,8 +53,10 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	// Pass 1: index every message's resource facts so a service's methods can be
 	// classified against the resource type they operate on.
 	facts := map[string]resourceFacts{}
+	msgByName := map[string]*protogen.Message{}
 	for _, m := range f.Messages {
 		facts[string(m.GoIdent.GoName)] = messageResourceFacts(m)
+		msgByName[string(m.GoIdent.GoName)] = m
 	}
 
 	// protoPackage is the proto package (e.g. "orders.v1"); its first segment is
@@ -71,6 +74,9 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			svc.ResourceSoftDelete = r.softDelete
 			svc.MemberRoot = r.memberRoot
 		}
+		// BC-08: string fields on the resource carrying an allowed_values
+		// constraint drive a generated validate<Resource> the handlers call.
+		svc.EnumFields = resourceEnumFields(msgByName[svc.Resource])
 		for _, m := range s.Methods {
 			mi := methodInfo{
 				Name:          m.GoName,
@@ -137,6 +143,35 @@ func messageResourceFacts(m *protogen.Message) resourceFacts {
 		}
 	}
 	return r
+}
+
+// resourceEnumFields returns the resource's string fields that carry an
+// allowed_values constraint (BC-08). The option is meaningful only for
+// string-backed enums, so non-string and repeated fields are ignored.
+func resourceEnumFields(m *protogen.Message) []enumField {
+	if m == nil {
+		return nil
+	}
+	var out []enumField
+	for _, field := range m.Fields {
+		if field.Desc.Kind() != protoreflect.StringKind || field.Desc.IsList() {
+			continue
+		}
+		opts := field.Desc.Options()
+		if opts == nil || !proto.HasExtension(opts, fieldv1.E_Opts) {
+			continue
+		}
+		fopts, ok := proto.GetExtension(opts, fieldv1.E_Opts).(*fieldv1.FieldOptions)
+		if !ok || fopts == nil || len(fopts.GetAllowedValues()) == 0 {
+			continue
+		}
+		out = append(out, enumField{
+			Getter:    "Get" + field.GoName,
+			ProtoName: string(field.Desc.Name()),
+			Allowed:   fopts.GetAllowedValues(),
+		})
+	}
+	return out
 }
 
 func fieldIsOutputOnly(field *protogen.Field) bool {
