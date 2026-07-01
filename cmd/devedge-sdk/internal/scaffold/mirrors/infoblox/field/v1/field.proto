@@ -34,6 +34,22 @@ message FieldOptions {
   // on Create if the caller leaves it empty, and honors a caller-supplied id.
   IdOptions id = 7;
 
+  // unique_with lists sibling field names whose columns join this field's
+  // unique index, forming a composite "unique within a parent" constraint.
+  // Requires unique = true. The tenant column (account_id, when present) still
+  // leads the composite automatically, so
+  // {unique: true, unique_with: ["cart_id"]} on a cart item's sku yields a
+  // unique index over (account_id, cart_id, sku). Each name must be a scalar
+  // field on the same message.
+  repeated string unique_with = 8;
+
+  // allowed_values constrains a string field to a fixed set of values (a
+  // string-backed enum). The generated Create and Update handlers reject a
+  // non-empty value outside the set with InvalidArgument before persistence.
+  // An empty list imposes no constraint; an empty field value is treated as
+  // unset and is not checked (use not_null to require a value).
+  repeated string allowed_values = 9;
+
   // Relationships. Declare on the proto field that holds the related resource.
   // The codegen plugins generate the appropriate ORM association or graph edge.
   HasOne     has_one      = 20;

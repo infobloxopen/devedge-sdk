@@ -520,6 +520,53 @@ func TestRenderEntSchema_uniqueNoSoftDelete_unchanged(t *testing.T) {
 	targetDialect = "postgres"
 }
 
+// scopedUniqueMsg is a tenant-scoped child whose sku is unique WITHIN its parent
+// cart: {unique: true, unique_with: ["cart_id"]} (BC-07). The composite unique
+// index is (account_id, cart_id, sku).
+func scopedUniqueMsg() entMessageInfo {
+	return entMessageInfo{
+		MessageName: "CartItem",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "cart_id", SnakeName: "cart_id", EntType: "String"},
+			{Name: "sku", SnakeName: "sku", EntType: "String", Unique: true, UniqueWith: []string{"cart_id"}},
+		},
+	}
+}
+
+// BC-07: unique_with inserts the scope column between account_id and the field,
+// so the composite is (account_id, cart_id, sku) — unique within a parent cart.
+func TestRenderEntSchema_scopedUnique(t *testing.T) {
+	out := renderEntSchema(scopedUniqueMsg(), nil)
+	mustContain(t, out, `index.Fields("account_id", "cart_id", "sku").Unique().StorageKey("ux_cartitem_account_cart_id_sku")`)
+	// The plain per-tenant composite (without the scope column) must NOT appear.
+	mustNotContain(t, out, `index.Fields("account_id", "sku")`)
+}
+
+// BC-07 + soft-delete: the partial-index strategy (postgres/sqlite) rides the
+// scoped composite so a (cart_id, sku) pair frees once the row is soft-deleted.
+func TestRenderEntSchema_scopedUnique_softDeletePartial(t *testing.T) {
+	targetDialect = "postgres"
+	msg := scopedUniqueMsg()
+	msg.SoftDelete = true
+	out := renderEntSchema(msg, nil)
+	mustContain(t, out, `index.Fields("account_id", "cart_id", "sku").Unique().`)
+	mustContain(t, out, `entsql.IndexWhere("delete_time IS NULL")`)
+	mustNotContain(t, out, "soft_delete_key")
+}
+
+// BC-07 + soft-delete on MySQL: the soft_delete_key discriminator joins the
+// scoped composite as its trailing column.
+func TestRenderEntSchema_scopedUnique_softDeleteSentinel(t *testing.T) {
+	targetDialect = "mysql"
+	defer func() { targetDialect = "postgres" }()
+	msg := scopedUniqueMsg()
+	msg.SoftDelete = true
+	out := renderEntSchema(msg, nil)
+	mustContain(t, out, `index.Fields("account_id", "cart_id", "sku", "soft_delete_key").Unique().StorageKey("ux_cartitem_account_cart_id_sku")`)
+}
+
 // F031 AC-4: a (infoblox.ddd.v1.references) field is a CROSS-aggregate link — it
 // generates a scalar FK column + ID and NO traversable edge (no edge.To/edge.From
 // pointing at the referenced aggregate), so code cannot walk or mutate across

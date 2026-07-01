@@ -175,6 +175,11 @@ type entFieldInfo struct {
 	NotNull bool
 	Unique  bool
 	Index   bool
+	// UniqueWith lists sibling field names (snake_case columns) that join this
+	// field's per-tenant composite unique index — "unique within a parent". Set
+	// only alongside Unique on a tenant-scoped message; the composite becomes
+	// (account_id, <UniqueWith...>, <field>). Empty for a plain per-tenant unique.
+	UniqueWith []string
 	// RelatedType is the Go type name of the message a relationship field points
 	// to (e.g. "Vehicle" for a `repeated Vehicle vehicles` has_many). The ent
 	// edge target must reference this schema struct, not a name derived from the
@@ -223,6 +228,32 @@ func msgHasIndexField(msg entMessageInfo) bool {
 		}
 	}
 	return false
+}
+
+// entScopeCols resolves a field's unique_with names to the sibling ent field
+// (snake) names, in declared order, so they can join the composite unique index.
+// Validation in main.go has already ensured each name resolves to a scalar sibling.
+func entScopeCols(msg entMessageInfo, f entFieldInfo) []string {
+	var cols []string
+	for _, w := range f.UniqueWith {
+		for _, sf := range msg.Fields {
+			if sf.Name == w || sf.SnakeName == w {
+				cols = append(cols, sf.SnakeName)
+				break
+			}
+		}
+	}
+	return cols
+}
+
+// entFieldList renders a column slice as a quoted, comma-separated argument list
+// for index.Fields(...), e.g. {"account_id","sku"} -> `"account_id", "sku"`.
+func entFieldList(cols []string) string {
+	parts := make([]string, len(cols))
+	for i, c := range cols {
+		parts[i] = fmt.Sprintf("%q", c)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // msgHasTenantUnique reports whether the message has account_id AND at least one
@@ -645,17 +676,29 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 				fmt.Fprintf(&b, "\t\tindex.Fields(\"%s_hash\"),\n", f.SnakeName)
 			case hasTenant && f.Unique && !f.IsID:
 				// Per-tenant composite unique (account_id leading). Same value may be
-				// reused by another tenant; rejected only within one tenant. On a
+				// reused by another tenant; rejected only within one tenant. A field's
+				// unique_with (BC-07) inserts sibling scope columns between account_id
+				// and the field — "unique within a parent" — so a cart item's sku with
+				// unique_with:["cart_id"] becomes (account_id, cart_id, sku). On a
 				// soft-delete resource the key must also be re-creatable after the
 				// holder is soft-deleted: partial index on PostgreSQL/SQLite, or a
 				// soft_delete_key discriminator on MySQL.
+				scope := entScopeCols(msg, f)
+				base := append([]string{"account_id"}, scope...)
+				base = append(base, f.SnakeName)
+				name := "ux_" + lowerMsg + "_account"
+				for _, s := range scope {
+					name += "_" + s
+				}
+				name += "_" + f.SnakeName
 				switch {
 				case useSentinel:
-					fmt.Fprintf(&b, "\t\tindex.Fields(\"account_id\", \"%s\", \"soft_delete_key\").Unique().StorageKey(\"ux_%s_account_%s\"),\n", f.SnakeName, lowerMsg, f.SnakeName)
+					cols := append(append([]string{}, base...), "soft_delete_key")
+					fmt.Fprintf(&b, "\t\tindex.Fields(%s).Unique().StorageKey(%q),\n", entFieldList(cols), name)
 				case usePartial:
-					fmt.Fprintf(&b, "\t\tindex.Fields(\"account_id\", \"%s\").Unique().\n\t\t\tAnnotations(entsql.IndexWhere(\"delete_time IS NULL\")).StorageKey(\"ux_%s_account_%s\"),\n", f.SnakeName, lowerMsg, f.SnakeName)
+					fmt.Fprintf(&b, "\t\tindex.Fields(%s).Unique().\n\t\t\tAnnotations(entsql.IndexWhere(\"delete_time IS NULL\")).StorageKey(%q),\n", entFieldList(base), name)
 				default:
-					fmt.Fprintf(&b, "\t\tindex.Fields(\"account_id\", \"%s\").Unique().StorageKey(\"ux_%s_account_%s\"),\n", f.SnakeName, lowerMsg, f.SnakeName)
+					fmt.Fprintf(&b, "\t\tindex.Fields(%s).Unique().StorageKey(%q),\n", entFieldList(base), name)
 				}
 			case f.Index:
 				fmt.Fprintf(&b, "\t\tindex.Fields(\"%s\"),\n", f.SnakeName)

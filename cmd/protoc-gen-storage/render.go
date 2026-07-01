@@ -21,6 +21,38 @@ var targetDialect = "postgres"
 // in effect rather than the partial-index strategy (PostgreSQL/SQLite).
 func useSoftDeleteSentinel() bool { return targetDialect == "mysql" }
 
+// storageScopeCols resolves a field's unique_with names to sibling column names
+// (SnakeName, or ColumnName override), in declared order, so they join the
+// composite unique index. Validation in main.go ensures each name resolves.
+func storageScopeCols(msg messageInfo, f fieldInfo) []string {
+	var cols []string
+	for _, w := range f.UniqueWith {
+		for _, sf := range msg.Fields {
+			if sf.Name == w || sf.SnakeName == w {
+				c := sf.SnakeName
+				if sf.ColumnName != "" {
+					c = sf.ColumnName
+				}
+				cols = append(cols, c)
+				break
+			}
+		}
+	}
+	return cols
+}
+
+// scopedUniqueIndexName builds the composite unique-index name for a per-tenant
+// unique field, inserting any unique_with scope columns between the account_id
+// segment and the field column. With no scope columns it is
+// ux_<model>_account_<col>, matching the plain per-tenant index name.
+func scopedUniqueIndexName(model string, scope []string, col string) string {
+	n := "ux_" + strings.ToLower(model) + "_account"
+	for _, s := range scope {
+		n += "_" + s
+	}
+	return n + "_" + col
+}
+
 // msgHasTenantUnique reports whether the message has account_id AND at least one
 // persisted per-tenant `unique` field (so a composite unique index is emitted).
 func msgHasTenantUnique(msg messageInfo) bool {
@@ -237,6 +269,11 @@ type fieldInfo struct {
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull    bool
 	Unique     bool
+	// UniqueWith lists sibling field names that join this field's per-tenant
+	// composite unique index — "unique within a parent". Set only alongside
+	// Unique on a tenant-scoped message; the composite becomes
+	// (account_id, <UniqueWith...>, <field>). Empty for a plain per-tenant unique.
+	UniqueWith []string
 	Index      bool
 	ColumnName string // overrides SnakeName in the GORM column tag
 	ColumnType string // overrides the GORM type tag
@@ -587,11 +624,26 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		}
 		scalarGoNames[goFieldName(f)] = true
 	}
-	// uniqueIndexName returns the composite unique-index name for a tenant-scoped
-	// unique field, so the index spans (account_id, <col>) rather than <col>
-	// alone — preserving per-tenant uniqueness in a multi-tenant framework.
-	uniqueIndexName := func(col string) string {
-		return "ux_" + strings.ToLower(model) + "_account_" + col
+	// scopeColTags (BC-07) maps a scope column to the uniqueIndex tags it carries
+	// on behalf of a sibling field's unique_with composite. A scope column sits
+	// between account_id (priority 1) and the unique field, so it takes priority
+	// 2..(1+len(scope)). Built only for tenant-scoped messages; empty otherwise.
+	scopeColTags := map[string][]string{}
+	if hasTenant {
+		for _, uf := range owner.Fields {
+			if uf.IsID || uf.IsRepeated || uf.IsMessage || uf.IsSecret || uf.IsOutputOnly || !uf.Unique || len(uf.UniqueWith) == 0 {
+				continue
+			}
+			ucol := uf.SnakeName
+			if uf.ColumnName != "" {
+				ucol = uf.ColumnName
+			}
+			scope := storageScopeCols(owner, uf)
+			name := scopedUniqueIndexName(model, scope, ucol)
+			for i, sc := range scope {
+				scopeColTags[sc] = append(scopeColTags[sc], fmt.Sprintf("uniqueIndex:%s,priority:%d", name, 2+i))
+			}
+		}
 	}
 
 	// GORM model struct: emitted only for owners (a surface has no table of its own
@@ -706,10 +758,13 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 					if hasTenant {
 						// Tenant-scoped: the unique constraint must be per-account, so
 						// the field joins account_id in a composite unique index
-						// (priority 2 — account_id is the leading column, priority 1).
-						// The partial-index predicate (usePartial) is carried on the
-						// account_id (priority 1) tag below, not here.
-						tagParts = append(tagParts, "uniqueIndex:"+uniqueIndexName(col)+",priority:2")
+						// (account_id leads at priority 1). A unique_with (BC-07) inserts
+						// scope columns between account_id and this field, so the field
+						// trails at priority 2+len(scope). The partial-index predicate
+						// (usePartial) is carried on the account_id (priority 1) tag below.
+						scope := storageScopeCols(owner, f)
+						name := scopedUniqueIndexName(model, scope, col)
+						tagParts = append(tagParts, fmt.Sprintf("uniqueIndex:%s,priority:%d", name, 2+len(scope)))
 					} else {
 						// No tenant column: a plain global unique index is correct.
 						tagParts = append(tagParts, "uniqueIndex")
@@ -728,7 +783,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 						if uf.ColumnName != "" {
 							ucol = uf.ColumnName
 						}
-						ux := "uniqueIndex:" + uniqueIndexName(ucol) + ",priority:1"
+						name := scopedUniqueIndexName(model, storageScopeCols(owner, uf), ucol)
+						ux := "uniqueIndex:" + name + ",priority:1"
 						if usePartial {
 							// Partial unique index so the key frees on soft-delete. GORM's
 							// migrator drops the `where` index tag but appends `option`
@@ -739,6 +795,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 						tagParts = append(tagParts, ux)
 					}
 				}
+				// A field that is a unique_with scope column of a sibling joins that
+				// sibling's composite unique index here (BC-07).
+				tagParts = append(tagParts, scopeColTags[col]...)
 				tag := strings.Join(tagParts, ";")
 				fmt.Fprintf(b, "\t%s %s `gorm:\"%s\"`\n", gfn, f.GoType, tag)
 			}
@@ -764,7 +823,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 				if uf.ColumnName != "" {
 					ucol = uf.ColumnName
 				}
-				parts = append(parts, "uniqueIndex:"+uniqueIndexName(ucol)+",priority:3")
+				// soft_delete_key trails the whole composite: priority 3 for a plain
+				// per-tenant unique, or 3+len(scope) once unique_with columns join.
+				scope := storageScopeCols(owner, uf)
+				name := scopedUniqueIndexName(model, scope, ucol)
+				parts = append(parts, fmt.Sprintf("uniqueIndex:%s,priority:%d", name, 3+len(scope)))
 			}
 			fmt.Fprintf(b, "\tSoftDeleteKey string `gorm:\"%s\"`\n", strings.Join(parts, ";"))
 		}

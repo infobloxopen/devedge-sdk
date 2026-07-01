@@ -121,6 +121,8 @@ that the codegen plugins translate into the generated model:
 | `index` | 4 | non-unique index (GORM tag `index`). |
 | `column_name` | 5 | overrides the default snake_case column name (GORM tag `column:<name>`). |
 | `column_type` | 6 | overrides the DB column type, e.g. `varchar(255)` (GORM tag `type:<type>`). |
+| `unique_with` | 8 | sibling field names that join a `unique` field's per-tenant composite, forming a "unique within a parent" index over `(account_id, <unique_with...>, <field>)`. Requires `unique` and an `account_id` field. |
+| `allowed_values` | 9 | restricts a string field to a fixed set of values; the generated Create and Update handlers reject an out-of-set value with `InvalidArgument`. |
 
 ```proto
 message Widget {

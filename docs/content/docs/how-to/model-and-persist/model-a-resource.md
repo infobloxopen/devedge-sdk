@@ -84,7 +84,9 @@ Scalar proto types map to columns as follows:
 [relationship annotation](#relationships) are skipped — they require a JSON/JSONB serialization
 strategy that the generator does not yet produce. The one exception is `map<string, string>`, which
 persists as a JSONB column (see [Tags](#tags)). Enums do not map to a typed column; represent an
-enum as a `string` or integer field and validate it at the API boundary. `google.protobuf.Timestamp`
+enum as a `string` field and constrain it with `allowed_values` (see
+[Constraints and column overrides](#constraints-and-column-overrides)), or as an integer field.
+`google.protobuf.Timestamp`
 carries built-in storage meaning only for the two [framework fields](#framework-managed-fields)
 described below; other timestamp fields are not persisted by the generator.
 {{< /callout >}}
@@ -131,7 +133,9 @@ the model:
 |---|---|
 | `not_null` | `NOT NULL` on the column |
 | `unique` | Unique index — per-tenant (composite with `account_id`) when the message has an `account_id` field, otherwise global |
+| `unique_with` | Extends a `unique` field's per-tenant composite with sibling columns — "unique within a parent" (see [Unique within a parent](#unique-within-a-parent)) |
 | `index` | Non-unique index |
+| `allowed_values` | Restricts a string field to a fixed set of values, validated on create and update (see [Validated string enums](#validated-string-enums)) |
 | `column_name` | Overrides the default snake_case column name |
 | `column_type` | Overrides the DB column type, e.g. `varchar(255)` |
 
@@ -150,6 +154,42 @@ collide with another's and do not leak across tenants. See the
 [Annotations concept](../../../concepts/annotations/) for the full option reference and the
 rationale.
 {{< /callout >}}
+
+### Unique within a parent
+
+To make a field unique within a parent rather than across the whole tenant, list the parent's
+foreign-key field in `unique_with`. The generator inserts those columns into the composite unique
+index, between the tenant scope and the field:
+
+```proto
+message CartItem {
+  string id         = 1;
+  string account_id = 2;
+  string cart_id    = 3;                                                    // the parent FK
+  string sku        = 4 [(infoblox.field.v1.opts) = {unique: true, unique_with: ["cart_id"]}];
+}
+```
+
+This yields a unique index over `(account_id, cart_id, sku)` on both backends: the same `sku` can
+appear in different carts, but not twice in one cart. `unique_with` requires `unique: true` and an
+`account_id` field, and each name must be a scalar field on the same message. On a soft-delete
+resource the composite stays re-creatable after the holder is soft-deleted, using the same
+partial-index or discriminator strategy as a plain per-tenant unique.
+
+### Validated string enums
+
+A string field with a fixed set of values — a state field such as `status` — carries an
+`allowed_values` list. The generated Create and Update handlers reject a value outside the set with
+`InvalidArgument` before it reaches the database:
+
+```proto
+message Cart {
+  string id     = 1;
+  string status = 2 [(infoblox.field.v1.opts) = {allowed_values: ["ACTIVE", "CHECKED_OUT", "ABANDONED"]}];
+}
+```
+
+An empty value is treated as unset and is not checked; combine with `not_null` to require a value.
 
 ## Relationships
 
@@ -192,6 +232,13 @@ typed associations (`[]*VehicleModel`, `*FleetModel`) you can `Preload`; on the 
 become graph edges, which suits relationship-heavy domains. See
 [Storage Shapes](../storage-shapes/) for when to choose ent, and the
 [Codegen reference](../../../reference/codegen/) for the exact generated shape.
+
+{{< callout type="info" >}}
+**A `has_many` is not eager-loaded on a plain read.** `Get<Parent>` returns the parent with an empty
+children slice, which keeps a single-resource read from loading an unbounded set of children. To read
+a parent together with its children, use the generated `Load<Parent>Aggregate` read primitive — see
+[Aggregates → Loading and saving](../../../concepts/aggregates/#loading-and-saving).
+{{< /callout >}}
 
 ## Secret fields
 

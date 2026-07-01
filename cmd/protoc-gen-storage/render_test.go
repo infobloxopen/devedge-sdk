@@ -418,6 +418,52 @@ func TestRenderStorageFile_uniqueNoSoftDelete_unchanged(t *testing.T) {
 	targetDialect = "postgres"
 }
 
+// BC-07: unique_with makes sku unique WITHIN its parent cart. The composite is
+// (account_id, cart_id, sku), sharing one index name — account_id priority 1,
+// the cart_id scope column priority 2, sku priority 3.
+func scopedUniqueStorageMsg() messageInfo {
+	return messageInfo{
+		MessageName: "CartItem",
+		PbPkgName:   "cartv1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "account_id", GoFieldName: "AccountId", GoType: "string", SnakeName: "account_id"},
+			{Name: "cart_id", GoFieldName: "CartId", GoType: "string", SnakeName: "cart_id"},
+			{Name: "sku", GoFieldName: "Sku", GoType: "string", SnakeName: "sku", Unique: true, UniqueWith: []string{"cart_id"}},
+		},
+	}
+}
+
+func TestRenderStorageFile_scopedUnique(t *testing.T) {
+	out := renderStorageFile("cartv1", []messageInfo{scopedUniqueStorageMsg()}, nil)
+	mustContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id_sku,priority:1") // account_id leads
+	mustContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id_sku,priority:2") // cart_id scope column
+	mustContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id_sku,priority:3") // sku trails
+	// The scope column is not promoted to a standalone unique index of its own.
+	mustNotContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id,priority")
+}
+
+func TestRenderStorageFile_scopedUnique_softDeletePartial(t *testing.T) {
+	targetDialect = "postgres"
+	msg := scopedUniqueStorageMsg()
+	msg.SoftDelete = true
+	out := renderStorageFile("cartv1", []messageInfo{msg}, nil)
+	mustContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id_sku,priority:1,option:WHERE deleted_at IS NULL")
+	mustContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id_sku,priority:3")
+	mustNotContain(t, out, "soft_delete_key")
+}
+
+func TestRenderStorageFile_scopedUnique_softDeleteSentinel(t *testing.T) {
+	targetDialect = "mysql"
+	defer func() { targetDialect = "postgres" }()
+	msg := scopedUniqueStorageMsg()
+	msg.SoftDelete = true
+	out := renderStorageFile("cartv1", []messageInfo{msg}, nil)
+	mustContain(t, out, "column:soft_delete_key")
+	// soft_delete_key trails the scope+field composite at priority 4.
+	mustContain(t, out, "uniqueIndex:ux_cartitem_account_cart_id_sku,priority:4")
+}
+
 // Issue 017: generated Create/Update must translate driver constraint errors
 // to clean persistence sentinels (so a unique violation becomes AlreadyExists,
 // not a 500 leaking raw SQL).

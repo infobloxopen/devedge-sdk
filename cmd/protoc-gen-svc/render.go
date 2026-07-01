@@ -22,6 +22,18 @@ type serviceInfo struct {
 	// are emitted as Unimplemented (route through the root) and the service records
 	// a server.MemberBinding so the boot-time boundary gate fails closed.
 	MemberRoot string
+	// EnumFields are the resource's string fields carrying an allowed_values
+	// constraint (BC-08). When non-empty, a validate<Resource> function is
+	// generated and the Create/Update handlers call it before persistence.
+	EnumFields []enumField
+}
+
+// enumField is a resource string field constrained to a fixed set of values
+// (an (infoblox.field.v1.opts).allowed_values annotation, BC-08).
+type enumField struct {
+	Getter    string   // Go getter on the resource, e.g. "GetStatus"
+	ProtoName string   // proto field name, for the error message, e.g. "status"
+	Allowed   []string // the permitted values
 }
 
 // isMember reports whether the service's resource is a DDD aggregate member.
@@ -157,6 +169,11 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 			// A member service redirects its write methods to gRPC Unimplemented.
 			needStatus = true
 		}
+		if len(svc.EnumFields) > 0 {
+			// The generated validate<Resource> rejects out-of-set values with a
+			// status.Errorf(codes.InvalidArgument, ...) (BC-08).
+			needStatus = true
+		}
 	}
 
 	b.WriteString("import (\n")
@@ -235,6 +252,33 @@ func renderRegister(b *strings.Builder, svc serviceInfo) {
 	b.WriteString("}\n\n")
 }
 
+// renderValidateFunc emits validate<Resource>, which enforces allowed_values
+// (BC-08) on the resource's string-backed enum fields. The Create/Update handlers
+// call it before persistence, so an out-of-set value is rejected with
+// InvalidArgument. Emits nothing when the resource declares no allowed_values.
+func renderValidateFunc(b *strings.Builder, svc serviceInfo) {
+	if len(svc.EnumFields) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "// validate%s enforces allowed_values on the resource's string-backed enum\n", svc.Resource)
+	b.WriteString("// fields. An empty value is treated as unset and skipped. DO NOT EDIT.\n")
+	fmt.Fprintf(b, "func validate%s(m *%s) error {\n", svc.Resource, svc.Resource)
+	b.WriteString("\tif m == nil {\n\t\treturn nil\n\t}\n")
+	for _, ef := range svc.EnumFields {
+		quoted := make([]string, len(ef.Allowed))
+		for i, v := range ef.Allowed {
+			quoted[i] = fmt.Sprintf("%q", v)
+		}
+		fmt.Fprintf(b, "\tif v := m.%s(); v != \"\" {\n", ef.Getter)
+		b.WriteString("\t\tswitch v {\n")
+		fmt.Fprintf(b, "\t\tcase %s:\n", strings.Join(quoted, ", "))
+		b.WriteString("\t\tdefault:\n")
+		fmt.Fprintf(b, "\t\t\treturn status.Errorf(codes.InvalidArgument, \"%s: %%q is not an allowed value (want one of: %s)\", v)\n", ef.ProtoName, strings.Join(ef.Allowed, ", "))
+		b.WriteString("\t\t}\n\t}\n")
+	}
+	b.WriteString("\treturn nil\n}\n\n")
+}
+
 // renderCRUDHandler emits the generated default handler: a struct embedding
 // Unimplemented<Svc>Server (so custom/unmatched RPCs are Unimplemented) and
 // holding the repository, with one method per detected AIP standard RPC
@@ -251,6 +295,8 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 	fmt.Fprintf(b, "\tUnimplemented%sServer\n", svc.ServiceName)
 	fmt.Fprintf(b, "\tRepo persistence.Repository[*%s, string]\n", res)
 	b.WriteString("}\n\n")
+
+	renderValidateFunc(b, svc)
 
 	for _, m := range svc.Methods {
 		// F031 DDD member write-redirection (G-4): a member resource is addressable
@@ -271,6 +317,9 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 		case stdCreate:
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
 				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			if len(svc.EnumFields) > 0 {
+				fmt.Fprintf(b, "\tif err := validate%s(req.Get%s()); err != nil {\n\t\treturn nil, err\n\t}\n", res, m.ResourceField)
+			}
 			fmt.Fprintf(b, "\treturn h.Repo.Create(ctx, req.Get%s())\n", m.ResourceField)
 			b.WriteString("}\n\n")
 		case stdGet:
@@ -301,6 +350,9 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 		case stdUpdate:
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
 				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			if len(svc.EnumFields) > 0 {
+				fmt.Fprintf(b, "\tif err := validate%s(req.Get%s()); err != nil {\n\t\treturn nil, err\n\t}\n", res, m.ResourceField)
+			}
 			fmt.Fprintf(b, "\treturn h.Repo.Update(ctx, req.Get%s().GetId(), req.Get%s(), req.GetUpdateMask()...)\n",
 				m.ResourceField, m.ResourceField)
 			b.WriteString("}\n\n")

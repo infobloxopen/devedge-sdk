@@ -260,6 +260,10 @@ An owner and its surfaces are fully generated on both backends with no hand-writ
 **Invalid surface declarations are rejected at generation time.** Generation fails if a surface names a missing or non-base owner, declares a relationship, projects a field the owner has no column for (or with a mismatched type, secret, or output classification), or omits `account_id` for a tenant-scoped model. A surface field set must be a subset of its owner's.
 {{< /callout >}}
 
+{{< callout type="info" >}}
+**A surface projects columns; it cannot declare a derived field.** A rollup such as a total or a count has no column on the owner to project, so a summary surface cannot carry one. Return the rollup in the custom RPC's response message, computed in the handler. On the ent backend you can also fill a derived field from the read hook `FromEnt<Owner>Custom` (see [Customization](#customization)).
+{{< /callout >}}
+
 ### Resource names on ent (AIP-122)
 
 When a resource carries a `(google.api.resource)` pattern and an `OUTPUT_ONLY` `name` field, the ent backend derives `name` from `id` and never stores it. The generated ent schema omits the `name` column, the adapter never writes it, and the generated `fromEnt<R>` projection recomputes it on every read via `Format<R>Name(e.ID)`. A `Get`, `List`, `Create`, or `Update` response always carries the resource name with no consumer code.

@@ -128,6 +128,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				isOutputOnly bool
 				notNull      bool
 				unique       bool
+				uniqueWith   []string
 				index        bool
 				hasOne       *fieldv1.HasOne
 				hasMany      *fieldv1.HasMany
@@ -141,6 +142,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						isSecret = fopts.GetSecret()
 						notNull = fopts.GetNotNull()
 						unique = fopts.GetUnique()
+						uniqueWith = fopts.GetUniqueWith()
 						index = fopts.GetIndex()
 						hasOne = fopts.GetHasOne()
 						hasMany = fopts.GetHasMany()
@@ -231,6 +233,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				OutputOnly:  isOutputOnly,
 				NotNull:     notNull,
 				Unique:      unique,
+				UniqueWith:  uniqueWith,
 				Index:       index,
 				RelatedType: relatedType,
 				HasOne:      hasOne,
@@ -245,6 +248,42 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 
 	if len(messages) == 0 {
 		return
+	}
+
+	// BC-07 scoped unique (unique_with): validate before rendering. A field's
+	// unique_with lists sibling columns that join its per-tenant composite unique
+	// index. It requires unique=true and an account_id field on the message, and
+	// each named field must be a scalar sibling (not the field itself).
+	for _, msg := range messages {
+		hasTenant := false
+		scalar := map[string]bool{}
+		for _, f := range msg.Fields {
+			if f.Name == "account_id" || f.SnakeName == "account_id" {
+				hasTenant = true
+			}
+			if !f.IsID && !f.IsRepeated && !f.IsMessage && !f.IsSecret {
+				scalar[f.Name] = true
+				scalar[f.SnakeName] = true
+			}
+		}
+		for _, f := range msg.Fields {
+			if len(f.UniqueWith) == 0 {
+				continue
+			}
+			if !f.Unique {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: unique_with requires unique: true", msg.MessageName, f.Name))
+			}
+			if !hasTenant {
+				gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: unique_with requires an account_id field on the message", msg.MessageName, f.Name))
+			}
+			for _, w := range f.UniqueWith {
+				if w == f.Name || w == f.SnakeName {
+					gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: unique_with cannot reference the field itself", msg.MessageName, f.Name))
+				} else if !scalar[w] {
+					gen.Error(fmt.Errorf("protoc-gen-ent: %s.%s: unique_with references %q, which is not a scalar field on the message", msg.MessageName, f.Name, w))
+				}
+			}
+		}
 	}
 
 	// F027 fail-closed (G-002): every resource field must be deterministically
