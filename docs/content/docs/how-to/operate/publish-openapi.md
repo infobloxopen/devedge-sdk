@@ -13,7 +13,7 @@ The end-to-end path is:
 proto (google.api.http annotations)
   → buf generate → openapi/<svc>.openapi.yaml
     → de api publish → apx catalog (OCI artifact on GHCR)
-      → ng-openapi-gen → typed Angular client
+      → apx client generate → @scope/<svc>-client (typed Angular package)
 ```
 
 ## Prerequisites
@@ -89,6 +89,10 @@ de api publish \
 | `--service-dir` | no | Service root; defaults to the current directory |
 | `--skip-generate` | no | Skip `make generate`; use the existing `openapi/<svc>.openapi.yaml` |
 | `--submit` | no | Also run `apx release submit` automatically (opens the PR) |
+| `--client` | no | After publishing, also generate a typed client with `apx client generate` (see Step 4) |
+| `--client-out` | no | Output directory for the generated client (default: `clients/<svc>-client`) |
+| `--client-scope` | no | npm scope for the client package, e.g. `@acme` |
+| `--publish-client` | no | Publish the client to GitHub Packages instead of only generating it |
 
 By default the command **prepares only** and prints the two follow-on commands:
 
@@ -140,38 +144,43 @@ module_roots:
 
 ## Step 4 — generate a typed Angular client
 
-Once the spec is in the apx catalog, or even locally from `openapi/orders.openapi.yaml`, generate a typed Angular client with **ng-openapi-gen**:
-
-{{< callout type="info" >}}
-**ng-openapi-gen requires OpenAPI v3.** It does not accept OpenAPI v2 / Swagger 2 specs. The `make generate` converter step produces `openapi/<svc>.openapi.yaml` in v3 format by converting the grpc-gateway v2 output. Use the devedge-sdk codegen pipeline rather than consuming the raw `protoc-gen-openapiv2` output directly.
-{{< /callout >}}
+`apx client generate` produces a packaged, buildable TypeScript/Angular client from the OpenAPI v3 spec. It emits a consumable `@<scope>/<svc>-client` npm module — a barrel of typed operations, models, and an `ApiConfiguration` — rather than loose files you copy into an app. Run it against the same flat spec `make generate` produced, or against a copy fetched from the apx catalog.
 
 ```sh
-# Install once:
-npm install --save-dev ng-openapi-gen
-
-# Generate (point at the local spec or the catalog-fetched copy):
-npx ng-openapi-gen \
+apx client generate \
   --input openapi/orders.openapi.yaml \
-  --output src/app/api/orders
+  --scope @acme \
+  --package orders-client
 ```
 
-This writes a full Angular service and model set under `src/app/api/orders/`. Import the generated `OrdersService` and use it directly:
+This writes the package to `clients/orders-client/` by default. Pass `--build` to also run `npm install` and `npm run build`, so the package's `dist/` is ready for a consumer.
+
+{{< callout type="info" >}}
+**apx runs ng-openapi-gen under the hood.** The generator reads the OpenAPI v3 spec that the `make generate` converter step writes to `openapi/<svc>.openapi.yaml`. apx wraps the output in a versioned npm package; you consume the package, not the raw generator output.
+{{< /callout >}}
+
+The generated barrel exports typed operations, models, and `provideApiConfiguration`, a one-line Angular provider that sets the client's base URL:
 
 ```typescript
-import { OrdersService } from './api/orders/services/orders.service';
+import { provideApiConfiguration, noteServiceListNotes } from '@acme/orders-client';
 
-@Component({ ... })
-export class OrdersListComponent {
-  constructor(private svc: OrdersService) {}
-
-  ngOnInit() {
-    this.svc.listOrders().subscribe(resp => this.orders = resp.orders);
-  }
-}
+// In your Angular module or bootstrap providers:
+providers: [
+  provideApiConfiguration('https://orders.example.com'),
+]
 ```
 
-`openapi-generator-cli` with the `typescript-angular` generator is an alternative that produces comparable output. `ng-openapi-gen` is lighter and requires no Java runtime, which makes it the preferred choice for most frontend workflows.
+To publish the package to GitHub Packages for other repos to install, run `apx client publish`. It generates, builds, and publishes in one step. The default is a validating dry run; pass `--dry-run=false` to publish for real:
+
+```sh
+apx client publish \
+  --input openapi/orders.openapi.yaml \
+  --scope @acme \
+  --package orders-client \
+  --dry-run=false
+```
+
+`de api publish --client` runs this client generation as part of the publish flow. Add `--publish-client` to publish the package instead of only generating it. See [`de api publish`](https://github.com/infobloxopen/devedge) for the flags.
 
 ## Versioning and lifecycle
 
@@ -184,12 +193,30 @@ Publish a new `--version` for each backwards-compatible change. For a breaking c
 
 ## Next: host the client in a micro-frontend
 
-The generated `OrdersService` issues HTTP calls but does not attach an access token. In a devedge micro-frontend, the shell owns the session and a bearer interceptor attaches the token to every request the generated client makes.
+The generated client issues HTTP calls but does not attach an access token. In a devedge micro-frontend, the shell owns the session and a bearer interceptor attaches the token to every request the generated client makes.
 
 To host this client in an Angular micro-frontend:
 
 1. Scaffold the micro-frontend with `de ufe new <name>` from the [devedge](https://github.com/infobloxopen/devedge) CLI (the same tool that scaffolds backend services with `de new service`).
-2. Wire the session with [`devedge-ufe-sdk`](https://github.com/infobloxopen/devedge-ufe-sdk): the shell instantiates the OIDC `SessionProvider`, and `provideDevedgeSession` plus the bearer interceptor attach the token to the generated client's requests.
-3. Point the generated client's base URL at the service's stable HTTPS hostname.
+2. Add the generated client as a dependency. For a local hot loop, point at the package directory with a `file:` link and skip publishing:
 
-For a complete backend-and-frontend example — a devedge-sdk service and an Angular micro-frontend that consumes it — see [`examples/fullstack-oss`](https://github.com/infobloxopen/devedge-ufe-sdk/tree/main/examples/fullstack-oss) in the micro-frontend SDK.
+   ```json {filename="package.json"}
+   "dependencies": {
+     "@acme/orders-client": "file:../../clients/orders-client"
+   }
+   ```
+
+   Once you publish with `apx client publish`, switch the `file:` link to the published version.
+3. Set the client's base URL with `provideApiConfiguration(rootUrl)`, pointing at the service's stable HTTPS hostname:
+
+   ```typescript
+   import { provideApiConfiguration } from '@acme/orders-client';
+
+   providers: [
+     provideApiConfiguration('https://orders.example.com'),
+   ]
+   ```
+
+4. Wire the session with [`devedge-ufe-sdk`](https://github.com/infobloxopen/devedge-ufe-sdk): the shell instantiates the OIDC `SessionProvider`, and `provideDevedgeSession` plus the bearer interceptor attach the token to the generated client's requests.
+
+For a complete backend-and-frontend example — a devedge-sdk service and an Angular micro-frontend that consumes the generated client via a `file:` link and `provideApiConfiguration` — see [`examples/fullstack-oss`](https://github.com/infobloxopen/devedge-ufe-sdk/tree/main/examples/fullstack-oss) in the micro-frontend SDK.
