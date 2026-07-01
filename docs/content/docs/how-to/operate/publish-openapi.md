@@ -181,3 +181,15 @@ export class OrdersListComponent {
 | `stable` | API shape is committed; breaking changes require a new `<line>` (e.g. `v2`) |
 
 Publish a new `--version` for each backwards-compatible change. For a breaking change, start a new line (`openapi/platform.data/orders/v2`) and deprecate the old one via `apx deprecate`.
+
+## Next: host the client in a micro-frontend
+
+The generated `OrdersService` issues HTTP calls but does not attach an access token. In a devedge micro-frontend, the shell owns the session and a bearer interceptor attaches the token to every request the generated client makes.
+
+To host this client in an Angular micro-frontend:
+
+1. Scaffold the micro-frontend with `de ufe new <name>` from the [devedge](https://github.com/infobloxopen/devedge) CLI (the same tool that scaffolds backend services with `de new service`).
+2. Wire the session with [`devedge-ufe-sdk`](https://github.com/infobloxopen/devedge-ufe-sdk): the shell instantiates the OIDC `SessionProvider`, and `provideDevedgeSession` plus the bearer interceptor attach the token to the generated client's requests.
+3. Point the generated client's base URL at the service's stable HTTPS hostname.
+
+For a complete backend-and-frontend example — a devedge-sdk service and an Angular micro-frontend that consumes it — see [`examples/fullstack-oss`](https://github.com/infobloxopen/devedge-ufe-sdk/tree/main/examples/fullstack-oss) in the micro-frontend SDK.
