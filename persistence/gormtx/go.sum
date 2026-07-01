@@ -21,8 +21,8 @@ github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 h1:DtpOUmrhU8No79EYswX7+7DCSzu5o6gpUmVqT9PF6ug=
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
-github.com/infobloxopen/devedge-sdk v0.42.0 h1:Mm7HxH9IDY/UB5S9avgMJMJmbmaBU75hYzX919TDlAU=
-github.com/infobloxopen/devedge-sdk v0.42.0/go.mod h1:HYkwY6GkhfYYwqlDwTHXSdzQ5PlesAZO0Xs2lX9cCpU=
+github.com/infobloxopen/devedge-sdk v0.43.0 h1:oeuJrwJwqIRNSAqdC+4ifw6BZTkDIVBJsFnN78hvP3E=
+github.com/infobloxopen/devedge-sdk v0.43.0/go.mod h1:HYkwY6GkhfYYwqlDwTHXSdzQ5PlesAZO0Xs2lX9cCpU=
 github.com/jinzhu/inflection v1.0.0 h1:K317FqzuhWc8YvSVlFMCCUb36O/S9MCKRDI7QkRKD/E=
 github.com/jinzhu/inflection v1.0.0/go.mod h1:h+uFLlag+Qp1Va5pdKtLDYj+kHp5pxUVkryuEj+Srlc=
 github.com/jinzhu/now v1.1.5 h1:/o9tlHleP7gOFmsnYNz3RGnqzefHA47wQpKrrdTIwXQ=
