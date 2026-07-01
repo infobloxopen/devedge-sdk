@@ -160,7 +160,12 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	}
 
 	b.WriteString("import (\n")
-	b.WriteString("\t\"context\"\n\n")
+	b.WriteString("\t\"context\"\n")
+	if needServicekit {
+		// The Module's Register guards a missing Repo/Handler with errors.New.
+		b.WriteString("\t\"errors\"\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("\t\"github.com/grpc-ecosystem/grpc-gateway/v2/runtime\"\n")
 	b.WriteString("\t\"google.golang.org/grpc\"\n")
 	if needStatus {
@@ -368,17 +373,26 @@ func renderModule(b *strings.Builder, svc serviceInfo) {
 	res := svc.Resource
 	typ := lowerFirst(svc.ServiceName) + "Module" // unexported impl type
 
-	// Options: the hand-written parts. P1 carries the repository (required for the
-	// CRUD Register path). Later phases extend this struct (health/events/jobs/
-	// handler override) without changing the Module() contract.
+	// Options: the hand-written parts. Repo drives the default CRUD path; Handler
+	// is the override seam for custom or non-CRUD methods. Later phases extend this
+	// struct (health/events/jobs) without changing the Module() contract.
 	fmt.Fprintf(b, "// %sModuleOptions are the hand-written parts the generated %sModule needs that\n", svc.ServiceName, svc.ServiceName)
-	b.WriteString("// the generator cannot derive from the proto. P1 carries the repository the\n")
-	b.WriteString("// module's CRUD path registers over; later phases add custom health checks,\n")
-	b.WriteString("// event handlers, background jobs, and handler overrides here.\n")
+	b.WriteString("// the generator cannot derive from the proto: the repository the module's CRUD\n")
+	b.WriteString("// path registers over, OR an override handler for a service that adds custom or\n")
+	b.WriteString("// non-CRUD methods. Exactly one of Repo / Handler is used (Handler wins).\n")
 	fmt.Fprintf(b, "type %sModuleOptions struct {\n", svc.ServiceName)
 	b.WriteString("\t// Repo is the persistence repository the module's generated CRUD handler\n")
-	b.WriteString("\t// registers over (via Register" + svc.ServiceName + "WithRepository). Required.\n")
+	b.WriteString("\t// registers over (via Register" + svc.ServiceName + "WithRepository). Required\n")
+	b.WriteString("\t// unless Handler is set.\n")
 	fmt.Fprintf(b, "\tRepo persistence.Repository[*%s, string]\n", res)
+	b.WriteString("\n")
+	b.WriteString("\t// Handler is an OPTIONAL override: when set, the module registers it (via\n")
+	fmt.Fprintf(b, "\t// Register%s) instead of constructing the default CRUD handler over Repo.\n", svc.ServiceName)
+	b.WriteString("\t// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated\n")
+	b.WriteString("\t// module: embed the default handler (New" + svc.ServiceName + "Handler(repo)) in your own\n")
+	b.WriteString("\t// type, implement the extra methods, and pass it here. When Handler is set,\n")
+	b.WriteString("\t// Repo may be nil (your handler owns its repositories).\n")
+	fmt.Fprintf(b, "\tHandler %sServer\n", svc.ServiceName)
 	b.WriteString("}\n\n")
 
 	// Constructor.
@@ -414,10 +428,18 @@ func renderModule(b *strings.Builder, svc serviceInfo) {
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
 
-	// Register().
-	fmt.Fprintf(b, "// Register implements servicekit.Module: wire %s onto the shared server via\n", svc.ServiceName)
-	fmt.Fprintf(b, "// the existing Register%sWithRepository (gRPC + REST gateway + authz rules).\n", svc.ServiceName)
+	// Register(): the override handler wins; otherwise the default CRUD path over
+	// Repo. Neither set is a wiring bug, surfaced fail-closed at registration.
+	fmt.Fprintf(b, "// Register implements servicekit.Module: wire %s onto the shared server. When\n", svc.ServiceName)
+	fmt.Fprintf(b, "// opts.Handler is set it registers that handler (via Register%s); otherwise it\n", svc.ServiceName)
+	fmt.Fprintf(b, "// takes the default CRUD path (Register%sWithRepository over opts.Repo).\n", svc.ServiceName)
 	fmt.Fprintf(b, "func (m *%s) Register(_ context.Context, app *servicekit.App) error {\n", typ)
+	b.WriteString("\tif m.opts.Handler != nil {\n")
+	fmt.Fprintf(b, "\t\treturn Register%s(app.Server, m.opts.Handler)\n", svc.ServiceName)
+	b.WriteString("\t}\n")
+	b.WriteString("\tif m.opts.Repo == nil {\n")
+	fmt.Fprintf(b, "\t\treturn errors.New(%q)\n", svc.ServiceName+"ModuleOptions: one of Repo or Handler is required")
+	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn Register%sWithRepository(app.Server, m.opts.Repo)\n", svc.ServiceName)
 	b.WriteString("}\n\n")
 }
