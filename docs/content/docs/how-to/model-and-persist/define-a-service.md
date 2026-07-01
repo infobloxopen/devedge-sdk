@@ -270,6 +270,22 @@ empty result). Match `body: "<field>"` and send the resource fields at the top l
 grpc-gateway behavior; the SDK installs no custom marshaler.
 {{< /callout >}}
 
+The same care applies to Update. A generated `Update<Resource>` maps
+`{patch: "/v1/<plural>/{<resource>.id}", body: "<resource>"}`, so the id is in the path and the body is
+again the bare resource — but the set of fields to change rides in an `update_mask` **query parameter**,
+never the body.
+
+{{< callout type="warning" >}}
+**An `update_mask` in the body is ignored, not applied.** With a `body: "<field>"` mapping the body
+binds only to that resource field, so an `update_mask` (or `updateMask`) placed in the JSON body is
+discarded — the update changes nothing and still returns HTTP 200 with a fresh etag. `update_mask` is a
+`repeated string`: send one repeated query parameter per field in proto snake_case
+(`?update_mask=name&update_mask=label`). Comma-joining (`?update_mask=name,label`) or camelCase
+(`?update_mask=displayName`) parses as a single unknown path and also no-ops. See
+[persistence → update_mask encoding over the gateway](../../../reference/persistence/#update_mask-encoding-over-the-gateway)
+for the full encoding table and worked curls.
+{{< /callout >}}
+
 ## Error handling
 
 The `ErrorMapperUnary` interceptor, installed automatically by `server.New`, converts persistence
