@@ -13,6 +13,7 @@ use (
 	./cmd
 	./config/koanf
 	./events/kafkabus
+	./federationgql
 	./observability/otel
 	./persistence/entrepo
 	./persistence/gormtx
