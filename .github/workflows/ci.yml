@@ -21,6 +21,7 @@ jobs:
             cmd/go.sum
             config/koanf/go.sum
             events/kafkabus/go.sum
+            federationgql/go.sum
             observability/otel/go.sum
             persistence/entrepo/go.sum
             persistence/gormtx/go.sum
@@ -28,6 +29,7 @@ jobs:
             testdata/apikey/go.sum
             testdata/fleet/go.sum
             testdata/iam/go.sum
+            examples/graphql-federation/go.sum
 
       # build/vet/test loop over every module in the repo (root + config/koanf +
       # events/kafkabus + observability/otel + future adapters) via the committed
@@ -72,6 +74,24 @@ jobs:
       # ent edge across the reference (AC-4). sqlite-backed, no Docker.
       - name: Integration tests (federation fixture — cross-service refs + BatchGet, ent+gorm)
         run: cd testdata/federation && GOWORK=off go test -race ./...
+
+      # The federationgql module (WS-021 P3 / F042) is a RELEASED nested module (its
+      # own go.mod so the GraphQL library stays out of a server-only consumer's graph
+      # — see the graph-isolation check). Its unit tests build the schema + resolve
+      # edges + derive read_mask with in-process fakes (AC-1). GOWORK=off so it
+      # resolves its published root require, mirroring the other per-module gates.
+      - name: Unit tests (federationgql — GraphQL federation gateway seam)
+        run: cd federationgql && GOWORK=off go test -race ./...
+
+      # The graphql-federation SAMPLE (examples/graphql-federation) is a standalone
+      # consumer module (own go.mod + replace to the working tree, like the testdata
+      # fixtures) and is NOT released. Its e2e test starts the region + asset services
+      # + the gateway over REAL listeners and asserts the cross-service query returns
+      # composed data, the anti-N+1 single-BatchGet guarantee holds across the service
+      # boundary (AC-3), read_mask is pushed down (AC-4), and authz is never bypassed
+      # (AC-5). sqlite-backed, no Docker. GOWORK=off (it is not a workspace member).
+      - name: Integration tests (graphql-federation sample — cross-service GraphQL e2e)
+        run: cd examples/graphql-federation && GOWORK=off go test -race ./...
 
       # The fleet + iam fixtures carry the Phase-2 PostgreSQL validation tests
       # (TestPG_*). They start a postgres:16 container via testcontainers and SKIP

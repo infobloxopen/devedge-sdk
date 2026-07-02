@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # release.sh — the SYNCHRONIZED multi-module release for devedge-sdk (WS-011 / F039).
 #
-# The repo is one git repo holding SEVEN Go modules (the root LIBRARY + six nested
-# ones: cmd, config/koanf, events/kafkabus, observability/otel, persistence/gormtx,
-# persistence/entrepo). Every release tags ALL of them at the SAME version so a
-# consumer pins one version and the cross-module `require`s resolve coherently.
+# The repo is one git repo holding EIGHT Go modules (the root LIBRARY + seven nested
+# ones: cmd, config/koanf, events/kafkabus, federationgql, observability/otel,
+# persistence/gormtx, persistence/entrepo). Every release tags ALL of them at the
+# SAME version so a consumer pins one version and the cross-module `require`s
+# resolve coherently.
 #
 # Usage:
 #   scripts/release.sh vX.Y.Z              # DRY RUN: print the two-phase plan + the
@@ -71,6 +72,7 @@ NESTED_MODULES=(
   "cmd"
   "config/koanf"
   "events/kafkabus"
+  "federationgql"
   "observability/otel"
   "persistence/gormtx"
   "persistence/entrepo"
@@ -89,6 +91,8 @@ TESTDATA_FIXTURES=(
   "testdata/apikey"
   "testdata/fleet"
   "testdata/iam"
+  "testdata/federation"
+  "examples/graphql-federation"
 )
 
 # The scaffold's single version source: fallbackSDKVersion in model.go. SDKVersion,
@@ -222,7 +226,7 @@ echo ""
 # Refuse if the tree is dirty in files the release does NOT touch. The files the
 # release legitimately mutates are model.go + the six adapter go.mod/go.sum + the
 # re-tidied testdata fixture go.mod/go.sum (so a dry-run/--push re-run stays clean).
-ALLOWED_DIRTY_RE='^(cmd/go\.(mod|sum)|config/koanf/go\.(mod|sum)|events/kafkabus/go\.(mod|sum)|observability/otel/go\.(mod|sum)|persistence/gormtx/go\.(mod|sum)|persistence/entrepo/go\.(mod|sum)|testdata/(apikey|fleet|iam)/go\.(mod|sum)|cmd/devedge-sdk/internal/scaffold/model\.go)$'
+ALLOWED_DIRTY_RE='^(cmd/go\.(mod|sum)|config/koanf/go\.(mod|sum)|events/kafkabus/go\.(mod|sum)|federationgql/go\.(mod|sum)|observability/otel/go\.(mod|sum)|persistence/gormtx/go\.(mod|sum)|persistence/entrepo/go\.(mod|sum)|testdata/(apikey|fleet|iam|federation)/go\.(mod|sum)|examples/graphql-federation/go\.(mod|sum)|cmd/devedge-sdk/internal/scaffold/model\.go)$'
 unexpected="$(git status --porcelain | awk '{print $2}' | grep -Ev "$ALLOWED_DIRTY_RE" || true)"
 if [ -n "$unexpected" ]; then
   red "working tree has unexpected changes (commit/stash them first):"
