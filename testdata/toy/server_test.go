@@ -74,14 +74,10 @@ func (h *toyHandler) ArchiveWidget(ctx context.Context, req *widgetsv1.ArchiveWi
 	return &widgetsv1.ArchiveWidgetResponse{Widget: w}, nil
 }
 
-// BatchGetWidgets is an AIP-137 batch read method.
-func (h *toyHandler) BatchGetWidgets(ctx context.Context, req *widgetsv1.BatchGetWidgetsRequest) (*widgetsv1.BatchGetWidgetsResponse, error) {
-	widgets, err := h.repo.BatchGet(ctx, req.Ids)
-	if err != nil {
-		return nil, err
-	}
-	return &widgetsv1.BatchGetWidgetsResponse{Widgets: widgets}, nil
-}
+// BatchGetWidgets (AIP-137 batch read) is NOT redefined here: it is the F041
+// guaranteed BatchGet the generated WidgetServiceCRUDHandler now supplies
+// (delegating to the embedded Repo, a persistence.BatchRepository). So the
+// TestBatchGetWidgets suites run against the GENERATED batch handler.
 
 // BatchDeleteWidgets is an AIP-137 batch delete method (atomic soft-delete).
 func (h *toyHandler) BatchDeleteWidgets(ctx context.Context, req *widgetsv1.BatchDeleteWidgetsRequest) (*emptypb.Empty, error) {

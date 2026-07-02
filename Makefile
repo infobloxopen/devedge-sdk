@@ -31,15 +31,18 @@ generate:
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.apikey.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.fleet.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.iam.yaml
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.federation.yaml
 	cd testdata/toy && go mod tidy
 	cd testdata/apikey && go mod tidy
 	cd testdata/fleet && go mod tidy
 	cd testdata/iam && go mod tidy
+	cd testdata/federation && go mod tidy
 	go mod tidy
 	@echo "NOTE: protoc-gen-ent regenerates ent SCHEMAS only. If a relationship/"
 	@echo "      resource shape changed, regenerate the ent CLIENT too:"
-	@echo "        cd testdata/apikey && go generate ./ent"
-	@echo "        cd testdata/fleet  && go generate ./ent"
+	@echo "        cd testdata/apikey     && go generate ./ent"
+	@echo "        cd testdata/fleet      && go generate ./ent"
+	@echo "        cd testdata/federation && go generate ./ent"
 
 # Refresh the annotation .proto mirrors embedded in the `devedge-sdk new service`
 # scaffold (cmd/devedge-sdk) from the canonical proto/infoblox source. The

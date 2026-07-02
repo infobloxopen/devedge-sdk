@@ -35,6 +35,7 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 		WidgetService_CancelWidgetOperation_FullMethodName,
 	)
 	s.AddRules(WidgetServiceAuthzRules...)
+	s.RecordBatchTarget("toy.example.com/Widget")
 	RegisterWidgetServiceServer(s.GRPCServer(), srv)
 	s.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {
 		return RegisterWidgetServiceHandlerClient(ctx, mux, NewWidgetServiceClient(conn))
@@ -49,7 +50,7 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 // so the handler does not duplicate them. DO NOT EDIT.
 type WidgetServiceCRUDHandler struct {
 	UnimplementedWidgetServiceServer
-	Repo persistence.Repository[*Widget, string]
+	Repo persistence.BatchRepository[*Widget, string]
 }
 
 func (h *WidgetServiceCRUDHandler) CreateWidget(ctx context.Context, req *CreateWidgetRequest) (*Widget, error) {
@@ -85,10 +86,18 @@ func (h *WidgetServiceCRUDHandler) DeleteWidget(ctx context.Context, req *Delete
 	return &DeleteWidgetResponse{}, nil
 }
 
+func (h *WidgetServiceCRUDHandler) BatchGetWidgets(ctx context.Context, req *BatchGetWidgetsRequest) (*BatchGetWidgetsResponse, error) {
+	items, err := h.Repo.BatchGet(ctx, req.GetIds())
+	if err != nil {
+		return nil, err
+	}
+	return &BatchGetWidgetsResponse{Widgets: items}, nil
+}
+
 // NewWidgetServiceHandler returns the generated default CRUD handler backed by repo. Embed
 // the returned type (or this struct) to override individual methods before
 // registering it via RegisterWidgetService.
-func NewWidgetServiceHandler(repo persistence.Repository[*Widget, string]) *WidgetServiceCRUDHandler {
+func NewWidgetServiceHandler(repo persistence.BatchRepository[*Widget, string]) *WidgetServiceCRUDHandler {
 	return &WidgetServiceCRUDHandler{Repo: repo}
 }
 
@@ -96,7 +105,7 @@ func NewWidgetServiceHandler(repo persistence.Repository[*Widget, string]) *Widg
 // generated default handler over repo and registers it via RegisterWidgetService
 // (gRPC + REST gateway + authz rules). Use the New<Svc>Handler + Register<Svc>
 // pair instead when you need to wrap/override the default handler.
-func RegisterWidgetServiceWithRepository(s *server.Server, repo persistence.Repository[*Widget, string]) error {
+func RegisterWidgetServiceWithRepository(s *server.Server, repo persistence.BatchRepository[*Widget, string]) error {
 	return RegisterWidgetService(s, NewWidgetServiceHandler(repo))
 }
 
@@ -108,7 +117,7 @@ type WidgetServiceModuleOptions struct {
 	// Repo is the persistence repository the module's generated CRUD handler
 	// registers over (via RegisterWidgetServiceWithRepository). Required
 	// unless Handler is set.
-	Repo persistence.Repository[*Widget, string]
+	Repo persistence.BatchRepository[*Widget, string]
 
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterWidgetService) instead of constructing the default CRUD handler over Repo.

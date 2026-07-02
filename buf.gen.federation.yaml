@@ -1,0 +1,32 @@
+version: v2
+# F041 cross-service-reference fixture: generates all plugins for
+# testdata/federation/federation.proto. Output goes into testdata/federation/
+# which has its own go.mod with gorm.io/gorm + ent, keeping those out of
+# devedge-sdk's go.mod (SC-003). Mirrors buf.gen.apikey.yaml.
+inputs:
+  - directory: testdata/federation
+plugins:
+  - local: protoc-gen-go
+    out: testdata/federation
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/federation
+  - local: protoc-gen-go-grpc
+    out: testdata/federation
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/federation
+  - local: protoc-gen-devedge-authz
+    out: testdata/federation
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/federation
+  - local: protoc-gen-svc
+    out: testdata/federation
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/federation
+  - local: protoc-gen-storage
+    out: testdata/federation
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/federation
+  - local: protoc-gen-grpc-gateway
+    out: testdata/federation
+    opt: module=github.com/infobloxopen/devedge-sdk/testdata/federation
+  - local: protoc-gen-ent
+    out: testdata/federation
+    # protoc-gen-storage above also emits into federationv1: it owns the AIP-122
+    # resource-name helpers (Format<R>Name / Parse<R>Name), so tell ent not to
+    # re-emit them. The ent fromEnt projection calls the storage-emitted helper.
+    opt: with_storage=true

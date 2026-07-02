@@ -93,6 +93,56 @@ For a fully custom (non-CRUD) service, implement the bare `<Service>Server` inte
 
 In a scaffolded service the `s *server.Server` you register on is `app.Server`, the shared server a [`servicekit`](../servicekit/) module is handed. [Add a custom method or second resource](../../how-to/model-and-persist/custom-methods/) walks this override through the module and host.
 
+### Cross-service references + guaranteed BatchGet
+
+A UI view usually spans domains served by different microservices — an *asset* and its *region*, a *key* and its *user*. To make a service **federatable**, declare a cross-service reference once and the framework guarantees the referenced target can be batch-fetched, so a composition layer resolves N references in **one** round trip (no N+1). This is the substrate a link-expansion consumer (REST `?expand=`) builds on; it does not itself expand links.
+
+**Declare the reference** on the scalar foreign-key field with the standard `google.api.resource_reference` (AIP-124) — there is **no devedge-specific annotation**:
+
+```protobuf
+import "google/api/resource.proto";
+
+message Asset {
+  option (google.api.resource) = { type: "asset.example.com/Asset" pattern: "assets/{asset}" };
+
+  string id        = 1;
+  // Cross-service reference: names a resource served by another microservice.
+  string region_id = 2 [(google.api.resource_reference) = { type: "region.example.com/Region" }];
+}
+```
+
+`type` is the target's AIP-122 resource type (matching the target's `google.api.resource.type`). Types are globally unique, so the target module/endpoint is resolved from the catalog — you do **not** annotate the module.
+
+**Emitted metadata (`<Service>References`).** For each annotated field, `protoc-gen-svc` emits a `DO NOT EDIT` table of `reference.Reference{ FieldName, FKField, TargetType, Cardinality }` — the same emission style as `<Service>AuthzRules`. A composition layer reads it to know what to resolve and where:
+
+```go
+var AssetServiceReferences = []reference.Reference{
+    { FieldName: "RegionId", FKField: "region_id", TargetType: "region.example.com/Region", Cardinality: reference.One },
+}
+```
+
+**Guaranteed `BatchGet` on referenced targets (referenced ⇒ batch-fetchable).** When a service's proto declares an AIP-137 `BatchGet<R>` RPC (request carries `repeated string ids`/`names`, response the repeated resource, `read` rule), `protoc-gen-svc` generates the handler — it delegates to the repository's `BatchGet` (AIP-137), so the guarantee holds by construction. Because the batch path is required, that service's generated `<Service>CRUDHandler.Repo` is a **`persistence.BatchRepository[*<R>, string]`** (not the plain `Repository`); the generated ent/GORM/`Memory` repositories already satisfy it, so nothing else changes. `BatchGet` flows through the same fail-closed authz interceptor (verb `read`) and `read_mask` middleware (AIP-157) as `Get`/`List`; row-level `Obligations` apply. It is not a projection or privilege escape hatch.
+
+**Fail-loud — never a silent N+1.** A reference whose target type does **not** serve `BatchGet` fails, loud, at two gates:
+
+- **Codegen (primary).** A reference target's `Repo` is a `BatchRepository`, so passing a non-batch repository is a compile error before a binary exists.
+- **Registration / `Serve` (backstop).** The generated `Register<Service>` records the service's references (`RecordReferences`) and, if it serves `BatchGet`, declares its resource a batch target (`RecordBatchTarget`). At `Serve`, `AssertReferenceTargets` fails closed if any recorded reference names a target type with no registered `BatchGet` on the server — catching cross-repo / version skew that local codegen cannot see.
+
+**Write-boundary invariant (metadata only).** A reference is **metadata**, not a Go edge. The `region_id` field stays a scalar foreign key: there is no traversable Go accessor from `Asset` into `Region`, no `ent`/GORM edge, and no cascade. Reads compose above the services (a composition layer resolves references); writes always route to the owning resource's service. This mirrors the deliberately edge-less `infoblox.ddd.v1.references` invariant.
+
+**Resolving without an N+1 (the `reference` package).** `reference.Load` is the DataLoader-style primitive: given N parents naming M distinct targets, it dedups the foreign keys and issues **one** `BatchGet` of the distinct set through a `reference.ReferenceResolver`. A `StaticResolver` maps a target type to an in-process `BatchGet`-capable client for tests and single-binary compositions; a catalog-backed resolver (dialing services) arrives with link-expansion.
+
+```go
+resolver := reference.NewStaticResolver()
+resolver.Register("region.example.com/Region", regionBatchClient) // implements reference.BatchGetter[*Region]
+
+// N assets -> ONE BatchGet of the distinct region ids.
+byID, err := reference.Load[*regionv1.Region](ctx, resolver, ref, assets,
+    func(a *assetv1.Asset) []string { return []string{a.GetRegionId()} },
+    func(r *regionv1.Region) string { return r.GetId() },
+)
+```
+
 ## protoc-gen-storage
 
 This plugin generates a GORM-backed `Repository` for each message. For a message named `APIKey` it emits:
