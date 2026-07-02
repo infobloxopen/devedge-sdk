@@ -11,7 +11,7 @@ go 1.25.5
 
 require (
 	github.com/golang-migrate/migrate/v4 v4.17.1
-	github.com/infobloxopen/devedge-sdk v0.46.0
+	github.com/infobloxopen/devedge-sdk v0.47.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
