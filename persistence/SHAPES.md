@@ -15,8 +15,17 @@ dependency**.
 - **An optional neutral seam** — `Repository[T,K]` (get/list/create/update/delete,
   matching the API verb vocabulary) plus an in-memory `MemoryRepository` for the
   common CRUD case and for tests.
-- **Migrations** — schema migrations use `infobloxopen/migrate` (the org-standard
-  fork, already proven in devedge feature 006) regardless of shape.
+- **Migrations** — on Postgres/MySQL the schema-of-record evolves through **versioned,
+  sequentially-numbered SQL migrations** (`NNNN_<desc>.{up,down}.sql`) applied by the
+  [`persistence/migrate`](./migrate) engine, which drives the org-standard
+  `infobloxopen/migrate` fork (persisted down-store + dirty-state recovery). A generated
+  **framework baseline** (`0001_framework_init`, the outbox/idempotency/cell tables incl.
+  the WS-008 `event_seq`/`event_epoch` columns) is composed AHEAD of a module's own
+  migrations (`0002+`). The migration connection is SAFE by default (`lock_timeout=2s`,
+  `statement_timeout=60s`, per-module `search_path`, a single advisory lock, dirty-state
+  auto-recovery). `CREATE INDEX CONCURRENTLY` is allowed only as the sole statement in its
+  file. SQLite (dev/test only) keeps the `AutoMigrate` fast-path. See
+  [`persistence/migrate`](./migrate) and the `change-database-schema` skill.
 
 ## The shapes (a per-service, pluggable choice)
 

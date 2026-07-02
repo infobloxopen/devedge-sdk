@@ -8,6 +8,7 @@ require (
 	github.com/infobloxopen/apis/proto/infoblox/authz {{.AuthzBindingVersion}}
 	github.com/infobloxopen/devedge-sdk {{.SDKVersion}}
 	{{.GormtxModulePath}} {{.GormtxVersion}}
+	{{.MigrateModulePath}} {{.MigrateVersion}}
 	{{.OTelAdapterModulePath}} {{.OTelAdapterVersion}}
 	google.golang.org/genproto/googleapis/api {{.GenprotoAPIVersion}}
 	google.golang.org/grpc {{.GRPCVersion}}
@@ -29,3 +30,11 @@ require (
 // `go mod tidy`'s reconciliation of those indirects is deterministic; configure
 // the exporter at runtime via the standard OTEL_* env (see README).
 require go.opentelemetry.io/otel {{.OTelAPIVersion}} // indirect
+
+// Versioned SQL migrations (F043 / WS-022): the migration ENGINE lives in the SDK's
+// persistence/migrate adapter (its OWN module, so the golang-migrate fork + pgx driver
+// stay out of a server-only graph). It pulls in the Infoblox golang-migrate fork
+// (persisted-down + dirty-state recovery) via the replace below — a REQUIRED module's
+// replace is not inherited, so this project must declare it itself. On the SQLite dev
+// default the migrator uses the AutoMigrate fast-path and this dependency is inert.
+{{.MigrateForkReplace}}

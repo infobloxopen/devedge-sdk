@@ -685,6 +685,7 @@ var nestedAdapterModules = []string{
 	"observability/otel",
 	"persistence/gormtx",
 	"persistence/entrepo",
+	"persistence/migrate",
 }
 
 // makeTarget runs the generated project's REAL `make <args...>` target in target,

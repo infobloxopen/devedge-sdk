@@ -36,6 +36,7 @@ package servicekit
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/events"
@@ -174,6 +175,13 @@ type DatabaseDescriptor struct {
 	// Migrations is the module's embedded migrations filesystem (the host runs
 	// them under a per-module advisory lock in P2). nil means no migrations.
 	Migrations MigrationsFS
+	// MigrationLockTimeout and MigrationStatementTimeout override the versioned-SQL
+	// engine's SAFE migration-connection defaults (lock_timeout=2s, statement_timeout=60s;
+	// F043 D-4) for THIS module, so a large-table migration that legitimately needs longer
+	// can raise them without loosening the platform default. Zero uses the defaults. They
+	// bound the migration connection only, never the app pool.
+	MigrationLockTimeout      time.Duration
+	MigrationStatementTimeout time.Duration
 }
 
 // IsolationPolicy is the database module-namespacing policy (P2). It is an ALIAS of

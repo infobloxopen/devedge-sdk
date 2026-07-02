@@ -1,11 +1,12 @@
 .PHONY: build test security-check vet lint tidy generate sync-scaffold-mirrors \
-        build-gowork-off check-graph-isolation release release-verify
+        build-gowork-off check-graph-isolation release release-verify \
+        generate-migration-baseline check-migration-baseline
 
 # MODULES is every Go module in this repo (WS-011 / F039 multi-module split). The
 # build/vet/test targets loop over it so each module's gates run; go.work resolves
 # the cross-module references locally. As adapters split out (config/koanf,
 # events/kafkabus, persistence/*), append each new module dir here.
-MODULES := . cmd config/koanf events/kafkabus federationgql observability/otel persistence/entrepo persistence/gormtx
+MODULES := . cmd config/koanf events/kafkabus federationgql observability/otel persistence/entrepo persistence/gormtx persistence/migrate
 
 # Regenerate protobuf Go bindings (the authz annotation + the authzpb test fixture)
 # and the <Service>AuthzRules tables. Requires buf + protoc-gen-go on PATH; the
@@ -100,6 +101,20 @@ build-gowork-off:
 # go mod tidy), so it is a dedicated CI step, not part of the hermetic `test`.
 check-graph-isolation:
 	./scripts/check-graph-isolation.sh
+
+# generate-migration-baseline (re)generates the SDK framework migration baseline
+# (persistence/migrate/baseline/0001_framework_init.{up,down}.sql) from the canonical
+# gormtx framework models via Atlas — BUILD-TIME only (Atlas + its gorm provider live in
+# the isolated schemagen tool module, never in a runtime graph). Requires the ariga.io/
+# atlas CLI + Docker; see scripts/migration-baseline.sh.
+generate-migration-baseline:
+	./scripts/migration-baseline.sh generate
+
+# check-migration-baseline is the native drift gate: it regenerates the baseline from the
+# models and fails if the committed baseline is stale (models changed, 0001 did not). It
+# SKIPS cleanly when Atlas/Docker are absent; CI installs Atlas and runs it for real.
+check-migration-baseline:
+	./scripts/migration-baseline.sh check
 
 security-check: ## Run security assertions (go test -run Security)
 	# testdata/* are standalone consumer modules (own go.mod + `replace` to the SDK),

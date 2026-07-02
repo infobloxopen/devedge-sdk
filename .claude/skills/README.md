@@ -8,6 +8,8 @@ Each skill is YAML frontmatter (`name`, `description`) + a lean, command-first b
 - `run-tests` — how to test (layers + exact commands).
 - `build-run` — how to build (this is a library; there is no app to run).
 - `verify-change` — the QA gate (functional + scope).
+- `change-database-schema` — evolve a service's DB safely: sequential migrations, zero-downtime
+  recipes (Postgres + MySQL), and how they run unattended.
 
 Convention: when a mechanical step repeats, promote it to a skill here. Keep them
 lean — commands over prose.

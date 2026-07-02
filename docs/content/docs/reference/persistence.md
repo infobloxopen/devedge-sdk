@@ -215,7 +215,17 @@ paired with a real DSN file. When the file changes (for example, after a credent
 
 ## Migrations
 
-Schema migrations use `infobloxopen/migrate` (the org-standard fork) regardless of which storage backend you chose — GORM, ent, or sqlc all use the same migration engine.
+On PostgreSQL (and MySQL) the schema-of-record evolves through **versioned, sequentially-numbered SQL migrations** — `NNNN_<description>.up.sql` / `.down.sql`, zero-padded and gap-free (`0001`, `0002`, …). The `persistence/migrate` engine applies them through the org-standard `infobloxopen/migrate` fork (which adds a persisted down-store and dirty-state recovery), regardless of which storage shape you chose — GORM, ent, or sqlc all share the same engine.
+
+**Framework baseline.** The SDK owns a generated `0001_framework_init.{up,down}.sql` — the framework tables (the transactional outbox, including the cell-development `event_seq`/`event_epoch` columns; idempotency markers; the dispatch cursor + dead-letter sidecars; and the `tenant_fence`/`tenant_event_seq`/`tenant_event_policy` cell tables). It is composed **ahead of** your module's own migrations, so every service builds its schema forward from `0001`; your first migration is `0002`. The baseline is generated from the canonical framework models with [Atlas](https://atlasgo.io) at build time (never in the service binary) and drift-checked in CI (`make check-migration-baseline`).
+
+**Safe by default.** The migration connection sets `lock_timeout=2s` and `statement_timeout=60s` (overridable per module) so a contended migration **fails fast** instead of queuing behind live queries; it never touches the app pool. Migrations run within the module's schema (`search_path`), so `schema_migrations` is per-module, and a **single advisory lock** serializes concurrent hosts/replicas — one runs, the rest wait and find the schema already current. A failed migration leaves a recoverable dirty state that the next corrected run **auto-recovers**, and the persisted down-store lets a rollback run even when the running image no longer ships the down file.
+
+**`CREATE INDEX CONCURRENTLY`** must be the **only** statement in its migration file (Postgres cannot run it inside a transaction block); a multi-statement file mixing it fails loud.
+
+**Dev fast-path.** SQLite (dev/test only) keeps `AutoMigrate`, which also creates the domain tables so a freshly scaffolded service runs out of the box; the versioned-SQL path is verified against real PostgreSQL in CI. To adopt the versioned path, switch the dialector to Postgres, set a `postgres://` DSN, and add your domain tables as `module/migrations/0002_*.up.sql`.
+
+See the `change-database-schema` skill for the authoring workflow.
 
 ## Storage shapes
 
