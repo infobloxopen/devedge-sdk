@@ -501,25 +501,15 @@ func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByNam
 	}
 	withTags := hasTagsFields(messages)
 
-	// Determine if any message needs the middleware import (tenant or secret lookup).
+	// Determine if any message needs the middleware import. It is used ONLY for
+	// tenant scoping (middleware.TenantIDFromContext, always gated by hasTenant);
+	// a secret field alone does not use it (secret handling uses the secret
+	// package), so a non-tenant secret resource must NOT import middleware.
 	withMiddleware := false
 	for _, msg := range messages {
 		if msgHasTenantField(msg) {
 			withMiddleware = true
 			break
-		}
-	}
-	if !withMiddleware {
-		for _, msg := range messages {
-			for _, f := range msg.Fields {
-				if f.IsSecret {
-					withMiddleware = true
-					break
-				}
-			}
-			if withMiddleware {
-				break
-			}
 		}
 	}
 

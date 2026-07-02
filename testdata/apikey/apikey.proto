@@ -26,7 +26,10 @@ message APIKey {
   // name is the AIP-122 resource name, e.g. "apikeys/abc123".
   string name       = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
   string id         = 2;
-  string account_id = 3;
+  // account_id is client-REQUIRED (explicit field_behavior). It exercises the
+  // explicit REQUIRED contract alongside APIKey's secret (INPUT_ONLY) key_value
+  // and Token's USER_SETTABLE id (derived IMMUTABLE) — all three behaviors.
+  string account_id = 3 [(google.api.field_behavior) = REQUIRED];
   // key_value is the raw API key material. Annotated secret: the storage layer
   // will hash and encrypt this field; it is cleared in all responses after creation.
   string key_value  = 4 [(infoblox.field.v1.opts) = {secret: true}];

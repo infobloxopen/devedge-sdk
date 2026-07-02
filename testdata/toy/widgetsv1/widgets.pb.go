@@ -12,6 +12,7 @@ package widgetsv1
 
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
+	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -34,12 +35,28 @@ const (
 type Widget struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is the AIP-122 resource name, e.g. "widgets/abc123".
-	Name        string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Id          string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the
+	// API contract (FR-A6 "annotate once") — no explicit field_behavior needed.
+	Id string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	// display_name is client-REQUIRED (explicit field_behavior).
 	DisplayName string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Color       string `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
-	Weight      int32  `protobuf:"varint,5,opt,name=weight,proto3" json:"weight,omitempty"`
-	Etag        string `protobuf:"bytes,6,opt,name=etag,proto3" json:"etag,omitempty"`
+	// color is IMMUTABLE (explicit field_behavior): set at create, never updated.
+	Color  string `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
+	Weight int32  `protobuf:"varint,5,opt,name=weight,proto3" json:"weight,omitempty"`
+	Etag   string `protobuf:"bytes,6,opt,name=etag,proto3" json:"etag,omitempty"`
+	// sku is storage NOT NULL but NOT client-required — proving not_null is never
+	// mapped to REQUIRED (FM-4/AC-1).
+	Sku string `protobuf:"bytes,9,opt,name=sku,proto3" json:"sku,omitempty"`
+	// category is a string-backed enum (allowed_values → OpenAPI enum, AC-4).
+	Category string `protobuf:"bytes,10,opt,name=category,proto3" json:"category,omitempty"`
+	// secret_token is write-only material (secret → INPUT_ONLY): accepted on write,
+	// stripped from responses by middleware/redact (AC-3), writeOnly in OpenAPI.
+	SecretToken string `protobuf:"bytes,11,opt,name=secret_token,json=secretToken,proto3" json:"secret_token,omitempty"`
+	// parent_id is a cross-service reference to another Widget (AIP-124). Widget is
+	// batch-fetchable (WidgetService serves BatchGetWidgets), so the reference
+	// resolves; surfaces as x-aip-references in the enriched OpenAPI (AC-5).
+	ParentId string `protobuf:"bytes,12,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"`
 	// AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.
 	DeleteTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
 	// AIP-136: set by ArchiveWidget; non-nil means the widget is archived.
@@ -116,6 +133,34 @@ func (x *Widget) GetWeight() int32 {
 func (x *Widget) GetEtag() string {
 	if x != nil {
 		return x.Etag
+	}
+	return ""
+}
+
+func (x *Widget) GetSku() string {
+	if x != nil {
+		return x.Sku
+	}
+	return ""
+}
+
+func (x *Widget) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
+}
+
+func (x *Widget) GetSecretToken() string {
+	if x != nil {
+		return x.SecretToken
+	}
+	return ""
+}
+
+func (x *Widget) GetParentId() string {
+	if x != nil {
+		return x.ParentId
 	}
 	return ""
 }
@@ -1011,14 +1056,20 @@ var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
 	"\n" +
-	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\"\xcd\x02\n" +
+	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\x95\x04\n" +
 	"\x06Widget\x12\x17\n" +
-	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\x12!\n" +
-	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x14\n" +
-	"\x05color\x18\x04 \x01(\tR\x05color\x12\x16\n" +
+	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x18\n" +
+	"\x02id\x18\x02 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12&\n" +
+	"\fdisplay_name\x18\x03 \x01(\tB\x03\xe0A\x02R\vdisplayName\x12\x19\n" +
+	"\x05color\x18\x04 \x01(\tB\x03\xe0A\x05R\x05color\x12\x16\n" +
 	"\x06weight\x18\x05 \x01(\x05R\x06weight\x12\x12\n" +
-	"\x04etag\x18\x06 \x01(\tR\x04etag\x12@\n" +
+	"\x04etag\x18\x06 \x01(\tR\x04etag\x12\x18\n" +
+	"\x03sku\x18\t \x01(\tB\x06\x9a\xb5\x18\x02\x10\x01R\x03sku\x123\n" +
+	"\bcategory\x18\n" +
+	" \x01(\tB\x17\x9a\xb5\x18\x13J\bstandardJ\apremiumR\bcategory\x12)\n" +
+	"\fsecret_token\x18\v \x01(\tB\x06\x9a\xb5\x18\x02\b\x01R\vsecretToken\x128\n" +
+	"\tparent_id\x18\f \x01(\tB\x1b\xfaA\x18\n" +
+	"\x16toy.example.com/WidgetR\bparentId\x12@\n" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"deleteTime\x12D\n" +
 	"\rarchived_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\farchivedTime:-\xeaA*\n" +

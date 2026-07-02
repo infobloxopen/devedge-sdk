@@ -27,8 +27,13 @@ generate:
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.ddd.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.toy.yaml
-	# WS-013 EMIT: convert the toy v2 swagger to OpenAPI v3 (lands in testdata/toy/openapi/).
-	bin/openapiv2to3 testdata/toy/toy.swagger.json testdata/toy/openapi
+	# WS-024 Part B: build the toy FileDescriptorSet so the OpenAPI enrichment pass
+	# can recover the full AIP contract (field_behavior, resource identity, method
+	# classification, references, pagination) from proto — the lossless interchange.
+	buf build testdata/toy -o testdata/toy/toy.binpb
+	# WS-013 EMIT + WS-024 ENRICH: convert the toy v2 swagger to OpenAPI v3 and run
+	# the proto-authoritative enrichment pass (lands in testdata/toy/openapi/).
+	bin/openapiv2to3 -descriptor testdata/toy/toy.binpb testdata/toy/toy.swagger.json testdata/toy/openapi
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.apikey.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.fleet.yaml
 	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.iam.yaml

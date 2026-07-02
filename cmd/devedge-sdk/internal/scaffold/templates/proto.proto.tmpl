@@ -43,14 +43,23 @@ message {{.Resource}} {
   // name is the AIP-122 resource name, e.g. "{{.ResourcePlural}}/abc123".
   string name        = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
   string id          = 2;
-  // account_id scopes the resource to a tenant; the repository filters every
-  // query by it (set from the request's tenant context — see server/main.go).
-  string account_id  = 3;
-  // display_name is a human-friendly label; indexed for lookup.
-  string display_name = 4 [(infoblox.field.v1.opts) = {index: true}];
+  // account_id scopes the resource to a tenant and is IMMUTABLE — the repository
+  // filters every query by it (set from the request's tenant context — see
+  // server/main.go); a resource cannot be moved to another tenant.
+  string account_id  = 3 [(google.api.field_behavior) = IMMUTABLE];
+  // display_name is a human-friendly label; client-REQUIRED and indexed for lookup.
+  string display_name = 4 [(google.api.field_behavior) = REQUIRED, (infoblox.field.v1.opts) = {index: true}];
   string description  = 5;
   // AIP-154 ETag: framework-managed; stamped on every write, surfaced on read.
   string etag         = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // setup_token is example write-only input (INPUT_ONLY): the client may SET it,
+  // but it is never returned — middleware/redact strips it from responses and it
+  // is writeOnly in the OpenAPI contract. Remove it if your resource has no
+  // write-only input. (For a value that must ALSO be hashed/encrypted at rest,
+  // use (infoblox.field.v1.opts) = {secret: true} instead — that derives
+  // INPUT_ONLY and additionally requires a secret.Encryptor wired into the
+  // generated repository constructor.)
+  string setup_token = 9 [(google.api.field_behavior) = INPUT_ONLY];
   // AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.
   google.protobuf.Timestamp delete_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
 {{- if .Aggregate}}

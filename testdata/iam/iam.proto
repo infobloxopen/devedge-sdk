@@ -37,8 +37,10 @@ message User {
   option (infoblox.ddd.v1.aggregate) = {root: true};
 
   string id           = 1;
-  string account_id   = 2; // tenant partition (TenantMixin)
-  string email        = 3 [(infoblox.field.v1.opts) = {unique: true}];
+  // account_id is the tenant partition and IMMUTABLE (a user cannot move tenant).
+  string account_id   = 2 [(google.api.field_behavior) = IMMUTABLE];
+  // email is client-REQUIRED (explicit) and unique.
+  string email        = 3 [(google.api.field_behavior) = REQUIRED, (infoblox.field.v1.opts) = {unique: true}];
   string display_name = 4;
   string etag         = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 }

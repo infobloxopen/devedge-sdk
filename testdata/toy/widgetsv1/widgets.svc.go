@@ -9,11 +9,28 @@ import (
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/reference"
 	"github.com/infobloxopen/devedge-sdk/server"
 	"github.com/infobloxopen/devedge-sdk/servicekit"
 )
+
+// WidgetServiceReferences are the cross-service resource references declared on Widget's
+// resource via google.api.resource_reference (AIP-124). Each names a target
+// resource type served by (possibly) another microservice, keyed by a scalar
+// foreign key. It is metadata only: no traversable Go edge, no cascade. A
+// composition layer reads it to batch-resolve the targets (F041). DO NOT EDIT.
+var WidgetServiceReferences = []reference.Reference{
+	{
+		FieldName:   "ParentId",
+		FKField:     "parent_id",
+		TargetType:  "toy.example.com/Widget",
+		Cardinality: reference.One,
+	},
+}
 
 // RegisterWidgetService wires srv into the server's gRPC handler and HTTP gateway,
 // records its methods, and contributes WidgetServiceAuthzRules to the server. The
@@ -35,6 +52,7 @@ func RegisterWidgetService(s *server.Server, srv WidgetServiceServer) error {
 		WidgetService_CancelWidgetOperation_FullMethodName,
 	)
 	s.AddRules(WidgetServiceAuthzRules...)
+	s.RecordReferences(WidgetServiceReferences...)
 	s.RecordBatchTarget("toy.example.com/Widget")
 	RegisterWidgetServiceServer(s.GRPCServer(), srv)
 	s.RegisterGateway(func(ctx context.Context, mux *runtime.ServeMux, conn *grpc.ClientConn) error {
@@ -53,7 +71,26 @@ type WidgetServiceCRUDHandler struct {
 	Repo persistence.BatchRepository[*Widget, string]
 }
 
+// validateWidget enforces allowed_values on the resource's string-backed enum
+// fields. An empty value is treated as unset and skipped. DO NOT EDIT.
+func validateWidget(m *Widget) error {
+	if m == nil {
+		return nil
+	}
+	if v := m.GetCategory(); v != "" {
+		switch v {
+		case "standard", "premium":
+		default:
+			return status.Errorf(codes.InvalidArgument, "category: %q is not an allowed value (want one of: standard, premium)", v)
+		}
+	}
+	return nil
+}
+
 func (h *WidgetServiceCRUDHandler) CreateWidget(ctx context.Context, req *CreateWidgetRequest) (*Widget, error) {
+	if err := validateWidget(req.GetWidget()); err != nil {
+		return nil, err
+	}
 	return h.Repo.Create(ctx, req.GetWidget())
 }
 
@@ -75,6 +112,9 @@ func (h *WidgetServiceCRUDHandler) ListWidgets(ctx context.Context, req *ListWid
 }
 
 func (h *WidgetServiceCRUDHandler) UpdateWidget(ctx context.Context, req *UpdateWidgetRequest) (*Widget, error) {
+	if err := validateWidget(req.GetWidget()); err != nil {
+		return nil, err
+	}
 	return h.Repo.Update(ctx, req.GetWidget().GetId(), req.GetWidget(), req.GetUpdateMask()...)
 }
 

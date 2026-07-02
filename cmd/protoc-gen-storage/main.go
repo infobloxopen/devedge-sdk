@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
+	"github.com/infobloxopen/devedge-sdk/internal/aip"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
@@ -169,14 +170,11 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 						references = rf
 					}
 				}
-				if proto.HasExtension(opts, apiannotations.E_FieldBehavior) {
-					behaviors, _ := proto.GetExtension(opts, apiannotations.E_FieldBehavior).([]apiannotations.FieldBehavior)
-					for _, b := range behaviors {
-						if b == apiannotations.FieldBehavior_OUTPUT_ONLY {
-							isOutputOnly = true
-						}
-					}
+				oo, err := aip.IsOutputOnly(field.Desc)
+				if err != nil {
+					gen.Error(err)
 				}
+				isOutputOnly = oo
 			}
 			// AIP-148: detect soft-delete and TTL markers. These are handled specially
 			// by the renderer and must NOT be added to msg.Fields as ordinary columns.

@@ -6,6 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3
 	github.com/infobloxopen/devedge-sdk v0.0.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.81.1
@@ -18,7 +19,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

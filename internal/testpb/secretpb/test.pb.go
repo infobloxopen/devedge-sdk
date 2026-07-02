@@ -4,14 +4,15 @@
 // 	protoc        (unknown)
 // source: test.proto
 
-// Test-only fixture for secret field tests: messages with
-// (infoblox.field.v1.opts).secret annotations, shared between
-// middleware/redact and seccheck test packages.
+// Test-only fixture for secret / write-only field tests: messages with
+// (infoblox.field.v1.opts).secret and (google.api.field_behavior) = INPUT_ONLY
+// annotations, shared between middleware/redact and seccheck test packages.
 
 package secretpb
 
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -26,12 +27,16 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SecretMsg has one secret field and one public field.
+// SecretMsg has a secret field, an explicitly write-only (INPUT_ONLY) field, and
+// a public field.
 type SecretMsg struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	KeyValue      string                 `protobuf:"bytes,2,opt,name=key_value,json=keyValue,proto3" json:"key_value,omitempty"`
-	PublicValue   string                 `protobuf:"bytes,3,opt,name=public_value,json=publicValue,proto3" json:"public_value,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	KeyValue    string                 `protobuf:"bytes,2,opt,name=key_value,json=keyValue,proto3" json:"key_value,omitempty"`
+	PublicValue string                 `protobuf:"bytes,3,opt,name=public_value,json=publicValue,proto3" json:"public_value,omitempty"`
+	// write_only is INPUT_ONLY via an explicit field_behavior (not secret): it is
+	// still stripped from responses/logs by redact, proving INPUT_ONLY ⊇ secret.
+	WriteOnly     string `protobuf:"bytes,4,opt,name=write_only,json=writeOnly,proto3" json:"write_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -83,6 +88,13 @@ func (x *SecretMsg) GetKeyValue() string {
 func (x *SecretMsg) GetPublicValue() string {
 	if x != nil {
 		return x.PublicValue
+	}
+	return ""
+}
+
+func (x *SecretMsg) GetWriteOnly() string {
+	if x != nil {
+		return x.WriteOnly
 	}
 	return ""
 }
@@ -198,11 +210,13 @@ var File_test_proto protoreflect.FileDescriptor
 const file_test_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"test.proto\x12\bsecretpb\x1a\x1dinfoblox/field/v1/field.proto\"c\n" +
+	"test.proto\x12\bsecretpb\x1a\x1fgoogle/api/field_behavior.proto\x1a\x1dinfoblox/field/v1/field.proto\"\x87\x01\n" +
 	"\tSecretMsg\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\tkey_value\x18\x02 \x01(\tB\x06\x9a\xb5\x18\x02\b\x01R\bkeyValue\x12!\n" +
-	"\fpublic_value\x18\x03 \x01(\tR\vpublicValue\"L\n" +
+	"\fpublic_value\x18\x03 \x01(\tR\vpublicValue\x12\"\n" +
+	"\n" +
+	"write_only\x18\x04 \x01(\tB\x03\xe0A\x04R\twriteOnly\"L\n" +
 	"\tNestedMsg\x12\x14\n" +
 	"\x05outer\x18\x01 \x01(\tR\x05outer\x12)\n" +
 	"\x05inner\x18\x02 \x01(\v2\x13.secretpb.SecretMsgR\x05inner\"4\n" +

@@ -17,6 +17,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
+	"github.com/infobloxopen/devedge-sdk/secret"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -34,14 +35,19 @@ var (
 
 // WidgetModel is the GORM model for Widget.
 type WidgetModel struct {
-	ID          string `gorm:"primaryKey;type:varchar(36)"`
-	DisplayName string `gorm:"column:display_name"`
-	Color       string `gorm:"column:color"`
-	Weight      int32  `gorm:"column:weight"`
-	ETag        string `gorm:"column:etag"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DeletedAt   gorm.DeletedAt `gorm:"index"`
+	ID                string `gorm:"primaryKey;type:varchar(36)"`
+	DisplayName       string `gorm:"column:display_name"`
+	Color             string `gorm:"column:color"`
+	Weight            int32  `gorm:"column:weight"`
+	Sku               string `gorm:"column:sku;not null"`
+	Category          string `gorm:"column:category"`
+	SecretTokenHash   string `gorm:"column:secret_token_hash;index"`
+	SecretTokenCipher string `gorm:"column:secret_token_cipher"`
+	ParentId          string `gorm:"column:parent_id"`
+	ETag              string `gorm:"column:etag"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
 }
 
 func toModel_Widget(p *Widget) *WidgetModel {
@@ -52,6 +58,9 @@ func toModel_Widget(p *Widget) *WidgetModel {
 	m.DisplayName = p.DisplayName
 	m.Color = p.Color
 	m.Weight = p.Weight
+	m.Sku = p.Sku
+	m.Category = p.Category
+	m.ParentId = p.ParentId
 	return m
 }
 
@@ -64,6 +73,9 @@ func fromModel_Widget(m *WidgetModel) *Widget {
 	p.DisplayName = m.DisplayName
 	p.Color = m.Color
 	p.Weight = m.Weight
+	p.Sku = m.Sku
+	p.Category = m.Category
+	p.ParentId = m.ParentId
 	if m.DeletedAt.Valid {
 		p.DeleteTime = timestamppb.New(m.DeletedAt.Time)
 	}
@@ -92,6 +104,9 @@ var WidgetColumns = map[string]string{
 	"display_name": "display_name",
 	"color":        "color",
 	"weight":       "weight",
+	"sku":          "sku",
+	"category":     "category",
+	"parent_id":    "parent_id",
 	"delete_time":  "deleted_at",
 }
 
@@ -112,13 +127,14 @@ func ParseWidgetName(name string) (string, error) {
 // WidgetRepository is a GORM-backed persistence.Repository for *Widget.
 type WidgetRepository struct {
 	db    *gorm.DB
+	enc   secret.Encryptor
 	idGen persistence.IDGenerator
 }
 
-// NewWidgetRepository creates a repository backed by db.
-func NewWidgetRepository(db *gorm.DB, opts ...persistence.RepoOption) *WidgetRepository {
+// NewWidgetRepository creates a repository backed by db and enc.
+func NewWidgetRepository(db *gorm.DB, enc secret.Encryptor, opts ...persistence.RepoOption) *WidgetRepository {
 	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
-	return &WidgetRepository{db: db, idGen: cfg.IDGenerator}
+	return &WidgetRepository{db: db, enc: enc, idGen: cfg.IDGenerator}
 }
 
 func (r *WidgetRepository) conn(ctx context.Context) *gorm.DB {
@@ -190,9 +206,21 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 
 func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget, error) {
 	if entity.GetId() == "" {
-		entity.Id = r.idGen.NewID()
+		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
 	m := toModel_Widget(entity)
+	if entity.SecretToken != "" {
+		h, err := r.enc.Hash(ctx, entity.SecretToken)
+		if err != nil {
+			return nil, fmt.Errorf("hash secret_token: %w", err)
+		}
+		c, err := r.enc.Encrypt(ctx, entity.SecretToken)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt secret_token: %w", err)
+		}
+		m.SecretTokenHash = h
+		m.SecretTokenCipher = c
+	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelWidgetOnCreate != nil {
 		ToModelWidgetOnCreate(entity, m)
@@ -212,6 +240,18 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 	m := toModel_Widget(entity)
 	m.ID = key
 	m.ETag = etag.New() // AIP-154: bump the ETag on every update
+	if entity.SecretToken != "" {
+		h, err := r.enc.Hash(ctx, entity.SecretToken)
+		if err != nil {
+			return nil, fmt.Errorf("hash secret_token: %w", err)
+		}
+		c, err := r.enc.Encrypt(ctx, entity.SecretToken)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt secret_token: %w", err)
+		}
+		m.SecretTokenHash = h
+		m.SecretTokenCipher = c
+	}
 	if ToModelWidgetOnUpdate != nil {
 		ToModelWidgetOnUpdate(entity, m)
 	}
@@ -259,6 +299,13 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 			"display_name": m.DisplayName,
 			"color":        m.Color,
 			"weight":       m.Weight,
+			"sku":          m.Sku,
+			"category":     m.Category,
+			"parent_id":    m.ParentId,
+		}
+		if entity.SecretToken != "" {
+			updates["secret_token_hash"] = m.SecretTokenHash
+			updates["secret_token_cipher"] = m.SecretTokenCipher
 		}
 		updates["etag"] = m.ETag
 		res := q.Updates(updates)
@@ -308,6 +355,23 @@ func (r *WidgetRepository) Undelete(ctx context.Context, key string) (*Widget, e
 	return r.Get(ctx, key)
 }
 
+// LookupBySecretTokenHash finds the Widget by the hash of its SecretToken field.
+// Returns ErrNotFound when no record matches or when hash is empty.
+func (r *WidgetRepository) LookupBySecretTokenHash(ctx context.Context, hash string) (*Widget, error) {
+	if hash == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := r.conn(ctx).Where("secret_token_hash = ?", hash)
+	var m WidgetModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("lookup widget by secret_token hash: %w", err)
+	}
+	return fromModel_Widget(&m), nil
+}
+
 func (r *WidgetRepository) BatchGet(ctx context.Context, keys []string) ([]*Widget, error) {
 	if len(keys) == 0 {
 		return []*Widget{}, nil
@@ -349,14 +413,14 @@ func (r *WidgetRepository) BatchUpdate(ctx context.Context, items []persistence.
 	}
 	if h, ok := persistence.TxFromContext(ctx); ok {
 		if tx, ok := h.(*gorm.DB); ok {
-			if err := run(&WidgetRepository{db: tx}); err != nil {
+			if err := run(&WidgetRepository{db: tx, enc: r.enc}); err != nil {
 				return nil, err
 			}
 			return out, nil
 		}
 	}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		return run(&WidgetRepository{db: tx})
+		return run(&WidgetRepository{db: tx, enc: r.enc})
 	})
 	if err != nil {
 		return nil, err
