@@ -65,6 +65,14 @@ jobs:
       - name: Integration tests (apikey fixture)
         run: cd testdata/apikey && GOWORK=off go test ./...
 
+      # The federation fixture (WS-021 P1 / F041) proves cross-service references +
+      # guaranteed BatchGet: asset.v1 references region.v1, and a composition resolves
+      # N assets' region refs in exactly ONE BatchGet on both ent and GORM (AC-5), plus
+      # metadata emission (AC-1), BatchGet-over-wire with read_mask+authz (AC-2), and no
+      # ent edge across the reference (AC-4). sqlite-backed, no Docker.
+      - name: Integration tests (federation fixture — cross-service refs + BatchGet, ent+gorm)
+        run: cd testdata/federation && GOWORK=off go test -race ./...
+
       # The fleet + iam fixtures carry the Phase-2 PostgreSQL validation tests
       # (TestPG_*). They start a postgres:16 container via testcontainers and SKIP
       # cleanly if Docker is unavailable — but ubuntu-latest ships a working Docker
