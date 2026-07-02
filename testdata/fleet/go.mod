@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	entgo.io/ent v0.14.6
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3
-	github.com/infobloxopen/devedge-sdk v0.44.0
+	github.com/infobloxopen/devedge-sdk v0.45.0
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2
 	github.com/testcontainers/testcontainers-go v0.43.0
