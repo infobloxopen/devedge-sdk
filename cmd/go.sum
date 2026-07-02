@@ -24,8 +24,8 @@ github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 h1:DtpOUmrhU8No
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
 github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1 h1:L9AJPsHnxLDAxxRcdMEFqYqgARNPwlK5RqGIQbkXCXk=
 github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1/go.mod h1:jPO84oxH4QgGedTEeYrgnLzCg96rlsDZoAp60JCsgkU=
-github.com/infobloxopen/devedge-sdk v0.45.0 h1:T4/7GtnerZMrynFlpps5pEM2MAlxZKs/wj8SUgSMCTA=
-github.com/infobloxopen/devedge-sdk v0.45.0/go.mod h1:HYkwY6GkhfYYwqlDwTHXSdzQ5PlesAZO0Xs2lX9cCpU=
+github.com/infobloxopen/devedge-sdk v0.46.0 h1:6swuCD8qjqqY15dwNlnsSzUdyua1iQtqqhlaOGf+yps=
+github.com/infobloxopen/devedge-sdk v0.46.0/go.mod h1:HYkwY6GkhfYYwqlDwTHXSdzQ5PlesAZO0Xs2lX9cCpU=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
