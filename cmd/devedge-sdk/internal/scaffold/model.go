@@ -30,6 +30,13 @@ const (
 // SDK tag (bump on every release).
 const fallbackSDKVersion = "v0.46.0"
 
+// deInstallVersion pins the devedge `de` CLI a generated project installs — the
+// hermetic build authority its Makefile shim and CI delegate to (WS-023). `de`
+// releases in lock-step with the SDK, so this tracks the `de` tag that carries
+// the same build/codegen behavior as this SDK. Pinned (never `@latest`) so a new
+// project's build tooling is reproducible; bump it with each coordinated release.
+const deInstallVersion = "v0.7.0"
+
 // Pinned dependency versions for the generated go.mod. These mirror the versions
 // the SDK's own testdata modules build against; `go mod tidy` reconciles indirects.
 const (
@@ -171,6 +178,9 @@ type Model struct {
 	HTTPPort string
 
 	SDKVersion            string
+	// DeVersion pins the `de` CLI the generated Makefile shim + CI install (the
+	// hermetic build authority codegen/build/test/lint delegate to).
+	DeVersion             string
 	GlebarezSQLiteVersion string
 	GRPCGatewayVersion    string
 	AuthzBindingVersion   string
@@ -305,6 +315,7 @@ func (o Options) Validate() (*Model, error) {
 		HTTPPort:         "8080",
 
 		SDKVersion:            resolveSDKVersion(),
+		DeVersion:             deInstallVersion,
 		GlebarezSQLiteVersion: glebarezSQLiteVersion,
 		GRPCGatewayVersion:    grpcGatewayVersion,
 		AuthzBindingVersion:   authzBindingVersion,

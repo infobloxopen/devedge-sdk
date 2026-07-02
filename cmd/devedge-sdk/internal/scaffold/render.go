@@ -98,6 +98,13 @@ func appendMakefileImageTarget(dir string, m *Model) (bool, error) {
 		}
 		return false, err
 	}
+	// A Makefile that reads the managed `de sync` shim already has an `image`
+	// target (it delegates to `de image`), so appending a second local one would
+	// collide. The new-service scaffold is exactly this case; retrofits onto a
+	// non-devedge Makefile still get the local ko target below.
+	if strings.Contains(string(existing), ".devedge/make/devedge.mk") {
+		return false, nil
+	}
 	for _, line := range strings.Split(string(existing), "\n") {
 		if strings.HasPrefix(line, "image:") {
 			return false, nil // already has an image target
@@ -143,6 +150,12 @@ func renderTemplates(dir string, m *Model) error {
 		// no extra harness.
 		{"security_test.go.tmpl", filepath.Join("cmd", m.BinName, m.ServiceLower+"_security_test.go"), 0o644},
 		{"Makefile.tmpl", "Makefile", 0o644},
+		// The managed build shim `de sync` writes: generate/build/test/lint/image/
+		// migrate-lint targets that delegate to `de`. Committed (like a lock file)
+		// so a fresh scaffold builds via `make`/`de` immediately, before `de sync`
+		// is ever run; it is byte-identical to `de sync` output, and `de sync`
+		// regenerates it idempotently. The top-level Makefile `-include`s it.
+		{"devedge.mk.tmpl", filepath.Join(".devedge", "make", "devedge.mk"), 0o644},
 		{"README.md.tmpl", "README.md", 0o644},
 		{"ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), 0o644},
 	}

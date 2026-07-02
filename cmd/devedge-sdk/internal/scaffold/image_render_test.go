@@ -49,23 +49,27 @@ func TestRenderImage_NoDockerfile(t *testing.T) {
 	}
 }
 
-// TestRenderImage_MakeTarget asserts a new service's Makefile gains the local-build
-// `make image` target, and that it auto-detects the docker socket (so `ko --local`
-// works regardless of Docker Desktop / Rancher Desktop / colima / Linux).
+// TestRenderImage_MakeTarget asserts a new service's `make image` comes from the
+// managed `de sync` fragment and delegates to `de image` (the pinned-ko builder,
+// which auto-detects the docker socket) — NOT an inlined local ko build appended
+// to the top Makefile (that append is skipped once the fragment is present).
 func TestRenderImage_MakeTarget(t *testing.T) {
 	dir := renderInto(t, BackendGORM)
 	mk := readRendered(t, dir, "Makefile")
-	for _, want := range []string{
-		"\nimage:",               // a `make image` target
-		"docker context inspect", // socket autodetect
-		"DOCKER_HOST:-",          // respect an existing DOCKER_HOST, else autodetect
-		"ko build --bare",        // ko build (ko.local => local load, no --local needed)
-		"GOFLAGS=-trimpath",      // reproducible build
-		"./cmd/orders",           // the service binary
-	} {
-		if !strings.Contains(mk, want) {
-			t.Errorf("Makefile image target missing %q:\n%s", want, mk)
+	if !strings.Contains(mk, "-include .devedge/make/devedge.mk") {
+		t.Errorf("Makefile must read the managed fragment (which provides `image`):\n%s", mk)
+	}
+	// The top-level Makefile must NOT inline a second local ko build (would collide
+	// with the fragment's `image` target).
+	for _, banned := range []string{"docker context inspect", "ko build --bare"} {
+		if strings.Contains(mk, banned) {
+			t.Errorf("top-level Makefile must not inline a local ko build (%q); `image` comes from the fragment -> `de image`:\n%s", banned, mk)
 		}
+	}
+	// The managed fragment owns `image`, delegating to `de image`.
+	frag := readRendered(t, dir, ".devedge/make/devedge.mk")
+	if !strings.Contains(frag, "image:    ; @de image") {
+		t.Errorf("managed fragment must provide `image: @de image`:\n%s", frag)
 	}
 }
 
@@ -82,20 +86,24 @@ func TestRenderImage_Workflow(t *testing.T) {
 		`branches: ["main"]`, // publish on merge to main
 		`tags: ["v*"]`,        // and on version tags
 		"packages: write",     // GHCR push permission
-		"run: make bootstrap", // generate gen/ before the ko build
-		"GOFLAGS: -trimpath",  // reproducible build (no build-machine paths in the binary)
-		"KO_DOCKER_REPO: ghcr.io/${{ github.repository }}${{ matrix.suffix }}",  // repo-namespaced
-		"KO_DEFAULTBASEIMAGE: gcr.io/distroless/static-debian12:nonroot",        // distroless + static
-		"go install github.com/google/ko@latest",                               // ko, no Dockerfile
-		"ko build --bare",                                                       // bare => exactly KO_DOCKER_REPO
-		"--platform=linux/amd64,linux/arm64",                                    // multi-arch
-		"./cmd/orders",                                                          // build the service binary
-		`binary: "orders"`,                                                      // matrix binary
-		`ko login ghcr.io --username "${{ github.actor }}" --password "${{ secrets.GITHUB_TOKEN }}"`, // GHCR auth
+		"run: de generate",    // regenerate gen/ before the image build
+		"go install github.com/infobloxopen/devedge/cmd/de@",                   // pinned de (the build authority) — no @latest
+		"KO_DOCKER_REPO: ghcr.io/${{ github.repository }}${{ matrix.suffix }}", // repo-namespaced
+		"de image --push --repo",                                               // build+push via de image (pinned ko)
+		"--base gcr.io/distroless/static-debian12:nonroot",                     // distroless + static base
+		"--bare",                                                               // bare => exactly KO_DOCKER_REPO
+		"./cmd/orders",                                                         // build the service binary
+		`binary: "orders"`,                                                     // matrix binary
+		"docker/login-action@v3",                                               // GHCR auth (ko reads the docker config)
+		"registry: ghcr.io",
 	} {
 		if !strings.Contains(wf, want) {
 			t.Errorf("image.yml missing %q:\n%s", want, wf)
 		}
+	}
+	// No @latest tool installs in the converted workflow (hermetic: pinned de).
+	if strings.Contains(wf, "@latest") {
+		t.Errorf("image.yml must not install any tool at @latest:\n%s", wf)
 	}
 
 	// Non-nested: the image name must be exactly ghcr.io/<owner>/<repo>[<suffix>] —

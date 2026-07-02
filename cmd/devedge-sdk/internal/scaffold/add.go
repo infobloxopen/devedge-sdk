@@ -166,6 +166,7 @@ func modelForExisting(module, bin, grpcPort, httpPort string, backend Backend, d
 		Backend:       backend,
 		GRPCPort:      grpcPort,
 		HTTPPort:      httpPort,
+		DeVersion:     deInstallVersion,
 		DeployTargets: deployTargets,
 	}
 }

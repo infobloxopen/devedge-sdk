@@ -1,120 +1,33 @@
-.PHONY: tools generate bootstrap build test run api-lint api-breaking api-release
-
-# SDK version that supplies the codegen plugins. go.mod is the SINGLE SOURCE OF
-# TRUTH: this resolves to the `github.com/infobloxopen/devedge-sdk` require in
-# go.mod at make-time, so `make tools` can never install plugins that disagree
-# with the project's own SDK dependency. Bump the SDK by editing go.mod (e.g.
-# `go get github.com/infobloxopen/devedge-sdk@vX.Y.Z`), then `make tools`.
-# The fallback (the version this project was scaffolded with) is used only when
-# `go list` can't resolve it yet — e.g. before `go mod download` on a fresh clone.
-SDK_VERSION ?= $(shell go list -m -f '{{"{{"}}.Version{{"}}"}}' github.com/infobloxopen/devedge-sdk 2>/dev/null || echo {{.SDKVersion}})
-
-# Install the protoc plugins `buf generate` needs onto PATH (GOPATH/bin), and
-# provision spectral for `apx lint`:
-#   - the SDK plugins, pinned to SDK_VERSION;
-#   - the public plugins from their canonical modules;
-#   - spectral — a Node tool `apx lint` shells out to for the OpenAPI surface.
-#     apx auto-downloads buf/oasdiff but NOT spectral, so `make tools` installs it
-#     via npm (best-effort: `make bootstrap` still succeeds without npm, and
-#     `make api-lint` prints a hint if it is missing).
-tools:
-	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-devedge-authz@$(SDK_VERSION)
-	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-svc@$(SDK_VERSION)
-{{- if eq (printf "%s" .Backend) "ent" }}
-	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-ent@$(SDK_VERSION)
-{{- else }}
-	go install github.com/infobloxopen/devedge-sdk/cmd/protoc-gen-storage@$(SDK_VERSION)
-{{- end }}
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
-	go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
-	go install github.com/infobloxopen/devedge-sdk/cmd/openapiv2to3@$(SDK_VERSION)
-	@if command -v spectral >/dev/null 2>&1; then \
-		echo "  spectral present: $$(command -v spectral)"; \
-	elif command -v npm >/dev/null 2>&1; then \
-		echo "  installing spectral (apx lint's OpenAPI linter) via npm…"; \
-		npm install -g @stoplight/spectral-cli || echo "  WARN: spectral install failed — run 'npm install -g @stoplight/spectral-cli' before 'make api-lint'"; \
-	else \
-		echo "  NOTE: spectral not found and npm unavailable. 'make api-lint' lints the generated OpenAPI"; \
-		echo "        surface with spectral (apx auto-downloads buf/oasdiff but not spectral). Install"; \
-		echo "        Node.js, then 'npm install -g @stoplight/spectral-cli'."; \
-	fi
-
-# Generate the consumer-local implementation (models, repository, service
-# scaffolding, authz rules, gateway) from the public proto. Output is git-ignored.
-{{- if eq (printf "%s" .Backend) "ent" }}
-# ent is a TWO-STEP generate: protoc-gen-ent (run by buf) emits the ent SCHEMAS
-# + the New{{.Resource}}EntRepository adapter; entc then turns the schemas into
-# the ent CLIENT (`go generate ./gen/ent`). Both must run before the code builds.
+# {{.Service}} — top-level Makefile (hand-owned).
 #
-# Cold-start ordering (why NOT a bare `go mod tidy` here): entc compiles the
-# schema package during `go generate`, so the entc tool AND the SDK packages the
-# schema/filterers/adapter import (persistence/entrepo, middleware,
-# persistence/resourcename) must already be in go.sum first. But the
-# schema/adapter/main ALSO import the ent CLIENT packages (gen/ent/...) that entc
-# has not produced yet, so a plain `go mod tidy` now would try to resolve those as
-# remote modules and print an alarming `fatal: Could not read from remote
-# repository` / "cannot find module providing package gen/ent/*". We avoid that
-# entirely: `go get` seeds JUST the toolchain + SDK deps into go.sum WITHOUT
-# building this module (so it never sees the missing gen/ent/* packages). entc can
-# then compile the schema; the clean `go mod tidy` runs last, once the client exists.
+# `de` (the devedge build authority) owns codegen, build, test, lint, and the
+# container image — hermetically, with the buf CLI + codegen plugins PINNED by
+# the `de` binary and the devedge-sdk plugins pinned to the SDK version in this
+# project's go.mod. There are no unpinned tool installs here anymore: that logic
+# lives in `de`. This Makefile just reads the managed shim `de sync` writes and
+# adds the project-specific targets below.
 #
-# The guarded `buf dep update` first locks the googleapis deps (google/api/*) the
-# proto imports when no buf.lock exists yet — without it a bare `buf generate` on a
-# tree that never locked deps (e.g. scaffolded with `--no-generate`) fails with
-# `import "google/api/annotations.proto": file does not exist`. A committed buf.lock
-# is left untouched, so reproducibility is preserved.
-generate:
-	@test -f buf.lock || buf dep update
-	buf generate
-	openapiv2to3 openapi/{{.BinName}}.swagger.json openapi
-	@echo "  seeding ent codegen toolchain (go.sum)…"
-	@go get entgo.io/ent/cmd/ent \
-		github.com/infobloxopen/devedge-sdk/persistence/entrepo \
-		github.com/infobloxopen/devedge-sdk/middleware \
-		github.com/infobloxopen/devedge-sdk/persistence/resourcename
-	@echo "  generating ent client…"
-	go generate ./gen/ent
-	go mod tidy
-{{- else }}
-# The guarded `buf dep update` locks the googleapis deps (google/api/*) the proto
-# imports if no buf.lock exists yet — self-heals a tree scaffolded with
-# `--no-generate` (a bare `buf generate` there fails with `import
-# "google/api/annotations.proto": file does not exist`). A committed buf.lock is
-# left untouched, so reproducibility is preserved.
-generate:
-	@test -f buf.lock || buf dep update
-	buf generate
-	openapiv2to3 openapi/{{.BinName}}.swagger.json openapi
-	go mod tidy
-{{- end }}
+# Requires `de` on PATH:
+#     go install github.com/infobloxopen/devedge/cmd/de@{{.DeVersion}}
+#
+# Then, on a fresh clone (gen/ is git-ignored — see the README), generate first:
+#     de generate    # buf generate -> gen/ (+ OpenAPI v3{{- if eq (printf "%s" .Backend) "ent" }}, then the entc client{{- end }}), then go mod tidy
+#     de build       # go build ./...
+#     de test        # go test ./...
+#
+# The managed shim provides generate/build/test/lint/image/migrate-lint, each
+# delegating to `de`. Regenerate it with `de sync` (it is idempotent). If it is
+# ever missing (a checkout before `de sync` ran), run `de sync` to (re)write it.
+-include .devedge/make/devedge.mk
 
-# bootstrap is the one-command fresh-clone setup: install the plugins, then
-# generate the consumer-local code that gen/ holds (gen/ is git-ignored, so a
-# clone has none — `go build` would fail with "no required module provides
-# package .../gen/..." until this runs). README points new clones here.
-bootstrap: tools generate
-
-# build/test require the generated code. gen/ is git-ignored, so on a fresh clone
-# it is absent and `go build` fails; this order-only prerequisite generates it
-# once. After that gen/ exists and the prerequisite is satisfied immediately, so
-# the happy path stays fast (no regenerate on every build). Run `make generate`
-# explicitly after editing the proto.
-gen:
-	@test -d gen || $(MAKE) bootstrap
-
-build: | gen
-	go build ./...
-
-test: | gen
-	go test ./...
+.PHONY: run api-lint api-breaking api-release
 
 # Run the service locally. Observability is on by default behind the OTel seam:
 # export the standard OTEL_* env to ship traces + RED metrics to a collector (no
 # code change), e.g. `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 make run`.
 # With no endpoint set the exporter no-ops, so this runs with zero overhead.
-run: | gen
+# gen/ is git-ignored — run `de generate` first on a fresh clone.
+run:
 	go run ./cmd/{{.BinName}}
 
 # apx governs the PUBLIC proto surface. Run these locally BEFORE pushing — CI runs
@@ -135,7 +48,7 @@ run: | gen
 #                not the <module>/<api-id> layout apx derives by default. The
 #                command exits 0. Do NOT add --strict, which would turn it fatal.
 api-lint:
-	@command -v spectral >/dev/null 2>&1 || echo "note: 'apx lint' lints the OpenAPI surface with spectral — 'make tools' provisions it (needs npm), or run 'npm install -g @stoplight/spectral-cli'."
+	@command -v spectral >/dev/null 2>&1 || echo "note: 'apx lint' lints the OpenAPI surface with spectral — install it with 'npm install -g @stoplight/spectral-cli'."
 	apx lint
 
 # NOTE: when there ARE violations, apx itself prints the buf violation list twice
