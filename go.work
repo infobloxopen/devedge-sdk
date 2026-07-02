@@ -17,4 +17,5 @@ use (
 	./observability/otel
 	./persistence/entrepo
 	./persistence/gormtx
+	./persistence/migrate
 )

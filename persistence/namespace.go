@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 )
 
@@ -214,6 +215,20 @@ func migrationTableFor(ns DatabaseNamespace) string {
 	default:
 		return base
 	}
+}
+
+// ModuleMigrationLockKey derives the int64 Postgres advisory-lock key that serializes
+// a module's schema migration across hosts/replicas, from its module ID. It is the
+// SINGLE advisory-lock authority for module migrations (F043 D-6): both the gormtx
+// AutoMigrate dev/test path and the versioned-SQL engine (persistence/migrate) hold
+// THIS key — never migrate's own per-(database,schema,table) lock as a second authority.
+// The key is namespaced under a migration domain distinct from the relay leader lock so
+// the two cannot collide.
+func ModuleMigrationLockKey(moduleID string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("devedge-sdk/migrate/module/"))
+	_, _ = h.Write([]byte(moduleID))
+	return int64(h.Sum64())
 }
 
 // sanitizeIdent lowercases an identifier and replaces any character that is not a

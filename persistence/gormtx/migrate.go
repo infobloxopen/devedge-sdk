@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"time"
 
 	"gorm.io/gorm"
@@ -337,12 +336,11 @@ func acquireModuleAdvisoryLock(ctx context.Context, db *gorm.DB, moduleID string
 }
 
 // moduleMigrationLockKey derives the int64 advisory-lock key for a module's
-// migration from its ID, in a domain distinct from the relay leader lock.
+// migration from its ID. It delegates to persistence.ModuleMigrationLockKey — the
+// SINGLE lock authority shared with the versioned-SQL engine (persistence/migrate),
+// so the AutoMigrate dev path and the SQL engine never fight over two different keys.
 func moduleMigrationLockKey(moduleID string) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte("devedge-sdk/migrate/module/"))
-	_, _ = h.Write([]byte(moduleID))
-	return int64(h.Sum64())
+	return persistence.ModuleMigrationLockKey(moduleID)
 }
 
 // NamespacedPostgresDSN re-exports persistence.NamespacedPostgresDSN for gormtx

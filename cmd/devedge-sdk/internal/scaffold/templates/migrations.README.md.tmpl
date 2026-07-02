@@ -1,28 +1,50 @@
 # {{.BinName}} migrations
 
-This directory holds the **{{.BinName}} module's** schema migration files. The
-module *owns* its migration files; a **host** runs them (WS-012 composable
-services). The `module/module.go` `//go:embed migrations` directive embeds this
-directory so a host can run these migrations under a per-module advisory lock with
-per-module namespacing.
+This directory holds the **{{.BinName}} module's** versioned SQL migration files. The
+module *owns* its migration files; a **host** runs them (WS-012 composable services).
+The `module/module.go` `//go:embed migrations` directive embeds this directory so a host
+can run these migrations under a per-module advisory lock with per-module namespacing.
 
-**Migration is host-run (WS-012 P2).** `cmd/{{.BinName}}/main.go` passes a
+**Migration is host-run (WS-012 P2 / F043).** `cmd/{{.BinName}}/main.go` passes a
 `servicekit.MigrationRunner` (`moduleMigrate`) to `servicekit.Run`, which calls it —
-once, before the module registers — with the module's allocated `DatabaseNamespace`.
-The runner (`gormtx.MigrateModule`) acquires a per-module advisory lock (Postgres),
-creates the module's schema (or applies its table prefix), AutoMigrates the domain
-models plus the SDK framework tables (outbox / idempotency / dispatcher sidecars)
-**into the module namespace**, and stamps the module's own `schema_migrations` table.
-A module **never** runs migrations from `init()`, never assumes it owns the whole DB,
-and never creates a cross-module foreign key.
+once, before the module registers — with the module's allocated `DatabaseNamespace`. The
+runner picks the engine by backend:
 
-For a **standalone** host the module shares its database with no one, so its
-namespace is a zero (bare-table) namespace and tables are unqualified — unchanged
-from a non-composable service. When this service is composed into a **suite** host
-(`de compose`), that host declares a shared engine and each module gets its own
-schema/prefix — the SAME runner, no module change.
+- **Postgres (the schema-of-record) → versioned SQL.** The SDK-owned **framework
+  baseline** (`0001_framework_init`, which creates the outbox incl. `event_seq`/
+  `event_epoch`, idempotency, dispatch cursor + dead-letter, and the cell tables) is
+  composed **ahead of** this directory's files and applied through `infobloxopen/migrate`
+  on a **safe connection** (`lock_timeout` + `statement_timeout`, a per-module
+  `search_path` so `schema_migrations` lands in the module schema, a single advisory
+  lock, and dirty-state recovery + a persisted down-store).
+- **SQLite (dev/test default) → AutoMigrate fast-path.** SQLite is ephemeral and
+  dialect-limited (not a production target), so the dev DB — including your domain tables
+  — is materialized by AutoMigrate and the files here are ignored. Swap the dialector in
+  `newDB` and set a Postgres DSN to exercise the versioned path.
 
-This README is also the placeholder that keeps the `//go:embed migrations` valid
-before the first migration file lands. Add migration files here (e.g.
-`0001_init.up.sql` / `0001_init.down.sql`) as your schema evolves; the host-run
-migrator reads them through the embedded `Migrations()` FS.
+A module **never** runs migrations from `init()`, never assumes it owns the whole DB, and
+never creates a cross-module foreign key.
+
+## Writing migrations
+
+**The framework owns `0001`.** Your domain migrations start at **`0002`** — the applier
+composes the framework baseline as `0001` and rejects a duplicate version, so a file
+numbered `0001` here fails loud. Name files `NNNN_<desc>.{up,down}.sql`, **4-digit,
+zero-padded, sequential, no gaps**; every `up` needs a matching `down`. For example:
+
+```
+0002_widgets.up.sql        CREATE TABLE widgets (...);
+0002_widgets.down.sql      DROP TABLE widgets;
+```
+
+**`CREATE INDEX CONCURRENTLY` must be the ONLY statement in its file** (Postgres cannot
+run it inside a transaction block, and a multi-statement file is sent as one implicit
+transaction — the host fails loud on that). Put it in its own migration:
+
+```
+0003_widgets_name_idx.up.sql    CREATE INDEX CONCURRENTLY idx_widgets_name ON widgets (name);
+0003_widgets_name_idx.down.sql  DROP INDEX CONCURRENTLY IF EXISTS idx_widgets_name;
+```
+
+This README is also the placeholder that keeps `//go:embed migrations` valid before your
+first migration file lands.

@@ -82,13 +82,13 @@ func TestSDKVersionResolves(t *testing.T) {
 	}
 }
 
-// TestMakefileSDKVersionFromGoMod is the finding-051 (#61) regression: the
-// generated Makefile must DERIVE SDK_VERSION from the project's go.mod at
-// make-time (go list -m), so `make tools` can never install plugins that lag the
-// project's own devedge-sdk require — rather than baking the CLI binary's version
-// in as a literal pin. The scaffold-time version is permitted only as the `echo`
-// fallback when `go list` can't resolve it yet (fresh clone, pre-download).
-func TestMakefileSDKVersionFromGoMod(t *testing.T) {
+// TestMakefileIsThinDeShim asserts the WS-023 conversion: the generated top-level
+// Makefile is a THIN shim that reads the managed `de sync` fragment and adds only
+// project-specific targets. All codegen/build/test/lint logic (and the SDK-version
+// pinning that was finding-051/#61) now lives in `de`, so the Makefile must carry
+// NO `go install`/`@latest`/`make tools`/`SDK_VERSION` tool blocks, and must pin
+// the `de` install to an exact version (never @latest).
+func TestMakefileIsThinDeShim(t *testing.T) {
 	for _, backend := range []Backend{BackendGORM, BackendEnt} {
 		t.Run(string(backend), func(t *testing.T) {
 			m, err := Options{Service: "orders", Resource: "Order", Backend: backend}.Validate()
@@ -101,63 +101,58 @@ func TestMakefileSDKVersionFromGoMod(t *testing.T) {
 			}
 			mk := string(out)
 
-			var sdkLine string
-			for _, ln := range strings.Split(mk, "\n") {
-				if strings.HasPrefix(ln, "SDK_VERSION") {
-					sdkLine = ln
-					break
+			// Reads the managed fragment `de sync` writes.
+			if !strings.Contains(mk, "-include .devedge/make/devedge.mk") {
+				t.Errorf("thin Makefile must `-include .devedge/make/devedge.mk`:\n%s", mk)
+			}
+			// No baked-in codegen-tool installs — the logic lives in `de`. (The one
+			// legitimate `go install` is the pinned `de` install hint, checked below.)
+			for _, banned := range []string{"@latest", "SDK_VERSION", "protoc-gen-", "make tools", "make bootstrap"} {
+				if strings.Contains(mk, banned) {
+					t.Errorf("thin Makefile must not contain %q (that logic moved to `de`):\n%s", banned, mk)
 				}
 			}
-			if sdkLine == "" {
-				t.Fatalf("no SDK_VERSION assignment in rendered Makefile:\n%s", mk)
+			// `de` install hint must pin an exact version.
+			if !strings.Contains(mk, "cmd/de@"+m.DeVersion) {
+				t.Errorf("Makefile must pin the `de` install to %q:\n%s", m.DeVersion, mk)
 			}
-
-			// Must derive from go.mod via `go list -m`, not a baked literal pin.
-			if !strings.Contains(sdkLine,
-				"go list -m -f '{{.Version}}' github.com/infobloxopen/devedge-sdk") {
-				t.Errorf("SDK_VERSION must derive from go.mod via `go list -m`, got:\n%s", sdkLine)
-			}
-			// The scaffold-time version may appear ONLY as the `echo` fallback.
-			if strings.Contains(sdkLine, m.SDKVersion) && !strings.Contains(sdkLine, "echo "+m.SDKVersion) {
-				t.Errorf("scaffold-time version %q must appear only as the `echo` fallback, got:\n%s", m.SDKVersion, sdkLine)
-			}
-			// `make tools` must install the plugins at $(SDK_VERSION) — i.e. the
-			// go.mod-derived value — not at a hardcoded version.
-			if !strings.Contains(mk, "protoc-gen-svc@$(SDK_VERSION)") {
-				t.Errorf("`make tools` must install SDK plugins at $(SDK_VERSION):\n%s", mk)
+			// The project-specific targets survive (they don't delegate to `de`).
+			for _, tgt := range []string{"run:", "api-lint:", "api-breaking:", "api-release:"} {
+				if !strings.Contains(mk, tgt) {
+					t.Errorf("thin Makefile missing project target %q:\n%s", tgt, mk)
+				}
 			}
 		})
 	}
 }
 
-// TestMakefileGenerateLocksDeps is the dogfood-F-4 regression: the generated
-// Makefile's `generate` target must lock the buf deps (googleapis: google/api/*)
-// before `buf generate`, so a tree that never locked them — e.g. scaffolded with
-// `--no-generate` — does not fail with `import "google/api/annotations.proto": file
-// does not exist`. The scaffold pipeline runs `buf dep update` itself on the default
-// path; the Makefile must do the same for the user-driven generate step. It is
-// guarded on a missing buf.lock so a committed lock is left untouched.
-func TestMakefileGenerateLocksDeps(t *testing.T) {
-	for _, backend := range []Backend{BackendGORM, BackendEnt} {
-		t.Run(string(backend), func(t *testing.T) {
-			m, err := Options{Service: "orders", Resource: "Order", Backend: backend}.Validate()
-			if err != nil {
-				t.Fatalf("Validate: %v", err)
-			}
-			out, err := renderTemplate("Makefile.tmpl", m)
-			if err != nil {
-				t.Fatalf("render Makefile.tmpl: %v", err)
-			}
-			mk := string(out)
-			if !strings.Contains(mk, "buf dep update") {
-				t.Errorf("generate target must run `buf dep update` to lock googleapis deps:\n%s", mk)
-			}
-			// The lock must be created only when absent, so a committed buf.lock
-			// (fresh-clone, reproducible) is not silently rewritten on every generate.
-			if !strings.Contains(mk, "test -f buf.lock || buf dep update") {
-				t.Errorf("`buf dep update` must be guarded on a missing buf.lock:\n%s", mk)
-			}
-		})
+// TestManagedFragmentDelegatesToDe asserts the committed `.devedge/make/devedge.mk`
+// (byte-identical to `de sync` output) carries the generated-code header and
+// delegates every build verb to `de`, the hermetic build authority.
+func TestManagedFragmentDelegatesToDe(t *testing.T) {
+	m, err := Options{Service: "orders", Resource: "Order", Backend: BackendGORM}.Validate()
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	out, err := renderTemplate("devedge.mk.tmpl", m)
+	if err != nil {
+		t.Fatalf("render devedge.mk.tmpl: %v", err)
+	}
+	frag := string(out)
+	if !strings.HasPrefix(frag, "# Code generated by `de sync`. DO NOT EDIT.") {
+		t.Errorf("managed fragment must carry the DO NOT EDIT header:\n%s", frag)
+	}
+	for _, want := range []string{
+		"generate: ; @de generate",
+		"build:    ; @de build",
+		"test:     ; @de test",
+		"lint:     ; @de lint",
+		"image:    ; @de image",
+		"migrate-lint: ; @de migrate lint",
+	} {
+		if !strings.Contains(frag, want) {
+			t.Errorf("managed fragment missing target %q:\n%s", want, frag)
+		}
 	}
 }
 

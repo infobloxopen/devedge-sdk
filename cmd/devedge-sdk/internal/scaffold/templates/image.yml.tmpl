@@ -1,13 +1,15 @@
 name: image
 
 # Build and publish the [[ .Service ]] container image to GitHub Container Registry
-# on merge to main (and on v* tags) — using ko, so there is NO Dockerfile in this
-# repo. ko compiles the Go binary CGO-free and lays it on a distroless STATIC base
-# (KO_DEFAULTBASEIMAGE below), multi-arch. The image is repo-namespaced and
-# NON-NESTED: ghcr.io/<owner>/<repo>.
+# on merge to main (and on v* tags). The image is built with ko (via `de image`),
+# so there is NO Dockerfile: ko compiles the Go binary CGO-free and lays it on a
+# distroless STATIC base, multi-arch. The image is repo-namespaced and NON-NESTED:
+# ghcr.io/<owner>/<repo>.
 #
 # gen/ is git-ignored, so — exactly like ci.yml — the consumer-local code is
-# generated BEFORE the build (`make bootstrap` = tools + generate).
+# generated BEFORE the build. `de` is the hermetic build authority: `de generate`
+# installs the pinned buf + codegen plugins and regenerates; `de image` runs the
+# pinned ko. Both come from a single PINNED `de` — no unpinned tool installs.
 #
 # This template is rendered with square-bracket delimiters so GitHub Actions'
 # ${{ ... }} passes through verbatim.
@@ -37,9 +39,6 @@ jobs:
     env:
       # Repo-namespaced, non-nested target. `ko build --bare` publishes EXACTLY this.
       KO_DOCKER_REPO: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
-      # Distroless + STATIC runtime base (ko builds CGO-free Go by default, so the
-      # binary is the whole payload).
-      KO_DEFAULTBASEIMAGE: gcr.io/distroless/static-debian12:nonroot
     steps:
       - uses: actions/checkout@v4
 
@@ -49,23 +48,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install buf
-        uses: bufbuild/buf-setup-action@v1
+      - name: Install de (the devedge build authority)
+        run: go install github.com/infobloxopen/devedge/cmd/de@[[ .DeVersion ]]
 
-      - name: Install apx
-        uses: infobloxopen/apx@main
-
-      # gen/ is git-ignored: install the codegen plugins (pinned to the SDK in
-      # go.mod) and generate the consumer-local code ko compiles.
+      # gen/ is git-ignored: regenerate the consumer-local code ko compiles.
       - name: Generate consumer-local code
-        run: make bootstrap
-
-      # ko is installed the same way the scaffold installs its other public tools.
-      - name: Install ko
-        run: go install github.com/google/ko@latest
+        run: de generate
 
       - name: Log in to GHCR
-        run: ko login ghcr.io --username "${{ github.actor }}" --password "${{ secrets.GITHUB_TOKEN }}"
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute tags
         id: tags
@@ -76,15 +71,13 @@ jobs:
             *)            echo "tags=latest,sha-$short" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Build and push (ko — distroless static, multi-arch, no Dockerfile)
-        env:
-          # Reproducible build: trim build-machine paths from the binary (the binary
-          # no longer embeds /home/runner/... — same source builds byte-identically
-          # anywhere; debug symbols are kept). ko already defaults to -trimpath; we
-          # set it explicitly so the intent is visible and survives a ko default change.
-          GOFLAGS: -trimpath
+      # `de image` runs the PINNED ko: distroless STATIC base, reproducible
+      # (-trimpath) multi-arch build. Tokens after `--` pass through to ko verbatim,
+      # so `--bare` keeps the image non-nested and `--tags` sets the published tags.
+      - name: Build and push (de image -> pinned ko, distroless static, multi-arch)
         run: |
-          ko build --bare \
-            --platform=linux/amd64,linux/arm64 \
+          de image --push --repo "$KO_DOCKER_REPO" \
+            --base gcr.io/distroless/static-debian12:nonroot \
+            -- --bare \
             --tags "${{ steps.tags.outputs.tags }}" \
             ./cmd/[[ .BinName ]]

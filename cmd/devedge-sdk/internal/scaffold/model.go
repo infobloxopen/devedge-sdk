@@ -30,6 +30,13 @@ const (
 // SDK tag (bump on every release).
 const fallbackSDKVersion = "v0.46.0"
 
+// deInstallVersion pins the devedge `de` CLI a generated project installs — the
+// hermetic build authority its Makefile shim and CI delegate to (WS-023). `de`
+// releases in lock-step with the SDK, so this tracks the `de` tag that carries
+// the same build/codegen behavior as this SDK. Pinned (never `@latest`) so a new
+// project's build tooling is reproducible; bump it with each coordinated release.
+const deInstallVersion = "v0.7.0"
+
 // Pinned dependency versions for the generated go.mod. These mirror the versions
 // the SDK's own testdata modules build against; `go mod tidy` reconciles indirects.
 const (
@@ -65,7 +72,18 @@ const otelAdapterModulePath = "github.com/infobloxopen/devedge-sdk/observability
 const (
 	gormtxModulePath  = "github.com/infobloxopen/devedge-sdk/persistence/gormtx"
 	entrepoModulePath = "github.com/infobloxopen/devedge-sdk/persistence/entrepo"
+	// migrateModulePath is the versioned-SQL migration ENGINE module (F043 / WS-022):
+	// the gorm scaffold's host-run migrator drives it on Postgres. It carries the
+	// golang-migrate fork via a replace the generated go.mod must ALSO declare (a
+	// required module's replace is ignored downstream) — see migrateForkReplace.
+	migrateModulePath = "github.com/infobloxopen/devedge-sdk/persistence/migrate"
 )
+
+// migrateForkReplace is the go.mod replace the generated project needs so
+// persistence/migrate resolves the Infoblox golang-migrate fork (persisted-down +
+// dirty-state recovery). It mirrors devedge + persistence/migrate's own go.mod; a
+// consumer must declare it because a required module's replace is not inherited.
+const migrateForkReplace = "replace github.com/golang-migrate/migrate/v4 => github.com/infobloxopen/migrate/v4 v4.16.3-0.20260414025640-b28cb3bc8342"
 
 // resolveOTelAdapterVersion / resolveGormtxVersion / resolveEntrepoVersion return
 // the version the generated go.mod requires for each nested adapter module. Every
@@ -75,6 +93,7 @@ const (
 func resolveOTelAdapterVersion() string { return resolveSDKVersion() }
 func resolveGormtxVersion() string      { return resolveSDKVersion() }
 func resolveEntrepoVersion() string     { return resolveSDKVersion() }
+func resolveMigrateVersion() string     { return resolveSDKVersion() }
 
 // Options are the user-supplied inputs to a scaffold.
 type Options struct {
@@ -159,6 +178,9 @@ type Model struct {
 	HTTPPort string
 
 	SDKVersion            string
+	// DeVersion pins the `de` CLI the generated Makefile shim + CI install (the
+	// hermetic build authority codegen/build/test/lint delegate to).
+	DeVersion             string
 	GlebarezSQLiteVersion string
 	GRPCGatewayVersion    string
 	AuthzBindingVersion   string
@@ -183,6 +205,13 @@ type Model struct {
 	GormtxVersion     string
 	EntrepoModulePath string
 	EntrepoVersion    string
+	// MigrateModulePath / MigrateVersion describe the versioned-SQL migration engine
+	// module (F043 / WS-022) the gorm scaffold requires (its host-run migrator drives
+	// it on Postgres). MigrateForkReplace is the golang-migrate fork replace the
+	// generated go.mod must declare (a required module's replace is not inherited).
+	MigrateModulePath  string
+	MigrateVersion     string
+	MigrateForkReplace string
 
 	// DeployTargets are the resolved deploy-target names to render (F038),
 	// validated against the deploy registry in Validate. Empty means no deploy
@@ -286,6 +315,7 @@ func (o Options) Validate() (*Model, error) {
 		HTTPPort:         "8080",
 
 		SDKVersion:            resolveSDKVersion(),
+		DeVersion:             deInstallVersion,
 		GlebarezSQLiteVersion: glebarezSQLiteVersion,
 		GRPCGatewayVersion:    grpcGatewayVersion,
 		AuthzBindingVersion:   authzBindingVersion,
@@ -303,6 +333,9 @@ func (o Options) Validate() (*Model, error) {
 		GormtxVersion:         resolveGormtxVersion(),
 		EntrepoModulePath:     entrepoModulePath,
 		EntrepoVersion:        resolveEntrepoVersion(),
+		MigrateModulePath:     migrateModulePath,
+		MigrateVersion:        resolveMigrateVersion(),
+		MigrateForkReplace:    migrateForkReplace,
 
 		DeployTargets: deployTargets,
 	}

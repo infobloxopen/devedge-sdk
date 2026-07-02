@@ -106,23 +106,27 @@ path so the generated go.mod + imports are correct, e.g.
 			fmt.Fprintf(cmd.OutOrStdout(), "\n✓ scaffolded %s service %q in %s\n", m.Backend, m.Service, target)
 
 			// Note the codegen plugins the project depends on, so the user knows
-			// what `make tools` installs and what `buf generate` runs. The SDK
-			// plugins are pinned to %s; the public plugins come from their canonical
-			// modules. (gorm uses protoc-gen-storage; ent uses protoc-gen-ent.)
+			// what `de generate` installs (hermetically) and runs. The SDK plugins
+			// are pinned to the go.mod devedge-sdk version (%s here); the public
+			// plugins are pinned by `de`. (gorm uses protoc-gen-storage; ent uses
+			// protoc-gen-ent.)
 			enginePlugin := "protoc-gen-storage"
 			if m.Backend == scaffold.BackendEnt {
 				enginePlugin = "protoc-gen-ent"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
-				"  codegen plugins (installed by `make tools`, run by `buf generate`):\n"+
+				"  codegen plugins (installed hermetically by `de generate`):\n"+
 					"    devedge-sdk @ %s: protoc-gen-devedge-authz, protoc-gen-svc, %s\n"+
-					"    public:          protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway\n",
+					"    public:          protoc-gen-go, protoc-gen-go-grpc, protoc-gen-grpc-gateway, protoc-gen-openapiv2\n",
 				m.SDKVersion, enginePlugin)
 
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"  build with `de` (the hermetic build authority):\n"+
+					"    go install github.com/infobloxopen/devedge/cmd/de@%s\n", m.DeVersion)
 			if noGenerate {
-				fmt.Fprintf(cmd.OutOrStdout(), "  next: cd %s && make tools && make generate && make test\n", target)
+				fmt.Fprintf(cmd.OutOrStdout(), "  next: cd %s && de generate && de test   (or: make test — the Makefile delegates to de)\n", target)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "  next: cd %s && make test   (or: make run)\n", target)
+				fmt.Fprintf(cmd.OutOrStdout(), "  next: cd %s && de test   (or: make test / make run)\n", target)
 			}
 			return nil
 		},

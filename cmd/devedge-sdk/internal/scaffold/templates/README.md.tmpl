@@ -7,21 +7,33 @@
   carries an `(infoblox.authz.v1.rule)`; the server asserts at boot that all methods are declared and
   refuses to start otherwise (fail-closed authz).
 - **Private implementation:** the models, repository, service registration, and gateway are **generated**
-  from the proto by `buf generate` (the devedge-sdk plugins) into `gen/`. The plugin version `make tools`
-  installs is derived from the `github.com/infobloxopen/devedge-sdk` require in `go.mod` (the single
-  source of truth) — bump the SDK with `go get github.com/infobloxopen/devedge-sdk@vX.Y.Z`, then
-  re-run `make tools`. Engine ({{.Backend}}) dependencies live only in this module's `go.mod`.
+  from the proto by `de generate` into `gen/`. `de` installs the codegen plugins hermetically — the
+  devedge-sdk plugins pinned to the `github.com/infobloxopen/devedge-sdk` require in `go.mod` (the single
+  source of truth), the public plugins pinned by `de` itself. Bump the SDK with
+  `go get github.com/infobloxopen/devedge-sdk@vX.Y.Z`, then re-run `de generate`. Engine
+  ({{.Backend}}) dependencies live only in this module's `go.mod`.
 
-## Fresh clone — bootstrap first
+## Fresh clone — generate first
+
+This project builds with [`de`](https://github.com/infobloxopen/devedge), the hermetic devedge build
+authority (it owns codegen, build, test, lint, and the container image). Install it once:
+
+```sh
+go install github.com/infobloxopen/devedge/cmd/de@{{.DeVersion}}
+```
 
 `gen/` is generated code and is **git-ignored** (see `.gitignore`), so a fresh clone has none. Building
 before generating fails with `no required module provides package .../gen/...`. Generate first:
 
 ```sh
-make tools      # install the codegen plugins (buf, the devedge-sdk plugins) + spectral (for api-lint) onto PATH
-make generate   # buf generate -> gen/ (the {{.Backend}} models, repository, service, gateway{{- if eq (printf "%s" .Backend) "ent" }}, then entc client{{- end }})
-make test       # build + run the smoke + security tests
+de generate   # buf generate -> gen/ (the {{.Backend}} models, repository, service, gateway{{- if eq (printf "%s" .Backend) "ent" }}, then the entc client{{- end }}), then go mod tidy
+de build      # go build ./...
+de test       # build + run the smoke + security tests
 ```
+
+`de generate` installs the pinned buf CLI + codegen plugins itself, so there is nothing to install onto
+PATH. `make generate` / `make build` / `make test` work too — the `Makefile` reads
+`.devedge/make/devedge.mk` (written by `de sync`), whose targets delegate to `de`.
 
 `make test` runs two generated test files in `cmd/{{.BinName}}/`:
 
@@ -31,14 +43,14 @@ make test       # build + run the smoke + security tests
   no secret-field leaks) into standard `go test` failures, so a security regression fails CI the
   moment it merges. See the [Security Check how-to](https://infobloxopen.github.io/devedge-sdk/docs/how-to/secure/security-check/).
 
-`make bootstrap` runs `tools` + `generate` in one step. `make build`, `make test`, and `make run`
-auto-generate on first use if `gen/` is missing, then stay fast (they do **not** regenerate on every
-invocation). Re-run `make generate` explicitly after editing the proto.
+Re-run `de generate` (or `make generate`) after editing the proto. `de build` / `de test` do **not**
+regenerate on their own, so run `de generate` whenever the proto changes.
 
-Prerequisites: [`apx`](https://github.com/infobloxopen/apx), [`buf`](https://buf.build), and Go (see
-`go.mod` for the version). `make api-lint` additionally needs
-[`spectral`](https://github.com/stoplightio/spectral) (a Node tool, `npm install -g @stoplight/spectral-cli`)
-to lint the generated OpenAPI surface; `make tools` installs it for you when npm is present.
+Prerequisites: [`de`](https://github.com/infobloxopen/devedge) (the build authority — it installs the
+pinned buf CLI + codegen plugins for you) and Go (see `go.mod` for the version). `make api-lint`
+additionally needs [`apx`](https://github.com/infobloxopen/apx) and
+[`spectral`](https://github.com/stoplightio/spectral) (a Node tool: `npm install -g @stoplight/spectral-cli`)
+to lint the public proto + generated OpenAPI surface.
 
 ## Run it
 
@@ -172,19 +184,20 @@ ghcr.io/<owner>/{{.RepoName}}
 ```
 
 Published tags: `latest` (default branch) or the semver version on a `v*` tag, plus `sha-<short>`.
-`gen/` is git-ignored, so the workflow runs `make bootstrap` (generate) before `ko build`. To add
+`gen/` is git-ignored, so the workflow runs `de generate` before building the image. To add
 a second binary later, add a row to the workflow's `matrix.include` with a `-<name>` suffix (e.g.
 `ghcr.io/<owner>/{{.RepoName}}-worker`); `ko build --bare` keeps each image non-nested.
 
 Build the image **locally** (loaded into your Docker daemon, e.g. to run via compose):
 
 ```sh
-make image
+make image        # delegates to `de image` (pinned ko)
 ```
 
-`make image` installs `ko` on demand and **auto-detects the Docker socket** from your active
-docker context (Docker Desktop, Rancher Desktop, colima, and Linux differ), so it works without
-setting `DOCKER_HOST`. Push instead of loading locally with `KO_DOCKER_REPO=ghcr.io/you/{{.RepoName}} make image`.
+`make image` runs `de image`, which builds with the **pinned** ko and **auto-detects the Docker
+socket** from your active docker context (Docker Desktop, Rancher Desktop, colima, and Linux differ),
+so it works without setting `DOCKER_HOST`. Push instead of loading locally with
+`de image --push --repo ghcr.io/you/{{.RepoName}}`.
 
 Deploy artifacts live under `deploy/` (rendered by `--deploy`):
 
@@ -202,14 +215,15 @@ behavior) and a thin *host* (owns process behavior). The same module runs standa
 composes into a multi-service "suite" binary later — by changing the host, not the module.
 
 ```
-proto/{{.ProtoPathSuffix}}/    PUBLIC API (apx-governed) — edit this, then `make generate`
+proto/{{.ProtoPathSuffix}}/    PUBLIC API (apx-governed) — edit this, then `de generate`
 module/module.go             the IMPORTABLE module unit (domain wiring: repo + health + descriptor)
 module/migrations/           the module's migration files (a host runs them)
 cmd/{{.BinName}}/main.go      the thin STANDALONE host (process wiring → servicekit.Run)
 cmd/{{.BinName}}/{{.ServiceLower}}_smoke_test.go      CRUD round-trip + fail-closed deny
 cmd/{{.BinName}}/{{.ServiceLower}}_security_test.go   seccheck security invariants (run in CI)
 gen/                         GENERATED, git-ignored — never edit by hand
-Makefile                     tools / generate / bootstrap / build / test / run
+Makefile                     thin shim: -include .devedge/make/devedge.mk + run / api-* targets
+.devedge/make/devedge.mk     managed shim (de sync) — generate/build/test/lint/image -> de
 deploy/                      k8s (Flux) + compose deploy artifacts referencing the image
 .github/workflows/           ci.yml (build/test) + image.yml (ko -> GHCR) + apx-release.yml
 ```
@@ -226,8 +240,8 @@ make api-release    # prepare a versioned release (dry-run-equivalent; see note 
 ```
 
 `make api-lint` lints the OpenAPI surface with [`spectral`](https://github.com/stoplightio/spectral).
-apx auto-downloads `buf` and `oasdiff` but not `spectral` (a Node tool), so `make tools` installs it via
-npm. If it is missing, run `npm install -g @stoplight/spectral-cli`.
+apx auto-downloads `buf` and `oasdiff` but not `spectral` (a Node tool) — if it is missing, run
+`npm install -g @stoplight/spectral-cli`.
 
 `make api-breaking` catches an accidental breaking change before it lands. It requires an initialized
 git repo with at least one commit — run `git init && git add . && git commit -m "initial"` first if

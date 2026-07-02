@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +46,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/observability/otel"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/gormtx"
+	sqlmigrate "github.com/infobloxopen/devedge-sdk/persistence/migrate"
 	"github.com/infobloxopen/devedge-sdk/servicekit"
 
 	svcmodule "{{.Module}}/module"
@@ -86,8 +88,29 @@ func newDB(dsn string) (*gorm.DB, error) {
 //
 // A module owns its migration FILES (module/migrations); never runs them from
 // init(); never assumes it owns the whole DB. The host runs them here.
-func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
-	return func(ctx context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+//
+// Two engines, one seam (F043 / WS-022): on Postgres the schema-of-record is
+// VERSIONED SQL — the SDK framework baseline (0001, outbox/idempotency/cell tables)
+// composed AHEAD of this module's own migrations (module/migrations, 0002+), applied
+// through infobloxopen/migrate on a safe connection (lock_timeout/statement_timeout,
+// per-module search_path, single advisory lock, dirty-state recovery). SQLite — the
+// dev/test default — keeps the AutoMigrate fast-path (ephemeral, dialect-limited, not
+// a production target); it also creates the domain tables so `go run` works out of the
+// box. Swap the dialector in newDB + set a postgres DSN to run the versioned path; add
+// your domain tables as module/migrations/0002_*.up.sql (see module/migrations/README).
+func moduleMigrate(db *gorm.DB, dsn string) servicekit.MigrationRunner {
+	return func(ctx context.Context, ns servicekit.DatabaseNamespace, d servicekit.DatabaseDescriptor) error {
+		if isPostgresDSN(dsn) {
+			_, err := sqlmigrate.Apply(ctx, sqlmigrate.Config{
+				DSN:               dsn,
+				Namespace:         ns,
+				FrameworkBaseline: sqlmigrate.FrameworkBaseline(),
+				ModuleMigrations:  d.Migrations,
+				LockTimeout:       d.MigrationLockTimeout,
+				StatementTimeout:  d.MigrationStatementTimeout,
+			})
+			return err
+		}
 		return gormtx.MigrateModule(ctx, db, gormtx.MigrateOptions{
 			Namespace: ns,
 			DomainModels: []any{
@@ -98,6 +121,12 @@ func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
 			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
 		})
 	}
+}
+
+// isPostgresDSN reports whether dsn selects the versioned-SQL engine (Postgres) rather
+// than the SQLite dev fast-path. Empty (the in-memory SQLite default) is not Postgres.
+func isPostgresDSN(dsn string) bool {
+	return strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
 }
 
 // newAggregate wires the SDK's backend-neutral persistence.AggregateRepository
@@ -201,7 +230,7 @@ func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAdd
 		// Standalone host: no shared DB declared, so the module's namespace is
 		// zero-qualification (bare tables, unchanged). The migration runs host-owned
 		// (Migrate); composing into a suite host namespaces the SAME runner per module.
-		Migrate:       moduleMigrate(db),
+		Migrate:       moduleMigrate(db, dsn),
 		Authorizer:    authorizer,
 		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 		Logger:        slog.Default(),
@@ -238,8 +267,27 @@ func newRepository(dsn string) (persistence.Repository[*{{.GoPkg}}.{{.Resource}}
 //
 // A module owns its migration FILES (module/migrations); never runs them from
 // init(); never assumes it owns the whole DB. The host runs them here.
-func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
-	return func(ctx context.Context, ns servicekit.DatabaseNamespace, _ servicekit.DatabaseDescriptor) error {
+// Two engines, one seam (F043 / WS-022): on Postgres the schema-of-record is VERSIONED
+// SQL — the SDK framework baseline (0001) composed AHEAD of this module's own migrations
+// (module/migrations, 0002+), applied through infobloxopen/migrate on a safe connection
+// (lock_timeout/statement_timeout, per-module search_path, single advisory lock,
+// dirty-state recovery). SQLite — the dev/test default — keeps the AutoMigrate fast-path
+// (it also creates the domain table so `go run` works out of the box). Swap the dialector
+// in newRepository + set a postgres DSN to run the versioned path; add your domain tables
+// as module/migrations/0002_*.up.sql (see module/migrations/README).
+func moduleMigrate(db *gorm.DB, dsn string) servicekit.MigrationRunner {
+	return func(ctx context.Context, ns servicekit.DatabaseNamespace, d servicekit.DatabaseDescriptor) error {
+		if isPostgresDSN(dsn) {
+			_, err := sqlmigrate.Apply(ctx, sqlmigrate.Config{
+				DSN:               dsn,
+				Namespace:         ns,
+				FrameworkBaseline: sqlmigrate.FrameworkBaseline(),
+				ModuleMigrations:  d.Migrations,
+				LockTimeout:       d.MigrationLockTimeout,
+				StatementTimeout:  d.MigrationStatementTimeout,
+			})
+			return err
+		}
 		return gormtx.MigrateModule(ctx, db, gormtx.MigrateOptions{
 			Namespace:    ns,
 			DomainModels: []any{&{{.GoPkg}}.{{.Resource}}Model{}},
@@ -248,6 +296,12 @@ func moduleMigrate(db *gorm.DB) servicekit.MigrationRunner {
 			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
 		})
 	}
+}
+
+// isPostgresDSN reports whether dsn selects the versioned-SQL engine (Postgres) rather
+// than the SQLite dev fast-path. Empty (the in-memory SQLite default) is not Postgres.
+func isPostgresDSN(dsn string) bool {
+	return strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
 }
 
 // runHost builds the module over a repo (from dsn) and serves it via
@@ -274,7 +328,7 @@ func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAdd
 		// When this service is composed into a "suite" host (de compose), THAT host
 		// declares a shared engine and each module gets its own schema/prefix — the
 		// SAME moduleMigrate runner namespaces accordingly, no module change.
-		Migrate: moduleMigrate(gormDB),
+		Migrate: moduleMigrate(gormDB, dsn),
 		// Derive the caller's authz.Principal from request metadata (account-id ->
 		// tenant, groups -> group:<name>). Without it the principal is empty and
 		// every call is denied. Swap for a verified-token PrincipalFunc in prod.

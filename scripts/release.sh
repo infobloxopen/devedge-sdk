@@ -65,9 +65,13 @@ cd "$REPO_ROOT"
 
 SDK_PATH="github.com/infobloxopen/devedge-sdk"
 
-# The six nested modules (dir == module-path suffix). Each is tagged at
+# The nested modules (dir == module-path suffix). Each is tagged at
 # <suffix>/vX.Y.Z (Go's nested-module tag convention); the root is tagged bare
 # (vX.Y.Z). Keep this list in sync with go.work `use` and the Makefile MODULES.
+# NOTE (F043): persistence/migrate carries a `replace github.com/golang-migrate/migrate/v4
+# => github.com/infobloxopen/migrate/v4 <ib-pin>` — a required module's replace is IGNORED
+# downstream, so a CONSUMER of persistence/migrate must add the SAME replace to its own
+# go.mod (the scaffold go.mod template does; documented in persistence/SHAPES.md).
 NESTED_MODULES=(
   "cmd"
   "config/koanf"
@@ -76,6 +80,7 @@ NESTED_MODULES=(
   "observability/otel"
   "persistence/gormtx"
   "persistence/entrepo"
+  "persistence/migrate"
 )
 
 # Testdata fixtures that CONSUME the SDK at a real version (`require root vX.Y.Z`) AND
@@ -226,7 +231,7 @@ echo ""
 # Refuse if the tree is dirty in files the release does NOT touch. The files the
 # release legitimately mutates are model.go + the six adapter go.mod/go.sum + the
 # re-tidied testdata fixture go.mod/go.sum (so a dry-run/--push re-run stays clean).
-ALLOWED_DIRTY_RE='^(cmd/go\.(mod|sum)|config/koanf/go\.(mod|sum)|events/kafkabus/go\.(mod|sum)|federationgql/go\.(mod|sum)|observability/otel/go\.(mod|sum)|persistence/gormtx/go\.(mod|sum)|persistence/entrepo/go\.(mod|sum)|testdata/(apikey|fleet|iam|federation)/go\.(mod|sum)|examples/graphql-federation/go\.(mod|sum)|cmd/devedge-sdk/internal/scaffold/model\.go)$'
+ALLOWED_DIRTY_RE='^(cmd/go\.(mod|sum)|config/koanf/go\.(mod|sum)|events/kafkabus/go\.(mod|sum)|federationgql/go\.(mod|sum)|observability/otel/go\.(mod|sum)|persistence/gormtx/go\.(mod|sum)|persistence/entrepo/go\.(mod|sum)|persistence/migrate/go\.(mod|sum)|testdata/(apikey|fleet|iam|federation)/go\.(mod|sum)|examples/graphql-federation/go\.(mod|sum)|cmd/devedge-sdk/internal/scaffold/model\.go)$'
 unexpected="$(git status --porcelain | awk '{print $2}' | grep -Ev "$ALLOWED_DIRTY_RE" || true)"
 if [ -n "$unexpected" ]; then
   red "working tree has unexpected changes (commit/stash them first):"

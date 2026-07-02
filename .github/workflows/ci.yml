@@ -25,6 +25,7 @@ jobs:
             observability/otel/go.sum
             persistence/entrepo/go.sum
             persistence/gormtx/go.sum
+            persistence/migrate/go.sum
             testdata/toy/go.sum
             testdata/apikey/go.sum
             testdata/fleet/go.sum
@@ -57,6 +58,23 @@ jobs:
       # adapter pulls them in. Network-touching (temp consumer + go mod tidy).
       - name: Graph-isolation check (AC-1/AC-2)
         run: make check-graph-isolation
+
+      # The SDK framework migration baseline (persistence/migrate/baseline/
+      # 0001_framework_init) is generated from the CANONICAL gormtx framework models by
+      # Atlas at build time (never in a runtime graph). This is the native drift gate
+      # (F043 T2.2): regenerate from the models and fail if the committed baseline is
+      # stale. Needs the ariga.io/atlas CLI + Docker (Atlas spins an ephemeral dev PG).
+      - name: Install Atlas (schema-migration CLI)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL -o "$HOME/.local/bin/atlas" https://release.ariga.io/atlas/atlas-linux-amd64-latest
+          chmod +x "$HOME/.local/bin/atlas"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/atlas" version
+
+      - name: Framework migration-baseline drift gate (F043 T2.2)
+        run: make check-migration-baseline
 
       # testdata/* are standalone consumer modules with their own go.mod + a `replace`
       # to the SDK; they are deliberately NOT workspace members, so GOWORK=off (or the
@@ -108,6 +126,14 @@ jobs:
       - name: Integration tests (iam fixture — outbox/events exactly-once on Postgres + MySQL)
         run: cd testdata/iam && GOWORK=off go test -race ./...
 
+      # The persistence/migrate engine (F043 / WS-022 P1) carries the versioned-SQL
+      # migration TestPG_ suite on REAL Postgres (testcontainers): applies the framework
+      # baseline + module migrations, safe connection, per-module schema + advisory lock,
+      # CONCURRENTLY, dirty-state recovery + persisted down-store. It is a workspace
+      # module (go.work), so no GOWORK=off. -race covers the concurrent-replica test.
+      - name: Integration tests (persistence/migrate — versioned SQL engine on Postgres)
+        run: cd persistence/migrate && go test -race ./...
+
       # Guard against the PG tests silently SKIPPING in CI (e.g. if Docker stopped
       # being available on the runner). They must RUN, not skip — that is the whole
       # point of Phase 2. Fail the job if any TestPG_ test reports SKIP.
@@ -127,6 +153,17 @@ jobs:
               exit 1
             fi
           done
+          echo "== persistence/migrate: TestPG_ must run, not skip =="
+          out="$(cd persistence/migrate && go test -run '^TestPG_' -v ./... 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -q -- '--- SKIP: TestPG_'; then
+            echo "::error::Postgres migration-engine tests SKIPPED — Docker/testcontainers unavailable. F043 PG validation did not run."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q -- '--- PASS: TestPG_'; then
+            echo "::error::No TestPG_ test PASSED in persistence/migrate — expected the migration-engine suite to run."
+            exit 1
+          fi
 
       # Same guard for the F033 MySQL validation (iam only). The drop-partition +
       # exactly-once proof on real MySQL must RUN here, not skip.
@@ -190,6 +227,7 @@ jobs:
             observability/otel/go.sum
             persistence/entrepo/go.sum
             persistence/gormtx/go.sum
+            persistence/migrate/go.sum
             testdata/toy/go.sum
 
       - name: Security gate
@@ -212,6 +250,7 @@ jobs:
             observability/otel/go.sum
             persistence/entrepo/go.sum
             persistence/gormtx/go.sum
+            persistence/migrate/go.sum
 
       # The TestScaffold_* gates (F028/F029 end-to-end + the make-driven hardening)
       # shell out to a real toolchain — apx (governs the public API surface), buf

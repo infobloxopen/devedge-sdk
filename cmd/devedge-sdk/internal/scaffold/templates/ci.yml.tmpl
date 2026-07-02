@@ -1,9 +1,12 @@
 name: CI
 
 # Build, generate, and test {{.Service}} on every push/PR. The implementation in
-# gen/ is git-ignored, so CI MUST generate before it builds — that's what
-# `make tools && make generate` does (mirrors the fresh-clone bootstrap in
-# README.md). go.mod pins the SDK version that supplies the codegen plugins.
+# gen/ is git-ignored, so CI MUST generate before it builds. `de` is the hermetic
+# build authority (WS-023): `de generate` installs the PINNED buf CLI + codegen
+# plugins — the devedge-sdk plugins pinned to the devedge-sdk version in go.mod
+# (the single source of truth) — and regenerates the consumer-local code; `de
+# test` then builds + runs the tests. No `@latest` tool installs, no separate buf
+# step: the tool versions live in the pinned `de`.
 
 on:
   push:
@@ -25,17 +28,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install buf
-        uses: bufbuild/buf-setup-action@v1
-
-      - name: Install apx
-        uses: infobloxopen/apx@main
-
-      - name: Install codegen plugins
-        run: make tools
+      - name: Install de (the devedge build authority)
+        run: go install github.com/infobloxopen/devedge/cmd/de@{{.DeVersion}}
 
       - name: Generate consumer-local code
-        run: make generate
+        run: de generate
 
-      - name: Test
-        run: go test ./...
+      - name: Build & test
+        run: de test

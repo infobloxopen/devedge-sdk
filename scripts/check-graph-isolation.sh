@@ -47,6 +47,11 @@ KOANF_MOD="${SDK_PATH}/config/koanf"
 KAFKABUS_MOD="${SDK_PATH}/events/kafkabus"
 GORMTX_MOD="${SDK_PATH}/persistence/gormtx"
 ENTREPO_MOD="${SDK_PATH}/persistence/entrepo"
+MIGRATE_MOD="${SDK_PATH}/persistence/migrate"
+# The infobloxopen/migrate fork pin (mirrors devedge). A consumer that requires
+# persistence/migrate must carry this replace too, since a required module's replace
+# directives are ignored — the applier is compiled against the fork's WithDirtyStateConfig.
+MIGRATE_FORK_REPLACE="replace github.com/golang-migrate/migrate/v4 => github.com/infobloxopen/migrate/v4 v4.16.3-0.20260414025640-b28cb3bc8342"
 
 # Guard fragments that must NOT appear in a server-only consumer's go.mod require
 # list or compiled build closure. Phase 0 covers OTel; P1 adds koanf + franz-go;
@@ -58,17 +63,23 @@ GOMOD_GUARDS=(
   "github.com/twmb/franz-go"
   "gorm.io/gorm"
   "entgo.io/ent"
+  "github.com/golang-migrate/migrate"
+  "github.com/jackc/pgx/v5"
 )
 # Fragments that must ALSO be absent from go.sum (no retained core dep
 # back-references them). otel/sdk is intentionally NOT here — see nuance note.
 # koanf + franz-go + gorm + ent have no back-reference in core, so they fully
-# leave go.sum (the strong claim).
+# leave go.sum (the strong claim). F043: the golang-migrate fork + jackc/pgx live
+# only in persistence/migrate and have no core back-reference, so both fully leave
+# a server-only consumer's go.sum too.
 GOSUM_GUARDS=(
   "go.opentelemetry.io/otel/exporters/"
   "github.com/knadh/koanf"
   "github.com/twmb/franz-go"
   "gorm.io/gorm"
   "entgo.io/ent"
+  "github.com/golang-migrate/migrate"
+  "github.com/jackc/pgx/v5"
 )
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -214,6 +225,43 @@ fi
 
 echo ""
 # ---------------------------------------------------------------------------
+echo "== AC-1d (F043): a server-ONLY consumer is fully free of golang-migrate + pgx =="
+# The versioned-SQL migration engine (the golang-migrate fork) + its pgx/v5 driver live
+# in persistence/migrate (its OWN module). The root library back-references neither, so
+# both must leave a server-only consumer's go.mod AND go.sum entirely (the strong claim;
+# GOMOD/GOSUM_GUARDS above already cover them for c1) — plus the build-closure proof.
+assert_absent "server-only go.mod (migrate/pgx)" "$c1/go.mod" \
+  "github.com/golang-migrate/migrate" "github.com/jackc/pgx/v5" || fail=1
+assert_absent "server-only go.sum (migrate/pgx)" "$c1/go.sum" \
+  "github.com/golang-migrate/migrate" "github.com/jackc/pgx/v5" || fail=1
+if printf '%s\n' "$closure_c1" | grep -qE "golang-migrate/migrate|jackc/pgx/v5"; then
+  red "  LEAK: server-only build closure compiles golang-migrate or pgx:"
+  printf '%s\n' "$closure_c1" | grep -E "golang-migrate/migrate|jackc/pgx/v5" | sed 's/^/    /'
+  fail=1
+else
+  green "  OK: server-only build closure compiles ZERO golang-migrate + pgx packages"
+fi
+
+echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-2f (F043): adding persistence/migrate adapter pulls the golang-migrate fork in (opt-in) =="
+c7="$work/migrate-consumer"
+scaffold_consumer "$c7" \
+  "	_ \"${MIGRATE_MOD}\"" \
+  "require ${MIGRATE_MOD} v0.0.0" \
+  "replace ${MIGRATE_MOD} => ${REPO_ROOT}/persistence/migrate
+${MIGRATE_FORK_REPLACE}"
+closure7="$(cd "$c7" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure7" | grep -q "golang-migrate/migrate"; then
+  green "  OK: migrate-importing consumer COMPILES golang-migrate (dep arrived on opt-in)"
+else
+  red "  MISSING: migrate-importing consumer does not compile golang-migrate — adapter wiring broken"
+  fail=1
+fi
+assert_present "migrate-consumer go.sum" "$c7/go.sum" "github.com/golang-migrate/migrate" "github.com/jackc/pgx/v5" || fail=1
+
+echo ""
+# ---------------------------------------------------------------------------
 echo "== AC-2b (P1): adding config/koanf adapter pulls koanf in (opt-in) =="
 c3="$work/koanf-consumer"
 scaffold_consumer "$c3" \
@@ -285,4 +333,4 @@ if [ "$fail" -ne 0 ]; then
   red "graph-isolation check FAILED"
   exit 1
 fi
-green "graph-isolation check PASSED (AC-1 + AC-2 + AC-1b/AC-2b/AC-2c P1 + AC-1c/AC-2d/AC-2e P2)"
+green "graph-isolation check PASSED (AC-1 + AC-2 + AC-1b/AC-2b/AC-2c P1 + AC-1c/AC-2d/AC-2e P2 + AC-1d/AC-2f F043)"
