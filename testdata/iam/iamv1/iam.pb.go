@@ -104,12 +104,14 @@ func (x *Account) GetEtag() string {
 
 // User is an account-scoped principal. A small aggregate of its own.
 type User struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AccountId     string                 `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"` // tenant partition (TenantMixin)
-	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Etag          string                 `protobuf:"bytes,5,opt,name=etag,proto3" json:"etag,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// account_id is the tenant partition and IMMUTABLE (a user cannot move tenant).
+	AccountId string `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	// email is client-REQUIRED (explicit) and unique.
+	Email         string `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	DisplayName   string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Etag          string `protobuf:"bytes,5,opt,name=etag,proto3" json:"etag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1369,12 +1371,12 @@ const file_iam_proto_rawDesc = "" +
 	"\aAccount\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x06\x9a\xb5\x18\x02\x18\x01R\vdisplayName\x12\x17\n" +
-	"\x04etag\x18\x03 \x01(\tB\x03\xe0A\x03R\x04etag\"\x97\x01\n" +
+	"\x04etag\x18\x03 \x01(\tB\x03\xe0A\x03R\x04etag\"\x9f\x01\n" +
 	"\x04User\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\"\n" +
 	"\n" +
-	"account_id\x18\x02 \x01(\tR\taccountId\x12\x1c\n" +
-	"\x05email\x18\x03 \x01(\tB\x06\x9a\xb5\x18\x02\x18\x01R\x05email\x12!\n" +
+	"account_id\x18\x02 \x01(\tB\x03\xe0A\x05R\taccountId\x12\x1f\n" +
+	"\x05email\x18\x03 \x01(\tB\t\xe0A\x02\x9a\xb5\x18\x02\x18\x01R\x05email\x12!\n" +
 	"\fdisplay_name\x18\x04 \x01(\tR\vdisplayName\x12\x17\n" +
 	"\x04etag\x18\x05 \x01(\tB\x03\xe0A\x03R\x04etag:\x06ҵ\x18\x02\b\x01\"\xcb\x01\n" +
 	"\x05Group\x12\x0e\n" +

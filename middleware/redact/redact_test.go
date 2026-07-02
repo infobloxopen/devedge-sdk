@@ -1,12 +1,14 @@
 package redact_test
 
 import (
+	"context"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/infobloxopen/devedge-sdk/middleware/redact"
 	"github.com/infobloxopen/devedge-sdk/internal/testpb/secretpb"
+	"github.com/infobloxopen/devedge-sdk/middleware/redact"
 )
 
 // TestMessage_RedactsSecretStringField verifies that redact.Message returns a
@@ -152,5 +154,59 @@ func TestMessage_NoSecretFields(t *testing.T) {
 
 	if !proto.Equal(original, plain) {
 		t.Errorf("message with no secret fields was modified: got %v", plain)
+	}
+}
+
+// TestMessage_RedactsExplicitInputOnlyField verifies that an explicitly
+// INPUT_ONLY field (not marked secret) is redacted too — INPUT_ONLY ⊇ secret.
+func TestMessage_RedactsExplicitInputOnlyField(t *testing.T) {
+	original := &secretpb.SecretMsg{
+		Id:          "id-1",
+		KeyValue:    "sk_live_abc",
+		PublicValue: "open",
+		WriteOnly:   "write-only-value",
+	}
+	got, ok := redact.Message(original).(*secretpb.SecretMsg)
+	if !ok {
+		t.Fatalf("redact.Message returned %T, want *secretpb.SecretMsg", redact.Message(original))
+	}
+	if got.WriteOnly != "[REDACTED]" {
+		t.Errorf("WriteOnly (INPUT_ONLY) not redacted: got %q", got.WriteOnly)
+	}
+	if got.KeyValue != "[REDACTED]" {
+		t.Errorf("KeyValue (secret) not redacted: got %q", got.KeyValue)
+	}
+	if got.PublicValue != "open" {
+		t.Errorf("PublicValue must be preserved: got %q", got.PublicValue)
+	}
+	// The original must not be mutated.
+	if original.WriteOnly != "write-only-value" {
+		t.Errorf("original mutated: WriteOnly = %q", original.WriteOnly)
+	}
+}
+
+// TestResponseUnary_StripsWriteOnlyFromResponse verifies the opt-in response
+// interceptor strips write-only (INPUT_ONLY / secret) fields from the response
+// the handler returns.
+func TestResponseUnary_StripsWriteOnlyFromResponse(t *testing.T) {
+	interceptor := redact.ResponseUnary()
+	handler := func(ctx context.Context, req any) (any, error) {
+		return &secretpb.SecretMsg{Id: "id-1", KeyValue: "sk_live_xyz", PublicValue: "open", WriteOnly: "wo"}, nil
+	}
+	resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/secretpb.Svc/Get"}, handler)
+	if err != nil {
+		t.Fatalf("interceptor: %v", err)
+	}
+	got, ok := resp.(*secretpb.SecretMsg)
+	if !ok {
+		t.Fatalf("response is %T, want *secretpb.SecretMsg", resp)
+	}
+	// A write-only field is never returned → cleared to empty (not "[REDACTED]",
+	// which is the logging-mask form).
+	if got.KeyValue != "" || got.WriteOnly != "" {
+		t.Errorf("write-only fields not cleared from response: KeyValue=%q WriteOnly=%q", got.KeyValue, got.WriteOnly)
+	}
+	if got.PublicValue != "open" || got.Id != "id-1" {
+		t.Errorf("non-write-only fields altered: Id=%q PublicValue=%q", got.Id, got.PublicValue)
 	}
 }

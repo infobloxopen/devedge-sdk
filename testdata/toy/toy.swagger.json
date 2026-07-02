@@ -347,6 +347,7 @@
         "parameters": [
           {
             "name": "widget.id",
+            "description": "id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the\nAPI contract (FR-A6 \"annotate once\") — no explicit field_behavior needed.",
             "in": "path",
             "required": true,
             "type": "string"
@@ -364,10 +365,12 @@
                   "readOnly": true
                 },
                 "displayName": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "display_name is client-REQUIRED (explicit field_behavior)."
                 },
                 "color": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "color is IMMUTABLE (explicit field_behavior): set at create, never updated."
                 },
                 "weight": {
                   "type": "integer",
@@ -375,6 +378,22 @@
                 },
                 "etag": {
                   "type": "string"
+                },
+                "sku": {
+                  "type": "string",
+                  "description": "sku is storage NOT NULL but NOT client-required — proving not_null is never\nmapped to REQUIRED (FM-4/AC-1)."
+                },
+                "category": {
+                  "type": "string",
+                  "description": "category is a string-backed enum (allowed_values → OpenAPI enum, AC-4)."
+                },
+                "secretToken": {
+                  "type": "string",
+                  "description": "secret_token is write-only material (secret → INPUT_ONLY): accepted on write,\nstripped from responses by middleware/redact (AC-3), writeOnly in OpenAPI."
+                },
+                "parentId": {
+                  "type": "string",
+                  "description": "parent_id is a cross-service reference to another Widget (AIP-124). Widget is\nbatch-fetchable (WidgetService serves BatchGetWidgets), so the reference\nresolves; surfaces as x-aip-references in the enriched OpenAPI (AC-5)."
                 },
                 "deleteTime": {
                   "type": "string",
@@ -389,7 +408,10 @@
                   "readOnly": true
                 }
               },
-              "description": "Widget is the resource managed by WidgetService."
+              "description": "Widget is the resource managed by WidgetService.",
+              "required": [
+                "displayName"
+              ]
             }
           },
           {
@@ -666,13 +688,16 @@
           "readOnly": true
         },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the\nAPI contract (FR-A6 \"annotate once\") — no explicit field_behavior needed."
         },
         "displayName": {
-          "type": "string"
+          "type": "string",
+          "description": "display_name is client-REQUIRED (explicit field_behavior)."
         },
         "color": {
-          "type": "string"
+          "type": "string",
+          "description": "color is IMMUTABLE (explicit field_behavior): set at create, never updated."
         },
         "weight": {
           "type": "integer",
@@ -680,6 +705,22 @@
         },
         "etag": {
           "type": "string"
+        },
+        "sku": {
+          "type": "string",
+          "description": "sku is storage NOT NULL but NOT client-required — proving not_null is never\nmapped to REQUIRED (FM-4/AC-1)."
+        },
+        "category": {
+          "type": "string",
+          "description": "category is a string-backed enum (allowed_values → OpenAPI enum, AC-4)."
+        },
+        "secretToken": {
+          "type": "string",
+          "description": "secret_token is write-only material (secret → INPUT_ONLY): accepted on write,\nstripped from responses by middleware/redact (AC-3), writeOnly in OpenAPI."
+        },
+        "parentId": {
+          "type": "string",
+          "description": "parent_id is a cross-service reference to another Widget (AIP-124). Widget is\nbatch-fetchable (WidgetService serves BatchGetWidgets), so the reference\nresolves; surfaces as x-aip-references in the enriched OpenAPI (AC-5)."
         },
         "deleteTime": {
           "type": "string",
@@ -694,7 +735,10 @@
           "readOnly": true
         }
       },
-      "description": "Widget is the resource managed by WidgetService."
+      "description": "Widget is the resource managed by WidgetService.",
+      "required": [
+        "displayName"
+      ]
     }
   }
 }

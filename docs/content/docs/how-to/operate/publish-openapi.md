@@ -62,6 +62,29 @@ openapi/
 
 Inspect the file to confirm it lists your operations and schemas before publishing.
 
+### The spec is enriched from proto — losslessly
+
+The converter does more than a v2→v3 shape change: it reads a `FileDescriptorSet` (built by
+`buf build` in the same `make generate` step) and runs a **proto-authoritative enrichment pass** so
+the published spec carries the full AIP contract a downstream client, CLI, or Terraform generator
+needs — the single interchange they project from. Where the proto truth and the base conversion
+disagree, the proto value wins. Per property and operation you get:
+
+- native `readOnly` (`OUTPUT_ONLY`), `writeOnly` (`INPUT_ONLY`, incl. `secret`), `required`
+  (`REQUIRED`), and `enum` (`allowed_values`);
+- `x-aip-field-behavior` — the raw behavior list, so `IMMUTABLE` (which OpenAPI cannot express
+  natively) survives;
+- `x-aip-resource` — the AIP-122 resource type, pattern(s), and whether the resource is addressed by
+  `id` or `name`;
+- `x-aip-method` — the AIP standard-method classification (`Create`/`Get`/`List`/…);
+- `x-aip-pagination` — the `page_size`/`page_token`/`next_page_token` triad on List operations;
+- `x-aip-references` — cross-service reference targets (see [cross-service references](../../model-and-persist/)).
+
+The extensions are consumer-neutral (`x-aip-*`, never `x-terraform-*` or similar): the contract
+names AIP facts, and each consumer's generator maps them in its own glue (e.g. Terraform maps
+`IMMUTABLE` → `ForceNew`). The pass fails loud if the descriptor set is missing or drifts from the
+swagger, so the spec is never silently missing contract.
+
 ## Step 3 — publish via `de api publish`
 
 `de api publish` is a thin wrapper that:

@@ -287,8 +287,13 @@ func TestRenderStorageFile_lookupByHash(t *testing.T) {
 	// Must query on key_value_hash column.
 	mustContain(t, out, "key_value_hash = ?")
 
-	// Middleware import must be present (secret fields trigger it).
-	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
+	// A secret-only, NON-tenant resource must NOT import middleware: middleware is
+	// used only for tenant scoping (middleware.TenantIDFromContext), and this
+	// resource has no account_id, so the LookupByHash path emits no middleware
+	// call. Importing it unused would not compile (the bug a non-tenant secret
+	// fixture — toy Widget — exposed).
+	mustNotContain(t, out, `"github.com/infobloxopen/devedge-sdk/middleware"`)
+	mustNotContain(t, out, "TenantIDFromContext")
 }
 
 func TestRenderStorageFile_lookupByHashWithTenant(t *testing.T) {

@@ -35,8 +35,11 @@ const (
 type APIKey struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is the AIP-122 resource name, e.g. "apikeys/abc123".
-	Name      string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Id        string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id   string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	// account_id is client-REQUIRED (explicit field_behavior). It exercises the
+	// explicit REQUIRED contract alongside APIKey's secret (INPUT_ONLY) key_value
+	// and Token's USER_SETTABLE id (derived IMMUTABLE) — all three behaviors.
 	AccountId string `protobuf:"bytes,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	// key_value is the raw API key material. Annotated secret: the storage layer
 	// will hash and encrypt this field; it is cleared in all responses after creation.
@@ -594,12 +597,12 @@ var File_apikey_proto protoreflect.FileDescriptor
 
 const file_apikey_proto_rawDesc = "" +
 	"\n" +
-	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\x1a!infoblox/storage/v1/storage.proto\"\xe4\x03\n" +
+	"\fapikey.proto\x12\tapikey.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\x1a!infoblox/storage/v1/storage.proto\"\xe9\x03\n" +
 	"\x06APIKey\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1d\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12\"\n" +
 	"\n" +
-	"account_id\x18\x03 \x01(\tR\taccountId\x12#\n" +
+	"account_id\x18\x03 \x01(\tB\x03\xe0A\x02R\taccountId\x12#\n" +
 	"\tkey_value\x18\x04 \x01(\tB\x06\x9a\xb5\x18\x02\b\x01R\bkeyValue\x12\x1d\n" +
 	"\n" +
 	"key_prefix\x18\x05 \x01(\tR\tkeyPrefix\x12\x14\n" +

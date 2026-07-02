@@ -99,27 +99,78 @@ components:
                     format: date-time
                     readOnly: true
                     type: string
-                color:
+                    x-aip-field-behavior:
+                        - OUTPUT_ONLY
+                category:
+                    description: category is a string-backed enum (allowed_values → OpenAPI enum, AC-4).
+                    enum:
+                        - standard
+                        - premium
                     type: string
+                color:
+                    description: 'color is IMMUTABLE (explicit field_behavior): set at create, never updated.'
+                    type: string
+                    x-aip-field-behavior:
+                        - IMMUTABLE
                 deleteTime:
                     description: 'AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.'
                     format: date-time
                     readOnly: true
                     type: string
+                    x-aip-field-behavior:
+                        - OUTPUT_ONLY
                 displayName:
+                    description: display_name is client-REQUIRED (explicit field_behavior).
                     type: string
+                    x-aip-field-behavior:
+                        - REQUIRED
                 etag:
                     type: string
                 id:
+                    description: |-
+                        id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the
+                        API contract (FR-A6 "annotate once") — no explicit field_behavior needed.
                     type: string
+                    x-aip-field-behavior:
+                        - IMMUTABLE
                 name:
                     description: name is the AIP-122 resource name, e.g. "widgets/abc123".
                     readOnly: true
                     type: string
+                    x-aip-field-behavior:
+                        - OUTPUT_ONLY
+                parentId:
+                    description: |-
+                        parent_id is a cross-service reference to another Widget (AIP-124). Widget is
+                        batch-fetchable (WidgetService serves BatchGetWidgets), so the reference
+                        resolves; surfaces as x-aip-references in the enriched OpenAPI (AC-5).
+                    type: string
+                    x-aip-references:
+                        type: toy.example.com/Widget
+                secretToken:
+                    description: |-
+                        secret_token is write-only material (secret → INPUT_ONLY): accepted on write,
+                        stripped from responses by middleware/redact (AC-3), writeOnly in OpenAPI.
+                    type: string
+                    writeOnly: true
+                    x-aip-field-behavior:
+                        - INPUT_ONLY
+                sku:
+                    description: |-
+                        sku is storage NOT NULL but NOT client-required — proving not_null is never
+                        mapped to REQUIRED (FM-4/AC-1).
+                    type: string
                 weight:
                     format: int32
                     type: integer
+            required:
+                - displayName
             type: object
+            x-aip-resource:
+                key: id
+                pattern:
+                    - widgets/{widget}
+                type: toy.example.com/Widget
 info:
     description: |-
         Test fixture for protoc-gen-svc + protoc-gen-storage (W3-4 checkpoint).
@@ -155,6 +206,7 @@ paths:
             summary: 'AIP-151: poll the status of a previously submitted ProcessWidget operation.'
             tags:
                 - WidgetService
+            x-aip-method: Custom
     /v1/operations/{name}:cancel:
         post:
             operationId: WidgetService_CancelWidgetOperation
@@ -188,6 +240,7 @@ paths:
             summary: 'AIP-152: cancel a running ProcessWidget operation.'
             tags:
                 - WidgetService
+            x-aip-method: Custom
     /v1/widgets:
         get:
             operationId: WidgetService_ListWidgets
@@ -226,6 +279,11 @@ paths:
                     description: An unexpected error response.
             tags:
                 - WidgetService
+            x-aip-method: List
+            x-aip-pagination:
+                nextPageTokenField: nextPageToken
+                pageSizeParam: pageSize
+                pageTokenParam: pageToken
         post:
             operationId: WidgetService_CreateWidget
             parameters:
@@ -261,6 +319,7 @@ paths:
                     description: An unexpected error response.
             tags:
                 - WidgetService
+            x-aip-method: Create
     /v1/widgets/{id}:
         delete:
             operationId: WidgetService_DeleteWidget
@@ -285,6 +344,7 @@ paths:
                     description: An unexpected error response.
             tags:
                 - WidgetService
+            x-aip-method: Delete
         get:
             operationId: WidgetService_GetWidget
             parameters:
@@ -313,6 +373,7 @@ paths:
                     description: An unexpected error response.
             tags:
                 - WidgetService
+            x-aip-method: Get
     /v1/widgets/{id}:archive:
         post:
             operationId: WidgetService_ArchiveWidget
@@ -345,6 +406,7 @@ paths:
             summary: 'AIP-136: custom method — sets archived_time on the widget.'
             tags:
                 - WidgetService
+            x-aip-method: Custom
     /v1/widgets/{id}:process:
         post:
             operationId: WidgetService_ProcessWidget
@@ -377,11 +439,15 @@ paths:
             summary: 'AIP-151: start async processing; returns a pending OperationStatus immediately.'
             tags:
                 - WidgetService
+            x-aip-method: Custom
     /v1/widgets/{widget.id}:
         patch:
             operationId: WidgetService_UpdateWidget
             parameters:
-                - in: path
+                - description: |-
+                    id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the
+                    API contract (FR-A6 "annotate once") — no explicit field_behavior needed.
+                  in: path
                   name: widget.id
                   required: true
                   schema:
@@ -403,7 +469,11 @@ paths:
                                     format: date-time
                                     readOnly: true
                                     type: string
+                                category:
+                                    description: category is a string-backed enum (allowed_values → OpenAPI enum, AC-4).
+                                    type: string
                                 color:
+                                    description: 'color is IMMUTABLE (explicit field_behavior): set at create, never updated.'
                                     type: string
                                 deleteTime:
                                     description: 'AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.'
@@ -411,6 +481,7 @@ paths:
                                     readOnly: true
                                     type: string
                                 displayName:
+                                    description: display_name is client-REQUIRED (explicit field_behavior).
                                     type: string
                                 etag:
                                     type: string
@@ -418,9 +489,27 @@ paths:
                                     description: name is the AIP-122 resource name, e.g. "widgets/abc123".
                                     readOnly: true
                                     type: string
+                                parentId:
+                                    description: |-
+                                        parent_id is a cross-service reference to another Widget (AIP-124). Widget is
+                                        batch-fetchable (WidgetService serves BatchGetWidgets), so the reference
+                                        resolves; surfaces as x-aip-references in the enriched OpenAPI (AC-5).
+                                    type: string
+                                secretToken:
+                                    description: |-
+                                        secret_token is write-only material (secret → INPUT_ONLY): accepted on write,
+                                        stripped from responses by middleware/redact (AC-3), writeOnly in OpenAPI.
+                                    type: string
+                                sku:
+                                    description: |-
+                                        sku is storage NOT NULL but NOT client-required — proving not_null is never
+                                        mapped to REQUIRED (FM-4/AC-1).
+                                    type: string
                                 weight:
                                     format: int32
                                     type: integer
+                            required:
+                                - displayName
                             type: object
                 required: true
                 x-originalParamName: widget
@@ -439,6 +528,7 @@ paths:
                     description: An unexpected error response.
             tags:
                 - WidgetService
+            x-aip-method: Update
     /v1/widgets:batchDelete:
         post:
             operationId: WidgetService_BatchDeleteWidgets
@@ -466,6 +556,7 @@ paths:
             summary: 'AIP-137: soft-delete multiple widgets atomically.'
             tags:
                 - WidgetService
+            x-aip-method: Custom
     /v1/widgets:batchGet:
         get:
             operationId: WidgetService_BatchGetWidgets
@@ -492,6 +583,7 @@ paths:
             summary: 'AIP-137: retrieve multiple widgets in one call.'
             tags:
                 - WidgetService
+            x-aip-method: BatchGet
     /v1/widgets:batchUpdate:
         post:
             operationId: WidgetService_BatchUpdateWidgets
@@ -519,5 +611,6 @@ paths:
             summary: 'AIP-137: update multiple widgets atomically (each request carries its own update_mask).'
             tags:
                 - WidgetService
+            x-aip-method: Custom
 tags:
     - name: WidgetService

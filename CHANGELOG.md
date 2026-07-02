@@ -53,6 +53,32 @@ under [History](#history).
   generated `Descriptor` — methods, authz rules, resource names. When `Handler` is unset the module
   takes the default `Repo` CRUD path; neither set fails closed at registration.
 
+### API contract — field_behavior + lossless enriched OpenAPI
+
+- **The full AIP `field_behavior` contract is now a first-class signal.** Previously only
+  `OUTPUT_ONLY` was read (in three generators); `REQUIRED`, `IMMUTABLE`, and `INPUT_ONLY` are now
+  resolved too, by a single shared resolver (`internal/aip`) that all codegen plugins **and** the
+  OpenAPI enrichment pass call — so a service's compiled behavior and its published OpenAPI cannot
+  drift. `field_behavior` is **derived** from `infoblox.field.v1.opts` where the mapping is sound
+  (`secret` → `INPUT_ONLY`; `id.strategy` server-generated → `OUTPUT_ONLY`, user-settable →
+  `IMMUTABLE`; `allowed_values` → enum) so services annotate once. `not_null` is **never** mapped to
+  `REQUIRED` (storage nullability is not client-requiredness), and a contradictory field (e.g.
+  `OUTPUT_ONLY` + `INPUT_ONLY`) fails codegen loud, naming the message, field, and behaviors.
+- **`INPUT_ONLY` is honored at runtime.** `middleware/redact` strips write-only fields (the `secret`
+  case plus explicit `INPUT_ONLY`) — `redact.Message` masks them for logging, and the new opt-in
+  `redact.ResponseUnary()` interceptor clears them from responses so a write-only field is never
+  returned on the wire (wire it via `server.Config.Interceptors`; it is not a framework default,
+  since some services return a secret exactly once on create).
+- **The published OpenAPI v3 is now lossless.** `cmd/openapiv2to3` reads a `FileDescriptorSet`
+  (built by `buf build` in `make generate`) and runs a proto-**authoritative** enrichment pass:
+  native `readOnly`/`writeOnly`/`required`/`enum` where OpenAPI can express the behavior, plus
+  consumer-neutral `x-aip-field-behavior` (carries `IMMUTABLE`), `x-aip-resource` (AIP-122
+  type/pattern/id-vs-name key), `x-aip-method` (AIP standard-method classification), `x-aip-pagination`
+  (the `page_size`/`page_token`/`next_page_token` triad), and `x-aip-references` (WS-021 cross-service
+  reference targets). The pass fails loud on a missing FDS or FDS↔swagger drift, so a downstream Go
+  client, CLI, or Terraform generator can project the whole contract from one interchange. This is the
+  P0 keystone of WS-024. See the [publish-OpenAPI how-to](docs/content/docs/how-to/operate/publish-openapi.md).
+
 ### Scaffold
 
 - A new service is generated with a `<svc>_security_test.go` alongside its smoke test. It runs the

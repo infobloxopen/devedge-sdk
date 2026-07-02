@@ -14,6 +14,7 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/authz/v1/authz.proto";
+import "infoblox/field/v1/field.proto";
 
 // Widget is the resource managed by WidgetService.
 message Widget {
@@ -24,11 +25,27 @@ message Widget {
 
   // name is the AIP-122 resource name, e.g. "widgets/abc123".
   string name         = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
-  string id           = 2;
-  string display_name = 3;
-  string color        = 4;
+  // id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the
+  // API contract (FR-A6 "annotate once") — no explicit field_behavior needed.
+  string id           = 2 [(infoblox.field.v1.opts) = {id: {strategy: STRATEGY_USER_SETTABLE}}];
+  // display_name is client-REQUIRED (explicit field_behavior).
+  string display_name = 3 [(google.api.field_behavior) = REQUIRED];
+  // color is IMMUTABLE (explicit field_behavior): set at create, never updated.
+  string color        = 4 [(google.api.field_behavior) = IMMUTABLE];
   int32  weight       = 5;
   string etag         = 6;
+  // sku is storage NOT NULL but NOT client-required — proving not_null is never
+  // mapped to REQUIRED (FM-4/AC-1).
+  string sku          = 9 [(infoblox.field.v1.opts) = {not_null: true}];
+  // category is a string-backed enum (allowed_values → OpenAPI enum, AC-4).
+  string category     = 10 [(infoblox.field.v1.opts) = {allowed_values: ["standard", "premium"]}];
+  // secret_token is write-only material (secret → INPUT_ONLY): accepted on write,
+  // stripped from responses by middleware/redact (AC-3), writeOnly in OpenAPI.
+  string secret_token = 11 [(infoblox.field.v1.opts) = {secret: true}];
+  // parent_id is a cross-service reference to another Widget (AIP-124). Widget is
+  // batch-fetchable (WidgetService serves BatchGetWidgets), so the reference
+  // resolves; surfaces as x-aip-references in the enriched OpenAPI (AC-5).
+  string parent_id    = 12 [(google.api.resource_reference) = {type: "toy.example.com/Widget"}];
   // AIP-148: soft-delete timestamp; set by Delete, cleared by Undelete.
   google.protobuf.Timestamp delete_time   = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
   // AIP-136: set by ArchiveWidget; non-nil means the widget is archived.

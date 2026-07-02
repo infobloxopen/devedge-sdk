@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -49,6 +50,36 @@ func TestToyOpenAPIV3(t *testing.T) {
 	for _, p := range wantPaths {
 		if doc.Paths == nil || doc.Paths.Find(p) == nil {
 			t.Errorf("missing expected path %q in generated OpenAPI v3 doc", p)
+		}
+	}
+}
+
+// TestGoldenCarriesEnrichment asserts the CHECKED-IN golden carries the lossless
+// enrichment (native fields + every x-aip-* extension) — guarding against a
+// golden regenerated without the enrichment pass (T044-8 / AC-5..AC-7).
+func TestGoldenCarriesEnrichment(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	docPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "toy", "openapi", "toy.openapi.yaml")
+	raw, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Skipf("golden not present (%v) — run 'make generate' first", err)
+	}
+	content := string(raw)
+	for _, want := range []string{
+		"x-aip-resource:",              // FR-B4
+		"x-aip-method:",                // FR-B5
+		"x-aip-pagination:",            // FR-B6
+		"x-aip-references:",            // FR-B6
+		"x-aip-field-behavior:",        // FR-B3
+		"- IMMUTABLE",                  // AC-2 (native OpenAPI cannot express it)
+		"- INPUT_ONLY",                 // AC-3
+		"writeOnly: true",              // FR-B3 (secret → writeOnly)
+		"readOnly: true",               // FR-B3 (OUTPUT_ONLY → readOnly)
+		"- standard",                   // AC-4 (allowed_values → enum)
+		"type: toy.example.com/Widget", // AC-5 (resource + reference target)
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("golden %s missing enrichment marker %q", docPath, want)
 		}
 	}
 }
