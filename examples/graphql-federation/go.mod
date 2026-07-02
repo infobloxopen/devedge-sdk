@@ -14,7 +14,7 @@ module github.com/infobloxopen/devedge-sdk/examples/graphql-federation
 go 1.25.5
 
 require (
-	github.com/infobloxopen/devedge-sdk v0.45.0
+	github.com/infobloxopen/devedge-sdk v0.46.0
 	github.com/infobloxopen/devedge-sdk/federationgql v0.45.0
 	github.com/infobloxopen/devedge-sdk/testdata/federation v0.0.0
 	google.golang.org/grpc v1.81.1
@@ -26,6 +26,8 @@ require (
 	github.com/graphql-go/graphql v0.8.1
 	github.com/infobloxopen/devedge-sdk/persistence/entrepo v0.45.0 // indirect
 )
+
+require github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 
 require (
 	ariga.io/atlas v0.36.2-0.20250730182955-2c6300d0a3e1 // indirect
@@ -41,7 +43,6 @@ require (
 	github.com/go-openapi/inflect v0.19.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4 // indirect
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 // indirect

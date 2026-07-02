@@ -8,7 +8,7 @@ require (
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
-	github.com/infobloxopen/devedge-sdk v0.45.0
+	github.com/infobloxopen/devedge-sdk v0.46.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
