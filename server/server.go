@@ -33,6 +33,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/quota"
+	"github.com/infobloxopen/devedge-sdk/reference"
 	"github.com/infobloxopen/devedge-sdk/resilience"
 )
 
@@ -171,6 +172,13 @@ type Server struct {
 	// (recorded by the generated Register<Svc> of a member service). The boundary
 	// gate at Serve fails closed if a member resource registers a write method.
 	memberBindings []MemberBinding
+	// references is the accumulated set of cross-service resource references (F041,
+	// recorded by the generated Register<Svc>); batchTargets is the set of resource
+	// types that serve a generated AIP-137 BatchGet. The reference gate at Serve
+	// fails closed if a referenced target type has no registered BatchGet — never a
+	// silent runtime N+1.
+	references   []reference.Reference
+	batchTargets map[string]struct{}
 }
 
 // New validates cfg and constructs a Server. It builds the framework
@@ -410,6 +418,14 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err := AssertAggregateBoundaries(s.methods, s.memberBindings); err != nil {
 		return err
 	}
+	// F041 reference gate (fail-closed), beside the boundary gate: a declared
+	// cross-service reference whose target resource type serves no BatchGet is a
+	// build/registration error here — never a silent runtime per-row N+1 (D-4
+	// backstop; local codegen catches the same miss earlier, this catches cross-repo
+	// version skew it cannot see).
+	if err := AssertReferenceTargets(s.batchTargets, s.references); err != nil {
+		return err
+	}
 
 	// Derive a cancellable context so Serve OWNS the lifecycle of every background
 	// goroutine it starts (the readiness loop): it stops when ctx is cancelled OR
@@ -640,6 +656,30 @@ func (s *Server) RecordMemberBinding(b MemberBinding) {
 
 // MemberBindings returns the accumulated DDD aggregate member→root bindings.
 func (s *Server) MemberBindings() []MemberBinding { return s.memberBindings }
+
+// RecordReferences records cross-service resource references declared by a
+// service (F041). The generated Register<Svc> of a service with a
+// google.api.resource_reference field calls it; the reference gate
+// [AssertReferenceTargets] runs over the accumulated set at Serve (fail-closed: a
+// reference whose target type serves no BatchGet does not serve). Call before Serve.
+func (s *Server) RecordReferences(refs ...reference.Reference) {
+	s.references = append(s.references, refs...)
+}
+
+// RecordBatchTarget declares that resourceType is served by a generated AIP-137
+// BatchGet on this server — i.e. it is a batch-fetchable reference target. The
+// generated Register<Svc> of a service exposing BatchGet<R> calls it; the
+// reference gate at Serve matches each recorded reference's TargetType against
+// this set. Call before Serve.
+func (s *Server) RecordBatchTarget(resourceType string) {
+	if s.batchTargets == nil {
+		s.batchTargets = map[string]struct{}{}
+	}
+	s.batchTargets[resourceType] = struct{}{}
+}
+
+// References returns the accumulated cross-service references (F041).
+func (s *Server) References() []reference.Reference { return s.references }
 
 // LROStore returns the long-running operation store this server was configured with.
 func (s *Server) LROStore() lro.Store { return s.cfg.LROStore }

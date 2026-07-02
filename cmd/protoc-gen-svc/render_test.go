@@ -241,9 +241,9 @@ func TestRenderSvcFile_module(t *testing.T) {
 // module-qualified resource descriptor (acronym handling matters: APIKey).
 func TestSnakeIdent(t *testing.T) {
 	cases := map[string]string{
-		"Order":  "order",
-		"APIKey": "api_key",
-		"Book":   "book",
+		"Order":   "order",
+		"APIKey":  "api_key",
+		"Book":    "book",
 		"IAMRole": "iam_role",
 	}
 	for in, want := range cases {
@@ -392,6 +392,99 @@ func TestRenderSvcFile_memberBatchWriteRedirection(t *testing.T) {
 	if strings.Contains(binding, "BatchGetItems") {
 		t.Errorf("BatchGet (a read) must not be in the member binding WriteMethods:\n%s", binding)
 	}
+}
+
+// refTargetService is a reference-TARGET service (region.v1/RegionService): it
+// serves the guaranteed AIP-137 BatchGet<R> (F041 G-2), so its handler holds a
+// persistence.BatchRepository.
+func refTargetService() serviceInfo {
+	return serviceInfo{
+		ServiceName:  "RegionService",
+		Resource:     "Region",
+		ResourceType: "region.example.com/Region",
+		Methods: []methodInfo{
+			{Name: "GetRegion", InputGoIdent: "GetRegionRequest", OutputGoIdent: "Region", Std: stdGet},
+			{Name: "ListRegions", InputGoIdent: "ListRegionsRequest", OutputGoIdent: "ListRegionsResponse", Std: stdList, ListItemsField: "Regions"},
+			{Name: "BatchGetRegions", InputGoIdent: "BatchGetRegionsRequest", OutputGoIdent: "BatchGetRegionsResponse", Std: stdBatchGet, BatchIDsField: "Ids", BatchItemsField: "Regions"},
+		},
+	}
+}
+
+// refSourceService is a reference-SOURCE service (asset.v1/AssetService): its
+// Asset resource carries a cross-service reference (region_id → Region) via
+// google.api.resource_reference (F041 G-1).
+func refSourceService() serviceInfo {
+	return serviceInfo{
+		ServiceName:  "AssetService",
+		Resource:     "Asset",
+		ResourceType: "asset.example.com/Asset",
+		Methods: []methodInfo{
+			{Name: "CreateAsset", InputGoIdent: "CreateAssetRequest", OutputGoIdent: "Asset", Std: stdCreate, ResourceField: "Asset"},
+			{Name: "GetAsset", InputGoIdent: "GetAssetRequest", OutputGoIdent: "Asset", Std: stdGet},
+			{Name: "ListAssets", InputGoIdent: "ListAssetsRequest", OutputGoIdent: "ListAssetsResponse", Std: stdList, ListItemsField: "Assets"},
+		},
+		References: []referenceInfo{
+			{FieldGoName: "RegionId", FKField: "region_id", TargetType: "region.example.com/Region", Cardinality: "one"},
+		},
+	}
+}
+
+// TestRenderSvcFile_referencesMetadata is F041 AC-1: a service whose resource
+// carries a google.api.resource_reference generates a <Svc>References metadata
+// table naming the target type + FK + cardinality.
+func TestRenderSvcFile_referencesMetadata(t *testing.T) {
+	out := renderSvcFile("assetv1", "x;assetv1", []serviceInfo{refSourceService()})
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated output is not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+	mustContain(t, out, `"github.com/infobloxopen/devedge-sdk/reference"`)
+	mustContain(t, out, "var AssetServiceReferences = []reference.Reference{")
+	mustContain(t, out, `FieldName:   "RegionId",`)
+	mustContain(t, out, `FKField:     "region_id",`)
+	mustContain(t, out, `TargetType:  "region.example.com/Region",`)
+	mustContain(t, out, "Cardinality: reference.One,")
+	// The source service contributes its references so the fail-loud gate can run.
+	mustContain(t, out, "s.RecordReferences(AssetServiceReferences...)")
+}
+
+// TestRenderSvcFile_noReferences: a service with no references emits no table and
+// does not import the reference package.
+func TestRenderSvcFile_noReferences(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
+	mustNotContain(t, out, "References = []reference.Reference{")
+	mustNotContain(t, out, "devedge-sdk/reference")
+	mustNotContain(t, out, "RecordReferences(")
+}
+
+// TestRenderSvcFile_batchGetHandler is F041 G-2/AC-2: a reference-target service
+// serves a GENERATED BatchGet<R> delegating to the repository, and its Repo is a
+// persistence.BatchRepository (so a non-batch repo is a compile error — the
+// codegen half of the fail-loud gate D-4). It also declares itself a batch target.
+func TestRenderSvcFile_batchGetHandler(t *testing.T) {
+	out := renderSvcFile("regionv1", "x;regionv1", []serviceInfo{refTargetService()})
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated output is not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+	// The handler's Repo is a BatchRepository (guaranteed batch capability).
+	mustContain(t, out, "Repo persistence.BatchRepository[*Region, string]")
+	// Constructors take a BatchRepository too.
+	mustContain(t, out, "func NewRegionServiceHandler(repo persistence.BatchRepository[*Region, string])")
+	mustContain(t, out, "func RegisterRegionServiceWithRepository(s *server.Server, repo persistence.BatchRepository[*Region, string])")
+	// The generated BatchGet handler delegates to the repository's BatchGet.
+	mustContain(t, out, "func (h *RegionServiceCRUDHandler) BatchGetRegions(")
+	mustContain(t, out, "items, err := h.Repo.BatchGet(ctx, req.GetIds())")
+	mustContain(t, out, "return &BatchGetRegionsResponse{Regions: items}, nil")
+	// It declares itself a batch-fetchable reference target for the gate.
+	mustContain(t, out, `s.RecordBatchTarget("region.example.com/Region")`)
+}
+
+// TestRenderSvcFile_nonTargetRepoStaysPlain: a service WITHOUT a BatchGet keeps
+// the plain Repository seam (no batch requirement imposed on a non-target).
+func TestRenderSvcFile_nonTargetRepoStaysPlain(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
+	mustContain(t, out, "Repo persistence.Repository[*APIKey, string]")
+	mustNotContain(t, out, "persistence.BatchRepository")
+	mustNotContain(t, out, "RecordBatchTarget(")
 }
 
 func mustContain(t *testing.T, s, substr string) {

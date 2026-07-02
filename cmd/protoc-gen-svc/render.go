@@ -17,6 +17,11 @@ type serviceInfo struct {
 	// case no default CRUD handler is generated for the service.
 	Resource           string
 	ResourceSoftDelete bool
+	// ResourceType is the (google.api.resource).type of the managed resource (the
+	// AIP-122 type, e.g. "region.example.com/Region"). When the service serves a
+	// generated BatchGet<R>, it declares this type a batch-fetchable reference
+	// TARGET so the F041 fail-loud gate can match a reference's TargetType to it.
+	ResourceType string
 	// MemberRoot names the owning aggregate root when the service's resource is a
 	// DDD member (infoblox.ddd.v1.member). When set, write-capable standard methods
 	// are emitted as Unimplemented (route through the root) and the service records
@@ -26,6 +31,54 @@ type serviceInfo struct {
 	// constraint (BC-08). When non-empty, a validate<Resource> function is
 	// generated and the Create/Update handlers call it before persistence.
 	EnumFields []enumField
+	// References are the cross-service resource references declared on the
+	// resource's scalar FK fields via google.api.resource_reference (F041). When
+	// non-empty, a <Svc>References metadata table is emitted (AC-1) and the service
+	// contributes its references to the boot-time fail-loud target gate.
+	References []referenceInfo
+}
+
+// referenceInfo is one cross-service reference declared on a resource field via
+// google.api.resource_reference (AIP-124). It is the generator-side view; the
+// emitted table entry is a reference.Reference (the ROOT-module seam type).
+type referenceInfo struct {
+	FieldGoName string // Go field name holding the FK, e.g. "RegionId"
+	FKField     string // proto field name, e.g. "region_id"
+	TargetType  string // AIP-122 target type, e.g. "region.example.com/Region"
+	Cardinality string // "one" (scalar FK) or "many" (repeated FK)
+}
+
+// hasBatchGet reports whether the service exposes a generated AIP-137 BatchGet<R>
+// method. When true the CRUD handler's Repo is a persistence.BatchRepository (so a
+// non-batch repo is a compile error — the codegen half of the fail-loud gate).
+func (s serviceInfo) hasBatchGet() bool {
+	for _, m := range s.Methods {
+		if m.Std == stdBatchGet {
+			return true
+		}
+	}
+	return false
+}
+
+// repoInterface is the persistence seam the generated handler/constructors take:
+// BatchRepository when the service serves a generated BatchGet (so the batch
+// capability is required at compile time), else the plain Repository.
+func (s serviceInfo) repoInterface() string {
+	if s.hasBatchGet() {
+		return "BatchRepository"
+	}
+	return "Repository"
+}
+
+// referenceTargetType is the AIP-122 resource type this service serves as a
+// batch-fetchable reference target. Prefers the (google.api.resource).type; falls
+// back to the module-qualified resource name when the resource declares no type,
+// so the gate still has a stable key to match a reference against.
+func (s serviceInfo) referenceTargetType() string {
+	if s.ResourceType != "" {
+		return s.ResourceType
+	}
+	return s.moduleID() + "." + snakeIdent(s.Resource)
 }
 
 // enumField is a resource string field constrained to a fixed set of values
@@ -101,6 +154,12 @@ type methodInfo struct {
 	ListHasFilter      bool
 	ListHasOrderBy     bool
 	ListHasShowDeleted bool
+	// BatchIDsField is the Go field name of the repeated-string key list on a
+	// BatchGet request (e.g. "Ids"), set only for stdBatchGet methods.
+	BatchIDsField string
+	// BatchItemsField is the Go field name of the repeated-resource field on a
+	// BatchGet response (e.g. "Regions"), set only for stdBatchGet methods.
+	BatchItemsField string
 }
 
 // isBatchWrite reports whether the method is an AIP-137 batch WRITE
@@ -158,6 +217,7 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	needPersistence := false
 	needStatus := false
 	needServicekit := false
+	needReference := false
 	for _, svc := range services {
 		if svc.hasStdMethods() {
 			needPersistence = true
@@ -173,6 +233,10 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 			// The generated validate<Resource> rejects out-of-set values with a
 			// status.Errorf(codes.InvalidArgument, ...) (BC-08).
 			needStatus = true
+		}
+		if len(svc.References) > 0 {
+			// The emitted <Svc>References table is []reference.Reference (F041).
+			needReference = true
 		}
 	}
 
@@ -193,6 +257,9 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	if needPersistence {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
 	}
+	if needReference {
+		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/reference\"\n")
+	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/server\"\n")
 	if needServicekit {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/servicekit\"\n")
@@ -200,6 +267,7 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	b.WriteString(")\n\n")
 
 	for _, svc := range services {
+		renderReferences(&b, svc)
 		renderRegister(&b, svc)
 		if svc.hasStdMethods() {
 			renderCRUDHandler(&b, svc)
@@ -211,6 +279,37 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	}
 
 	return b.String()
+}
+
+// renderReferences emits the generated <Svc>References metadata table (F041 AC-1):
+// one reference.Reference per cross-service reference declared on the resource's
+// scalar FK fields via google.api.resource_reference. It is metadata only (no Go
+// edge, no cascade) — a composition layer reads it to batch-resolve targets. Emits
+// the same DO-NOT-EDIT style as <Svc>AuthzRules. Nothing is emitted when the
+// service declares no references.
+func renderReferences(b *strings.Builder, svc serviceInfo) {
+	if len(svc.References) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "// %sReferences are the cross-service resource references declared on %s's\n", svc.ServiceName, svc.Resource)
+	b.WriteString("// resource via google.api.resource_reference (AIP-124). Each names a target\n")
+	b.WriteString("// resource type served by (possibly) another microservice, keyed by a scalar\n")
+	b.WriteString("// foreign key. It is metadata only: no traversable Go edge, no cascade. A\n")
+	b.WriteString("// composition layer reads it to batch-resolve the targets (F041). DO NOT EDIT.\n")
+	fmt.Fprintf(b, "var %sReferences = []reference.Reference{\n", svc.ServiceName)
+	for _, r := range svc.References {
+		card := "reference.One"
+		if r.Cardinality == "many" {
+			card = "reference.Many"
+		}
+		b.WriteString("\t{\n")
+		fmt.Fprintf(b, "\t\tFieldName:   %q,\n", r.FieldGoName)
+		fmt.Fprintf(b, "\t\tFKField:     %q,\n", r.FKField)
+		fmt.Fprintf(b, "\t\tTargetType:  %q,\n", r.TargetType)
+		fmt.Fprintf(b, "\t\tCardinality: %s,\n", card)
+		b.WriteString("\t},\n")
+	}
+	b.WriteString("}\n\n")
 }
 
 // renderRegister emits Register<Svc>: record methods, contribute authz rules,
@@ -229,6 +328,16 @@ func renderRegister(b *strings.Builder, svc serviceInfo) {
 	}
 	b.WriteString("\t)\n")
 	fmt.Fprintf(b, "\ts.AddRules(%sAuthzRules...)\n", svc.ServiceName)
+	// F041: contribute this service's cross-service references and (when it serves
+	// BatchGet) declare its resource a batch-fetchable reference TARGET, so the
+	// boot-time fail-loud gate (AssertReferenceTargets) fails closed if a referenced
+	// target type has no registered BatchGet — never a silent runtime N+1 (D-4).
+	if len(svc.References) > 0 {
+		fmt.Fprintf(b, "\ts.RecordReferences(%sReferences...)\n", svc.ServiceName)
+	}
+	if svc.hasBatchGet() {
+		fmt.Fprintf(b, "\ts.RecordBatchTarget(%q)\n", svc.referenceTargetType())
+	}
 	// F031 DDD: a member service contributes a member→root binding so the boot-time
 	// boundary gate fails closed if any of its write methods is registered.
 	if svc.isMember() {
@@ -293,7 +402,11 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 	b.WriteString("// so the handler does not duplicate them. DO NOT EDIT.\n")
 	fmt.Fprintf(b, "type %sCRUDHandler struct {\n", svc.ServiceName)
 	fmt.Fprintf(b, "\tUnimplemented%sServer\n", svc.ServiceName)
-	fmt.Fprintf(b, "\tRepo persistence.Repository[*%s, string]\n", res)
+	// F041: a service that serves a generated AIP-137 BatchGet<R> holds a
+	// persistence.BatchRepository so BatchGet is guaranteed by construction — a
+	// non-batch repository is a COMPILE error (the codegen half of the fail-loud
+	// gate, D-4). Otherwise the plain Repository seam suffices.
+	fmt.Fprintf(b, "\tRepo persistence.%s[*%s, string]\n", svc.repoInterface(), res)
 	b.WriteString("}\n\n")
 
 	renderValidateFunc(b, svc)
@@ -369,6 +482,17 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 			renderKeyResolve(b, m, res)
 			b.WriteString("\treturn h.Repo.Undelete(ctx, key)\n")
 			b.WriteString("}\n\n")
+		case stdBatchGet:
+			// F041 (G-2): the guaranteed AIP-137 BatchGet<R>. Delegates to the
+			// BatchRepository — read_mask (AIP-157) and the read authz rule apply via
+			// the interceptor chain, exactly like Get/List, so the handler adds no
+			// projection/authz of its own. "referenced ⇒ batch-fetchable" by construction.
+			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
+				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			fmt.Fprintf(b, "\titems, err := h.Repo.BatchGet(ctx, req.Get%s())\n", m.BatchIDsField)
+			b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+			fmt.Fprintf(b, "\treturn &%s{%s: items}, nil\n", m.OutputGoIdent, m.BatchItemsField)
+			b.WriteString("}\n\n")
 		}
 	}
 }
@@ -393,8 +517,8 @@ func renderHandlerConstructors(b *strings.Builder, svc serviceInfo) {
 	fmt.Fprintf(b, "// New%sHandler returns the generated default CRUD handler backed by repo. Embed\n", svc.ServiceName)
 	b.WriteString("// the returned type (or this struct) to override individual methods before\n")
 	fmt.Fprintf(b, "// registering it via Register%s.\n", svc.ServiceName)
-	fmt.Fprintf(b, "func New%sHandler(repo persistence.Repository[*%s, string]) *%sCRUDHandler {\n",
-		svc.ServiceName, res, svc.ServiceName)
+	fmt.Fprintf(b, "func New%sHandler(repo persistence.%s[*%s, string]) *%sCRUDHandler {\n",
+		svc.ServiceName, svc.repoInterface(), res, svc.ServiceName)
 	fmt.Fprintf(b, "\treturn &%sCRUDHandler{Repo: repo}\n", svc.ServiceName)
 	b.WriteString("}\n\n")
 
@@ -402,8 +526,8 @@ func renderHandlerConstructors(b *strings.Builder, svc serviceInfo) {
 	fmt.Fprintf(b, "// generated default handler over repo and registers it via Register%s\n", svc.ServiceName)
 	b.WriteString("// (gRPC + REST gateway + authz rules). Use the New<Svc>Handler + Register<Svc>\n")
 	b.WriteString("// pair instead when you need to wrap/override the default handler.\n")
-	fmt.Fprintf(b, "func Register%sWithRepository(s *server.Server, repo persistence.Repository[*%s, string]) error {\n",
-		svc.ServiceName, res)
+	fmt.Fprintf(b, "func Register%sWithRepository(s *server.Server, repo persistence.%s[*%s, string]) error {\n",
+		svc.ServiceName, svc.repoInterface(), res)
 	fmt.Fprintf(b, "\treturn Register%s(s, New%sHandler(repo))\n", svc.ServiceName, svc.ServiceName)
 	b.WriteString("}\n\n")
 }
@@ -436,7 +560,7 @@ func renderModule(b *strings.Builder, svc serviceInfo) {
 	b.WriteString("\t// Repo is the persistence repository the module's generated CRUD handler\n")
 	b.WriteString("\t// registers over (via Register" + svc.ServiceName + "WithRepository). Required\n")
 	b.WriteString("\t// unless Handler is set.\n")
-	fmt.Fprintf(b, "\tRepo persistence.Repository[*%s, string]\n", res)
+	fmt.Fprintf(b, "\tRepo persistence.%s[*%s, string]\n", svc.repoInterface(), res)
 	b.WriteString("\n")
 	b.WriteString("\t// Handler is an OPTIONAL override: when set, the module registers it (via\n")
 	fmt.Fprintf(b, "\t// Register%s) instead of constructing the default CRUD handler over Repo.\n", svc.ServiceName)

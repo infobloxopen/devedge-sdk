@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+// Two-service cross-service-reference fixture (F041, WS-021 P1 AC-5).
+//
+// AssetService (SOURCE) owns Asset, whose scalar region_id field carries a
+// google.api.resource_reference (AIP-124) at "region.example.com/Region" — the
+// resource type RegionService (TARGET) serves. region_id stays a plain scalar
+// string: the reference is METADATA only, so protoc-gen-ent emits NO edge from
+// Asset to Region and there is no cascade (AC-4). RegionService serves an
+// AIP-137 BatchGetRegions, so a composition layer resolves N Asset references in
+// exactly ONE BatchGet (the anti-N+1 guarantee, AC-5) via reference.Load. Both
+// backends (ent and GORM) are generated so the guarantee is proven on each.
+package federation.v1;
+
+option go_package = "github.com/infobloxopen/devedge-sdk/testdata/federation/federationv1;federationv1";
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/field_mask.proto";
+import "infoblox/authz/v1/authz.proto";
+
+// Region is the reference TARGET: RegionService serves BatchGetRegions over it,
+// so any resource that references "region.example.com/Region" is batch-fetchable.
+message Region {
+  option (google.api.resource) = {
+    type: "region.example.com/Region"
+    pattern: "regions/{region}"
+  };
+
+  string id           = 1;
+  string account_id   = 2;
+  string display_name = 3;
+  // AIP-154 ETag: framework-managed opaque token stamped on every write.
+  string etag         = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Asset is the reference SOURCE: its region_id names a Region served by another
+// microservice. region_id is a plain scalar FK annotated with the standard
+// google.api.resource_reference (AIP-124) — there is no belongs_to/has_one edge,
+// so the field stays metadata-only (no ent/GORM edge, no cascade).
+message Asset {
+  option (google.api.resource) = {
+    type: "asset.example.com/Asset"
+    pattern: "assets/{asset}"
+  };
+
+  string id           = 1;
+  string account_id   = 2;
+  string display_name = 3;
+  // Cross-service reference: names a Region served by RegionService. A scalar
+  // foreign key (NOT a message/edge) so it is resolved above the services, never
+  // traversed in-process.
+  string region_id    = 4 [(google.api.resource_reference) = {type: "region.example.com/Region"}];
+  // AIP-154 ETag: framework-managed opaque token stamped on every write.
+  string etag         = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// RegionService is the reference TARGET. BatchGetRegions (AIP-137) is what makes
+// Region batch-fetchable; the generated handler delegates to the repository's
+// BatchGet, so "referenced ⇒ batch-fetchable" holds by construction.
+service RegionService {
+  rpc CreateRegion(CreateRegionRequest) returns (Region) {
+    option (google.api.http) = {post: "/v1/regions", body: "region"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "regions"};
+  }
+  rpc GetRegion(GetRegionRequest) returns (Region) {
+    option (google.api.http) = {get: "/v1/regions/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "regions"};
+  }
+  rpc ListRegions(ListRegionsRequest) returns (ListRegionsResponse) {
+    option (google.api.http) = {get: "/v1/regions"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "regions"};
+  }
+  // AIP-137 batch read: the guarantee that a reference to Region can be resolved
+  // without an N+1 waterfall. read_mask (AIP-157) and the read authz rule apply
+  // via the interceptor chain, exactly like GetRegion.
+  rpc BatchGetRegions(BatchGetRegionsRequest) returns (BatchGetRegionsResponse) {
+    option (google.api.http) = {get: "/v1/regions:batchGet"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "regions"};
+  }
+}
+
+// AssetService is the reference SOURCE. It has no BatchGet — Asset is not itself
+// a reference target here; it references Region.
+service AssetService {
+  rpc CreateAsset(CreateAssetRequest) returns (Asset) {
+    option (google.api.http) = {post: "/v1/assets", body: "asset"};
+    option (infoblox.authz.v1.rule) = {verb: "create", resource: "assets"};
+  }
+  rpc GetAsset(GetAssetRequest) returns (Asset) {
+    option (google.api.http) = {get: "/v1/assets/{id}"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "assets"};
+  }
+  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse) {
+    option (google.api.http) = {get: "/v1/assets"};
+    option (infoblox.authz.v1.rule) = {verb: "read", resource: "assets"};
+  }
+}
+
+message CreateRegionRequest { Region region = 1; }
+message GetRegionRequest {
+  string id = 1;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 2;
+}
+message ListRegionsRequest {
+  int32  page_size  = 1;
+  string page_token = 2;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 3;
+}
+message ListRegionsResponse { repeated Region regions = 1; string next_page_token = 2; }
+message BatchGetRegionsRequest  { repeated string ids = 1; }
+message BatchGetRegionsResponse { repeated Region regions = 1; }
+
+message CreateAssetRequest { Asset asset = 1; }
+message GetAssetRequest {
+  string id = 1;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 2;
+}
+message ListAssetsRequest {
+  int32  page_size  = 1;
+  string page_token = 2;
+  // AIP-157: fields to return; empty means all fields.
+  google.protobuf.FieldMask read_mask = 3;
+}
+message ListAssetsResponse { repeated Asset assets = 1; string next_page_token = 2; }

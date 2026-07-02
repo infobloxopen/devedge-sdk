@@ -17,13 +17,15 @@
 package main
 
 import (
+	"fmt"
+
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
 
-	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 )
@@ -47,6 +49,12 @@ type resourceFacts struct {
 	softDelete bool
 	hasName    bool   // has an AIP-122 name field / resource pattern
 	memberRoot string // (infoblox.ddd.v1.member).root — owning aggregate root, "" when not a member
+	// resourceType is the (google.api.resource).type of the message (the AIP-122
+	// resource type, e.g. "region.example.com/Region"). It is the identity a
+	// cross-service reference names (F041): a service that serves BatchGet over a
+	// resource with this type is the batch-fetchable TARGET the fail-loud gate
+	// matches a reference's TargetType against.
+	resourceType string
 }
 
 func generateFile(gen *protogen.Plugin, f *protogen.File) {
@@ -73,10 +81,20 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		if r, ok := facts[svc.Resource]; ok {
 			svc.ResourceSoftDelete = r.softDelete
 			svc.MemberRoot = r.memberRoot
+			svc.ResourceType = r.resourceType
 		}
 		// BC-08: string fields on the resource carrying an allowed_values
 		// constraint drive a generated validate<Resource> the handlers call.
 		svc.EnumFields = resourceEnumFields(msgByName[svc.Resource])
+		// F041 (WS-021 P1): cross-service references declared on the resource's
+		// scalar FK fields via the standard google.api.resource_reference (AIP-124)
+		// drive the emitted <Svc>References metadata table + the fail-loud gate.
+		refs, err := resourceReferences(msgByName[svc.Resource], facts)
+		if err != nil {
+			gen.Error(err)
+			return
+		}
+		svc.References = refs
 		for _, m := range s.Methods {
 			mi := methodInfo{
 				Name:          m.GoName,
@@ -95,6 +113,10 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			}
 			if mi.Std == stdCreate || mi.Std == stdUpdate {
 				mi.ResourceField = requestResourceField(m, svc.Resource)
+			}
+			if mi.Std == stdBatchGet {
+				mi.BatchIDsField = batchIDsField(m)
+				mi.BatchItemsField = listItemsField(m, svc.Resource)
 			}
 			svc.Methods = append(svc.Methods, mi)
 		}
@@ -119,6 +141,7 @@ func messageResourceFacts(m *protogen.Message) resourceFacts {
 				if len(rd.GetPattern()) > 0 {
 					r.hasName = true
 				}
+				r.resourceType = rd.GetType()
 			}
 		}
 		// F031 DDD: (infoblox.ddd.v1.member) marks this resource as owned by a root
@@ -243,6 +266,12 @@ const (
 	stdUpdate
 	stdDelete
 	stdUndelete
+	// stdBatchGet is an AIP-137 BatchGet<R>: a read that returns many resources
+	// by id in one call. F041 (WS-021 P1) generates its handler (delegating to the
+	// repository's persistence.BatchRepository.BatchGet) so a reference-target
+	// resource batch-fetches by construction. It is a READ (never a member-write
+	// redirect); BatchCreate/BatchUpdate/BatchDelete stay unclassified.
+	stdBatchGet
 )
 
 // isWrite reports whether a classified standard method is write-capable
@@ -312,9 +341,28 @@ func classifyMethod(m *protogen.Method, resource string, softDelete bool) stdMet
 		return false
 	}
 
+	hasRepeatedStringField := func(msg *protogen.Message, name string) bool {
+		for _, field := range msg.Fields {
+			if string(field.Desc.Name()) == name && field.Desc.IsList() && field.Desc.Kind() == protoreflect.StringKind {
+				return true
+			}
+		}
+		return false
+	}
+
 	idIn := hasField(in, "id", protoreflect.StringKind)
 	nameIn := hasField(in, "name", protoreflect.StringKind)
 	returnsResource := string(out.GoIdent.GoName) == resource
+
+	// BatchGet (AIP-137): a read named BatchGet<R> whose request carries a
+	// repeated-string key list (ids or names) and whose response carries the
+	// repeated resource. Detected before Get so its repeated key list is not
+	// mistaken for a single-id Get. F041 generates its handler.
+	if hasMethodPrefix(m, "BatchGet") &&
+		(hasRepeatedStringField(in, "ids") || hasRepeatedStringField(in, "names")) &&
+		hasRepeatedResource(out) {
+		return stdBatchGet
+	}
 
 	// Update: request carries the resource + an update_mask, returns the resource.
 	if hasResourceField(in) && hasUpdateMask(in) && returnsResource {
@@ -394,6 +442,78 @@ func requestResourceField(m *protogen.Method, resource string) string {
 func hasMethodPrefix(m *protogen.Method, prefix string) bool {
 	n := m.GoName
 	return len(n) >= len(prefix) && n[:len(prefix)] == prefix
+}
+
+// batchIDsField returns the Go field name of the repeated-string key list on a
+// BatchGet request (proto `repeated string ids` -> Go `Ids`, or `names` ->
+// `Names`). Prefers "ids" (the direct repo key) over "names".
+func batchIDsField(m *protogen.Method) string {
+	var idsGo, namesGo string
+	for _, field := range m.Input.Fields {
+		if !field.Desc.IsList() || field.Desc.Kind() != protoreflect.StringKind {
+			continue
+		}
+		switch string(field.Desc.Name()) {
+		case "ids":
+			idsGo = string(field.GoName)
+		case "names":
+			namesGo = string(field.GoName)
+		}
+	}
+	if idsGo != "" {
+		return idsGo
+	}
+	return namesGo
+}
+
+// resourceReferences extracts the cross-service references declared on a resource
+// message's scalar FK fields via the standard google.api.resource_reference
+// annotation (AIP-124, F041 D-1). It reads the same annotation Google/AIP tooling
+// uses — there is NO new infoblox annotation. The target module/endpoint is NOT
+// annotated: TargetType is a globally unique AIP-122 type, catalog-resolved at
+// use (WP-A).
+//
+// Coverage guard (spec failure mode): the annotation is meaningful only on a
+// scalar string FK field of a RESOURCE message. A resource_reference on a
+// non-resource message, or on a message-typed / non-string field, is a codegen
+// error — surfaced loud, never silently ignored. Returns nil for a nil message
+// (custom-only service).
+func resourceReferences(m *protogen.Message, facts map[string]resourceFacts) ([]referenceInfo, error) {
+	if m == nil {
+		return nil, nil
+	}
+	msgIsResource := false
+	if f, ok := facts[string(m.GoIdent.GoName)]; ok && isResourceFacts(f) {
+		msgIsResource = true
+	}
+	var out []referenceInfo
+	for _, field := range m.Fields {
+		opts := field.Desc.Options()
+		if opts == nil || !proto.HasExtension(opts, apiannotations.E_ResourceReference) {
+			continue
+		}
+		rr, _ := proto.GetExtension(opts, apiannotations.E_ResourceReference).(*apiannotations.ResourceReference)
+		if rr == nil || rr.GetType() == "" {
+			continue
+		}
+		if !msgIsResource {
+			return nil, fmt.Errorf("protoc-gen-svc: %s.%s: google.api.resource_reference is only valid on a field of a resource message (a message carrying google.api.resource)", m.GoIdent.GoName, field.Desc.Name())
+		}
+		if field.Desc.Kind() != protoreflect.StringKind {
+			return nil, fmt.Errorf("protoc-gen-svc: %s.%s: google.api.resource_reference must annotate a scalar string foreign-key field, not a %s field (references are metadata over a scalar FK, never a traversable edge)", m.GoIdent.GoName, field.Desc.Name(), field.Desc.Kind())
+		}
+		card := "one"
+		if field.Desc.IsList() {
+			card = "many"
+		}
+		out = append(out, referenceInfo{
+			FieldGoName: string(field.GoName),
+			FKField:     string(field.Desc.Name()),
+			TargetType:  rr.GetType(),
+			Cardinality: card,
+		})
+	}
+	return out, nil
 }
 
 // methodKeyByName reports whether a Get/Delete/Undelete RPC is keyed by an
