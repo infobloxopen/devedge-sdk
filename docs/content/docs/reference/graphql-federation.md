@@ -8,7 +8,7 @@ import "github.com/infobloxopen/devedge-sdk/federationgql"
 ```
 
 Package `federationgql` is the cross-service GraphQL federation gateway. It turns the
-[`reference`](../persistence/) cross-service primitives — the generated `<Svc>References`
+[`reference`](../codegen/) cross-service primitives — the generated `<Svc>References`
 metadata and the guaranteed AIP-137 `BatchGet` on referenced targets — into one queryable
 graph: each resource becomes a GraphQL object type, each declared
 `google.api.resource_reference` becomes an object-typed **edge**, and a client issues a single
@@ -32,14 +32,13 @@ binary, not in your services.
 - **Pushes `read_mask` down.** Where a descriptor supports a field mask, the gateway derives it
   from the GraphQL selection set (AIP-157) and passes it down so the service returns only the
   requested fields.
-- **No mutations, no subscriptions, no cross-domain filtering.** Reads compose; the DDD write
-  boundary holds (writes route to the owning service).
+- **No mutations, no subscriptions, no cross-domain filtering.** Reads compose; the domain-driven
+  design (DDD) write boundary holds (writes route to the owning service).
 
 ## The descriptor API
 
-The gateway is built from explicit `Resource` descriptors — the wiring is deliberately not
-auto-derived from a catalog (that registration step is what the
-[setup skill](#setting-up-the-seam) walks you through).
+The gateway is built from explicit `Resource` descriptors — the wiring is not auto-derived from a
+catalog (the [setup section](#setting-up-the-seam) walks you through that registration step).
 
 ```go
 type Resource struct {
@@ -146,3 +145,19 @@ references to edges, wire the resolver). See the runnable sample at
 — a `region` service, an `asset` service (whose `region_id` references `Region`), and a `gateway`
 that wires both into one GraphQL endpoint — and its `e2e_test.go`, which asserts the cross-service
 query, the single `BatchGet`, `read_mask` pushdown, and fail-closed authz over real listeners.
+
+{{< callout type="warning" >}}
+**Deploying a reference source apart from its target? Declare the target external.** When a service
+that declares a `google.api.resource_reference` runs in a **different process** from the service that
+owns the target — the split-microservice case — the target's `BatchGet` is not on this server, so the
+boot-time reference gate fails closed (`target type "<domain>/<Target>" has no registered BatchGet on
+this server`). After `Register<Svc>WithRepository`, declare the target served elsewhere:
+
+```go
+_ = productdv1.RegisterProductServiceWithRepository(app.Server, repo)
+app.Server.RecordExternalReferenceTarget("vendord.v1/Vendor") // resolved by the gateway, not here
+```
+
+Use `RecordBatchTarget` only when *this* server serves `BatchGet<Target>` (the co-located case, which
+the generated registration records for you). See the [server reference](../server/) for both.
+{{< /callout >}}

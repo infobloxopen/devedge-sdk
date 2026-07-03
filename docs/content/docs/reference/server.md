@@ -170,6 +170,12 @@ func (s *Server) GatewayMux() *runtime.ServeMux         // nil when no HTTP gate
 func (s *Server) Rules() []authz.MethodRule             // the accumulated set (Config.Rules + AddRules)
 func (s *Server) GRPCAddr() string // actual bound addr after Serve (useful when GRPCAddr was ":0")
 func (s *Server) HTTPAddr() string // actual bound gateway addr after Serve; "" when no gateway
+
+// Cross-service references (F041) — the generated Register<Service> calls the first two for you:
+func (s *Server) RecordReferences(refs ...reference.Reference)      // references this service declares
+func (s *Server) RecordBatchTarget(resourceType string)            // THIS server serves BatchGet<Target> (co-located)
+func (s *Server) RecordExternalReferenceTarget(resourceType string) // target served by ANOTHER process (split federation); the gateway resolves it
+func (s *Server) References() []reference.Reference                 // the accumulated references
 ```
 
 ### Multi-service protos: rules are auto-wired

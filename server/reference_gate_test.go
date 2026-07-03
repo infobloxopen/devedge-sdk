@@ -64,3 +64,28 @@ func TestServer_ReferenceGateAtServe(t *testing.T) {
 		t.Fatalf("want the gate to pass once the target serves BatchGet, got %v", err)
 	}
 }
+
+// TestServer_ExternalReferenceTarget proves the split-microservice opt-out
+// (finding 067): a reference whose target is served in ANOTHER process boots once
+// declared external, without falsely advertising a local BatchGet.
+func TestServer_ExternalReferenceTarget(t *testing.T) {
+	s := &Server{}
+	s.RecordReferences(reference.Reference{
+		FieldName:  "VendorId",
+		FKField:    "vendor_id",
+		TargetType: "vendord.v1/Vendor",
+	})
+	// Before declaring the target, the gate fails closed (it has no local BatchGet).
+	if err := AssertReferenceTargets(s.satisfiableTargets(), s.references); err == nil {
+		t.Fatal("want the gate to fail before the external target is declared")
+	}
+
+	s.RecordExternalReferenceTarget("vendord.v1/Vendor")
+	if err := AssertReferenceTargets(s.satisfiableTargets(), s.references); err != nil {
+		t.Fatalf("want the gate to pass once the target is declared external, got %v", err)
+	}
+	// Honesty: an external target must NOT be recorded as a local BatchGet.
+	if _, isLocalBatch := s.batchTargets["vendord.v1/Vendor"]; isLocalBatch {
+		t.Fatal("external target must not be advertised as a local BatchGet")
+	}
+}
