@@ -1,0 +1,35 @@
+# Dependabot configuration.
+# Routine version updates (grouped, weekly). Security updates are enabled
+# separately at the repository level and open PRs for vulnerable dependencies
+# automatically regardless of this file.
+# This repo is multi-module: "/**" covers every directory containing a go.mod.
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+      - "/**"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "go"
+    groups:
+      go-modules:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
