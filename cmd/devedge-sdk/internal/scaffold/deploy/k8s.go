@@ -225,6 +225,16 @@ ingress:
   enabled: false
   # host: {{.Service}}.example.com
 
+monitoring:
+  # SLO burn-rate rules (WS-025). Off by default. Generate the rule groups from
+  # this service's slo.yaml, then paste them under prometheusRule.groups and flip
+  # enabled to ship them with the chart:
+  #   de slo render --target prometheus --in slo.yaml --out deploy/prometheus
+  # (copy the .spec.groups from deploy/prometheus/<service>-slo.prometheusrule.yaml).
+  enabled: false
+  prometheusRule:
+    groups: []
+
 # Graceful shutdown window — keep paired with the service's signal.NotifyContext
 # shutdown and the chart default.
 terminationGracePeriodSeconds: {{.GracePeriodSeconds}}

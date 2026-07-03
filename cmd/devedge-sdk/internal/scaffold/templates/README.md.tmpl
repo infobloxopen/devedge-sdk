@@ -16,11 +16,9 @@
 ## Fresh clone — generate first
 
 This project builds with [`de`](https://github.com/infobloxopen/devedge), the hermetic devedge build
-authority (it owns codegen, build, test, lint, and the container image). Install it once:
-
-```sh
-go install github.com/infobloxopen/devedge/cmd/de@{{.DeVersion}}
-```
+authority (it owns codegen, build, test, lint, and the container image). Install the latest `de`
+release binary from the [devedge releases](https://github.com/infobloxopen/devedge/releases) and put it
+on your PATH. (`de`'s module uses a `replace` directive, so `go install` does not resolve it.)
 
 `gen/` is generated code and is **git-ignored** (see `.gitignore`), so a fresh clone has none. Building
 before generating fails with `no required module provides package .../gen/...`. Generate first:

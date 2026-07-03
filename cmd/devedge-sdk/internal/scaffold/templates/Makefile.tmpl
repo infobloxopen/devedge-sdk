@@ -7,8 +7,9 @@
 # lives in `de`. This Makefile just reads the managed shim `de sync` writes and
 # adds the project-specific targets below.
 #
-# Requires `de` on PATH:
-#     go install github.com/infobloxopen/devedge/cmd/de@{{.DeVersion}}
+# Requires `de` on PATH. Install the latest release binary from
+#     https://github.com/infobloxopen/devedge/releases
+# (the de module uses a replace directive, so go install does not work).
 #
 # Then, on a fresh clone (gen/ is git-ignored — see the README), generate first:
 #     de generate    # buf generate -> gen/ (+ OpenAPI v3{{- if eq (printf "%s" .Backend) "ent" }}, then the entc client{{- end }}), then go mod tidy

@@ -1,0 +1,32 @@
+openapi: 3.0.3
+info:
+    title: ticketd
+paths:
+    /v1/tickets:
+        get:
+            operationId: TicketService_ListTickets
+            tags:
+                - TicketService
+            x-aip-method: List
+        post:
+            operationId: TicketService_CreateTicket
+            tags:
+                - TicketService
+            x-aip-method: Create
+    /v1/tickets/{id}:
+        get:
+            operationId: TicketService_GetTicket
+            tags:
+                - TicketService
+            x-aip-method: Get
+        delete:
+            operationId: TicketService_DeleteTicket
+            tags:
+                - TicketService
+            x-aip-method: Delete
+    /v1/tickets/{ticket.id}:
+        patch:
+            operationId: TicketService_UpdateTicket
+            tags:
+                - TicketService
+            x-aip-method: Update
