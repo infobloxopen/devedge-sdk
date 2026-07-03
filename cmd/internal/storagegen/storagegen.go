@@ -67,7 +67,7 @@ func Classify(fields []Field) (auto, unmapped []Field) {
 func Reason(f Field) string {
 	switch {
 	case f.IsMessage:
-		return "nested message field has no scalar storage column — add a relationship annotation (belongs_to/has_one/has_many) or flatten it into scalar fields"
+		return "nested message field has no scalar storage column — for a well-known type such as google.protobuf.Timestamp, model it as an int64 (unix seconds) column; otherwise add a relationship annotation (belongs_to/has_one/has_many) or flatten it into scalar fields"
 	case f.IsRepeated:
 		return "repeated field has no scalar storage column — model it as a has_many relationship or a separate resource"
 	case f.IsEnum:

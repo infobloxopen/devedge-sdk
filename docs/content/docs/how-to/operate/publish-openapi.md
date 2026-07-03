@@ -96,17 +96,24 @@ swagger, so the spec is never silently missing contract.
 ```sh
 de api publish \
   --api-id openapi/platform.data/orders/v1 \
-  --version v0.1.0 \
+  --version v1.0.0-beta.1 \
   --lifecycle beta \
   --canonical-repo github.com/infobloxopen/apis
 ```
+
+{{< callout type="warning" >}}
+**The version must match the lifecycle and the API line.** A `beta`, `rc`, or `experimental`
+lifecycle requires a prerelease tag (`v1.0.0-beta.1`), and a plain `v1.0.0` requires
+`--lifecycle stable`. The version's major must also match the API line — an `.../v1` API takes
+`v1.x.x`, not `v0.x.x`. `apx` rejects a mismatch (`LIFECYCLE_MISMATCH` / `VERSION_LINE_MISMATCH`).
+{{< /callout >}}
 
 **Flags:**
 
 | Flag | Required | Description |
 |---|---|---|
 | `--api-id` | yes | Full apx API ID, e.g. `openapi/platform.data/orders/v1` |
-| `--version` | yes | Semantic version to publish, e.g. `v0.1.0` |
+| `--version` | yes | Semantic version to publish; must match the lifecycle and line, e.g. `v1.0.0-beta.1` for beta on `/v1` |
 | `--canonical-repo` | yes | Canonical APIs repo, e.g. `github.com/infobloxopen/apis` |
 | `--lifecycle` | no | `beta` (default) or `stable` |
 | `--service-dir` | no | Service root; defaults to the current directory |
@@ -123,7 +130,7 @@ By default the command **prepares only** and prints the two follow-on commands:
 prepare complete — next:
   apx release submit
   # (after the PR is merged on the canonical repo:)
-  apx release finalize --api openapi/platform.data/orders/v1 --version v0.1.0
+  apx release finalize --api openapi/platform.data/orders/v1 --version v1.0.0-beta.1
 ```
 
 Review the PR, merge it, then run `apx release finalize` in canonical-repo CI to land the OCI artifact in the apx catalog.
@@ -142,7 +149,7 @@ cp openapi/orders.openapi.yaml openapi/platform.data/orders/v1/orders.openapi.ya
 
 # 3. Prepare the release (adds a release entry + writes the OCI manifest locally).
 apx release prepare openapi/platform.data/orders/v1 \
-  --version v0.1.0 \
+  --version v1.0.0-beta.1 \
   --lifecycle beta \
   --canonical-repo github.com/infobloxopen/apis
 
@@ -152,7 +159,7 @@ apx release submit
 # 5. After the PR is merged — run this in canonical-repo CI:
 apx release finalize \
   --api openapi/platform.data/orders/v1 \
-  --version v0.1.0
+  --version v1.0.0-beta.1
 ```
 
 The `apx.yaml` in your service repo must declare:
@@ -180,6 +187,14 @@ This writes the package to `clients/orders-client/` by default. Pass `--build` t
 
 {{< callout type="info" >}}
 **apx runs ng-openapi-gen under the hood.** The generator reads the OpenAPI v3 spec that the `make generate` converter step writes to `openapi/<svc>.openapi.yaml`. apx wraps the output in a versioned npm package; you consume the package, not the raw generator output.
+{{< /callout >}}
+
+{{< callout type="info" >}}
+**The generated model is a single read-and-write interface.** ng-openapi-gen emits one TypeScript
+interface per schema, so `readOnly` fields (`etag`, the server-set `name`, `deleteTime`) appear as
+optional properties rather than being removed from the write shape. Treat them as server-owned when
+you build a create or update payload; the `x-aip-*`/`readOnly` enrichment documents which fields
+those are.
 {{< /callout >}}
 
 The generated barrel exports typed operations, models, and `provideApiConfiguration`, a one-line Angular provider that sets the client's base URL:
@@ -213,6 +228,12 @@ apx client publish \
 | `stable` | API shape is committed; breaking changes require a new `<line>` (e.g. `v2`) |
 
 Publish a new `--version` for each backwards-compatible change. For a breaking change, start a new line (`openapi/platform.data/orders/v2`) and deprecate the old one via `apx deprecate`.
+
+Two rules the version must satisfy, or `apx` rejects the release:
+
+- **Major matches the line.** An `.../v1` API takes `v1.x.x`; an `.../v2` API takes `v2.x.x`.
+- **Prerelease matches the lifecycle.** `beta`, `rc`, and `experimental` require a prerelease tag
+  (`v1.0.0-beta.1`); `stable` requires a plain version (`v1.0.0`).
 
 ## Next: host the client in a micro-frontend
 
