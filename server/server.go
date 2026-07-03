@@ -179,6 +179,12 @@ type Server struct {
 	// silent runtime N+1.
 	references   []reference.Reference
 	batchTargets map[string]struct{}
+	// externalTargets are reference target resource types served by ANOTHER
+	// process (split-microservice federation), declared via
+	// RecordExternalReferenceTarget. The gate treats them as resolvable elsewhere
+	// so a reference source deployed apart from its target still boots; the
+	// composition layer (for example a federationgql gateway) does the BatchGet.
+	externalTargets map[string]struct{}
 }
 
 // New validates cfg and constructs a Server. It builds the framework
@@ -423,7 +429,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	// build/registration error here — never a silent runtime per-row N+1 (D-4
 	// backstop; local codegen catches the same miss earlier, this catches cross-repo
 	// version skew it cannot see).
-	if err := AssertReferenceTargets(s.batchTargets, s.references); err != nil {
+	if err := AssertReferenceTargets(s.satisfiableTargets(), s.references); err != nil {
 		return err
 	}
 
@@ -676,6 +682,41 @@ func (s *Server) RecordBatchTarget(resourceType string) {
 		s.batchTargets = map[string]struct{}{}
 	}
 	s.batchTargets[resourceType] = struct{}{}
+}
+
+// RecordExternalReferenceTarget declares that resourceType is a reference target
+// served by ANOTHER process — the split-microservice federation case, where this
+// service references a resource whose owning service (and its BatchGet<Target>)
+// runs in a different binary. The reference gate then treats the target as
+// resolvable elsewhere and does not require a local BatchGet, and the composition
+// layer (for example a federationgql gateway) does the actual batch fetch. Call
+// it after Register<Svc>WithRepository and before Serve, once per external target.
+//
+// Unlike [Server.RecordBatchTarget], this does NOT advertise a local BatchGet for
+// the type; it only tells the gate the target is batch-fetchable in another
+// process. Use RecordBatchTarget when THIS server serves BatchGet<Target>.
+func (s *Server) RecordExternalReferenceTarget(resourceType string) {
+	if s.externalTargets == nil {
+		s.externalTargets = map[string]struct{}{}
+	}
+	s.externalTargets[resourceType] = struct{}{}
+}
+
+// satisfiableTargets is the set of reference target types the gate accepts at
+// Serve: those served by a local BatchGet ([Server.RecordBatchTarget]) plus those
+// declared externally served ([Server.RecordExternalReferenceTarget]).
+func (s *Server) satisfiableTargets() map[string]struct{} {
+	if len(s.externalTargets) == 0 {
+		return s.batchTargets
+	}
+	merged := make(map[string]struct{}, len(s.batchTargets)+len(s.externalTargets))
+	for t := range s.batchTargets {
+		merged[t] = struct{}{}
+	}
+	for t := range s.externalTargets {
+		merged[t] = struct{}{}
+	}
+	return merged
 }
 
 // References returns the accumulated cross-service references (F041).
