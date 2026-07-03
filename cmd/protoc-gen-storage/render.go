@@ -1119,14 +1119,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	}
 	fmt.Fprintf(b, "\tm := toModel_%s(entity)\n", msg.MessageName)
 	if hasTenant {
-		// Stamp the tenant from context when the caller did not set it, so the
-		// resource is scoped to the authenticated account — matching the ent
-		// backend. The handler does not duplicate this (F029 D-4: tenant stamping
-		// is the repository's job).
-		b.WriteString("\tif m.AccountId == \"\" {\n")
-		b.WriteString("\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n")
-		b.WriteString("\t\t\tm.AccountId = tenantID\n")
-		b.WriteString("\t\t}\n")
+		// Stamp the tenant from context, OVERRIDING any client-supplied account_id, so
+		// the resource is always scoped to the authenticated caller's tenant. account_id
+		// is the IMMUTABLE tenant key: a caller must not be able to plant a row under
+		// another tenant's account_id on Create (the mirror of Update, which rejects any
+		// attempt to change it). The handler does not duplicate this (F029 D-4: tenant
+		// stamping is the repository's job). When the context carries no tenant
+		// (unscoped/dev, matching the tenantID == "" query guards), the caller-supplied
+		// value is left as-is.
+		b.WriteString("\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n")
+		b.WriteString("\t\tm.AccountId = tenantID\n")
 		b.WriteString("\t}\n")
 	}
 	if msgHasSecrets {

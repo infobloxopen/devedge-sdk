@@ -11,16 +11,16 @@ import (
 	"strconv"
 	"time"
 
-	"gorm.io/gorm"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 
-	"github.com/infobloxopen/devedge-sdk/persistence"
-	"github.com/infobloxopen/devedge-sdk/persistence/filter"
-	"github.com/infobloxopen/devedge-sdk/types"
-	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
+	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/persistence/filter"
+	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
 	"github.com/infobloxopen/devedge-sdk/secret"
+	"github.com/infobloxopen/devedge-sdk/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -226,10 +226,8 @@ func (r *APIKeyRepository) Create(ctx context.Context, entity *APIKey) (*APIKey,
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_APIKey(entity)
-	if m.AccountId == "" {
-		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
-			m.AccountId = tenantID
-		}
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		m.AccountId = tenantID
 	}
 	if entity.KeyValue != "" {
 		h, err := r.enc.Hash(ctx, entity.KeyValue)
@@ -671,10 +669,8 @@ func (r *APIKeySummaryRepository) Create(ctx context.Context, entity *APIKeySumm
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_APIKeySummary(entity)
-	if m.AccountId == "" {
-		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
-			m.AccountId = tenantID
-		}
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelAPIKeySummaryOnCreate != nil {

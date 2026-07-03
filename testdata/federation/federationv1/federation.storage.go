@@ -12,11 +12,11 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/infobloxopen/devedge-sdk/middleware"
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
-	"github.com/infobloxopen/devedge-sdk/middleware"
-	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -188,10 +188,8 @@ func (r *RegionRepository) Create(ctx context.Context, entity *Region) (*Region,
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Region(entity)
-	if m.AccountId == "" {
-		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
-			m.AccountId = tenantID
-		}
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelRegionOnCreate != nil {
@@ -577,10 +575,8 @@ func (r *AssetRepository) Create(ctx context.Context, entity *Asset) (*Asset, er
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Asset(entity)
-	if m.AccountId == "" {
-		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
-			m.AccountId = tenantID
-		}
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelAssetOnCreate != nil {

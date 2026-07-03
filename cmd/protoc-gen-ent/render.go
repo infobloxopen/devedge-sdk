@@ -1294,8 +1294,14 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		b.WriteString("\t\t\tif entity.GetId() == \"\" {\n\t\t\t\treturn nil, status.Error(codes.InvalidArgument, \"id is required\")\n\t\t\t}\n")
 	}
 	if ownerTenant {
+		// Stamp the tenant from context, OVERRIDING any client-supplied account_id, so
+		// the row is always scoped to the authenticated caller's tenant. account_id is
+		// the IMMUTABLE tenant key: a caller must not be able to plant a row under another
+		// tenant's account_id on Create (the mirror of Update, which never Sets it). When
+		// the context carries no tenant (unscoped/dev, matching the tenantID == "" query
+		// guards), the caller-supplied value is left as-is.
 		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\t\t\tif entity.GetAccountId() == \"\" && tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")
+		b.WriteString("\t\t\tif tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")
 	}
 	// Build the create setter chain: id, account_id (if tenant), then writable.
 	b.WriteString("\t\t\tb := " + txClientVar + "(ctx).Create().\n")
