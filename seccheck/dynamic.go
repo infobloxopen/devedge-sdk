@@ -148,6 +148,68 @@ func AssertCrossAccountIsolation(ctx context.Context, cfg IsolationConfig) []Fin
 	return findings
 }
 
+// SpoofedTenantConfig describes a create-with-spoofed-tenant isolation test.
+type SpoofedTenantConfig struct {
+	// Principal is the authenticated caller — the tenant the row must end up under.
+	Principal string
+	// SpoofedAccountID is a different tenant the caller tries to plant the row under
+	// by supplying account_id in the create body. It must not win.
+	SpoofedAccountID string
+	// CreateFn creates a resource as the principal in ctx while supplying
+	// spoofedAccountID as the resource's account_id in the request body. It returns
+	// the new resource ID. A correct backend ignores/overrides the supplied value and
+	// scopes the row to the caller's tenant.
+	CreateFn func(ctx context.Context, spoofedAccountID string) (id string, err error)
+	// ReadFn reads the resource by ID as the principal in ctx. It must return nil when
+	// the resource is visible to that principal and codes.NotFound when it is not.
+	ReadFn func(ctx context.Context, id string) error
+}
+
+// AssertNoCrossTenantCreate verifies that a Create cannot plant a resource under
+// an arbitrary account_id. It creates a resource as Principal while supplying
+// SpoofedAccountID in the body, then asserts the row is owned by Principal (the
+// framework overrode the supplied account_id from the tenant context) and is
+// invisible to SpoofedAccountID. This is the Create-side mirror of the Update guard
+// that rejects changing the tenant key; a client-supplied account_id winning on
+// Create is a full tenant-isolation bypass on write.
+func AssertNoCrossTenantCreate(ctx context.Context, cfg SpoofedTenantConfig) []Finding {
+	ctxCaller := metadata.AppendToOutgoingContext(ctx, "account-id", cfg.Principal)
+	ctxSpoofed := metadata.AppendToOutgoingContext(ctx, "account-id", cfg.SpoofedAccountID)
+
+	id, err := cfg.CreateFn(ctxCaller, cfg.SpoofedAccountID)
+	if err != nil {
+		return []Finding{{
+			Method:   "(create-spoofed)",
+			Severity: Warning,
+			Message:  fmt.Sprintf("CreateFn returned error: %v", err),
+		}}
+	}
+
+	var findings []Finding
+	// The authenticated caller must own (and therefore see) the row it created.
+	if err := cfg.ReadFn(ctxCaller, id); err != nil {
+		findings = append(findings, Finding{
+			Method:   "(read-owner)",
+			Severity: Error,
+			Message: fmt.Sprintf(
+				"caller %q cannot read the resource it created (id=%s): %v; a client-supplied account_id (%q) overrode the tenant context on Create",
+				cfg.Principal, id, err, cfg.SpoofedAccountID),
+		})
+	}
+	// The spoofed tenant must NOT see the row: if it does, Create honored the
+	// client-supplied account_id and planted the row under another tenant.
+	if err := cfg.ReadFn(ctxSpoofed, id); status.Code(err) != codes.NotFound {
+		findings = append(findings, Finding{
+			Method:   "(read-spoofed)",
+			Severity: Error,
+			Message: fmt.Sprintf(
+				"spoofed tenant %q can read a resource created by %q (id=%s): expected NotFound, got %v; Create honored a client-supplied account_id, a tenant-isolation bypass",
+				cfg.SpoofedAccountID, cfg.Principal, id, status.Code(err)),
+		})
+	}
+	return findings
+}
+
 // ErrorTrigger pairs a method name with a function that should produce an error.
 type ErrorTrigger struct {
 	Method string

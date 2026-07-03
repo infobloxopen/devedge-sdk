@@ -32,7 +32,7 @@ func NewGroupEntRepository(client *ent.Client, opts ...persistence.RepoOption) p
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if entity.GetAccountId() == "" && tenantID != "" {
+			if tenantID != "" {
 				entity.AccountId = tenantID
 			}
 			b := groupClient(ctx).Create().

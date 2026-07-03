@@ -10,13 +10,13 @@ import (
 	"strconv"
 	"time"
 
-	"gorm.io/gorm"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 
+	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/persistence/resourcename"
-	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/secret"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

@@ -10,13 +10,13 @@ import (
 	"strconv"
 	"time"
 
-	"gorm.io/gorm"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 
-	"github.com/infobloxopen/devedge-sdk/persistence"
-	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
+	"github.com/infobloxopen/devedge-sdk/persistence"
+	"github.com/infobloxopen/devedge-sdk/persistence/filter"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -183,10 +183,8 @@ func (r *FleetRepository) Create(ctx context.Context, entity *Fleet) (*Fleet, er
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Fleet(entity)
-	if m.AccountId == "" {
-		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
-			m.AccountId = tenantID
-		}
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
 	if ToModelFleetOnCreate != nil {
@@ -601,10 +599,8 @@ func (r *VehicleRepository) Create(ctx context.Context, entity *Vehicle) (*Vehic
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Vehicle(entity)
-	if m.AccountId == "" {
-		if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
-			m.AccountId = tenantID
-		}
+	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+		m.AccountId = tenantID
 	}
 	if ToModelVehicleOnCreate != nil {
 		ToModelVehicleOnCreate(entity, m)

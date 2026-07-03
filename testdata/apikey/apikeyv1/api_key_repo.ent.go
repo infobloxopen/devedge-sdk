@@ -38,7 +38,7 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if entity.GetAccountId() == "" && tenantID != "" {
+			if tenantID != "" {
 				entity.AccountId = tenantID
 			}
 			b := apikeyClient(ctx).Create().

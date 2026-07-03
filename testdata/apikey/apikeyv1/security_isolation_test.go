@@ -35,8 +35,24 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/apikeyv1"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// tenantFromOutgoingMD recovers the account-id that seccheck decorated the
+// context with (via metadata.AppendToOutgoingContext), so a direct-repo test can
+// translate it into the middleware.WithTenantID value the repository reads —
+// exactly what the TenantIDUnary interceptor does at the transport boundary.
+func tenantFromOutgoingMD(ctx context.Context) string {
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return ""
+	}
+	if v := md.Get("account-id"); len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
 
 // ----------------------------------------------------------------------------
 // Minimal inline SQLite GORM dialector
@@ -413,6 +429,96 @@ func TestEntRepository_Undelete_RoundTrip(t *testing.T) {
 	if _, err := repo.Get(ctx, "ent-undelete-1"); err != nil {
 		t.Fatalf("Get after Undelete: %v", err)
 	}
+}
+
+// ----------------------------------------------------------------------------
+// TestSecurity_NoCrossTenantCreate_Ent / _GORM (finding 074 regression)
+//
+// A caller authenticated as alice supplies account_id="bob" in the create body.
+// The repository must override account_id from the tenant context, so the row
+// stays owned by alice (visible to alice, invisible to bob). A client-supplied
+// account_id winning on Create is a full tenant-isolation bypass on write.
+// Both tests expect ZERO seccheck findings.
+// ----------------------------------------------------------------------------
+
+func TestSecurity_NoCrossTenantCreate_Ent(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:sec_ent_spoof?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyEntRepository(client, enc)
+
+	cfg := seccheck.SpoofedTenantConfig{
+		Principal:        "alice",
+		SpoofedAccountID: "bob",
+		CreateFn: func(ctx context.Context, spoofed string) (string, error) {
+			callerCtx := middleware.WithTenantID(ctx, tenantFromOutgoingMD(ctx))
+			k := &apikeyv1.APIKey{
+				Id:        "sec-ent-spoof-1",
+				Name:      "spoofed create",
+				AccountId: spoofed, // attacker plants bob's account_id in the body
+				KeyValue:  "sk_spoof_ent",
+			}
+			created, err := repo.Create(callerCtx, k)
+			if err != nil {
+				return "", err
+			}
+			return created.Id, nil
+		},
+		ReadFn: func(ctx context.Context, id string) error {
+			readCtx := middleware.WithTenantID(ctx, tenantFromOutgoingMD(ctx))
+			_, err := repo.Get(readCtx, id)
+			return mapToNotFound(err)
+		},
+	}
+
+	findings := seccheck.AssertNoCrossTenantCreate(context.Background(), cfg)
+	seccheck.RunT(t, findings)
+}
+
+func TestSecurity_NoCrossTenantCreate_GORM(t *testing.T) {
+	db, err := gorm.Open(openTestSQLite("file:sec_gorm_spoof?mode=memory&cache=shared"), &gorm.Config{
+		Logger: logger.Discard,
+	})
+	if err != nil {
+		t.Fatalf("open gorm db: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	if err := db.AutoMigrate(&apikeyv1.APIKeyModel{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+
+	enc := secret.NewDev(make([]byte, 32))
+	repo := apikeyv1.NewAPIKeyRepository(db, enc)
+
+	cfg := seccheck.SpoofedTenantConfig{
+		Principal:        "alice",
+		SpoofedAccountID: "bob",
+		CreateFn: func(ctx context.Context, spoofed string) (string, error) {
+			callerCtx := middleware.WithTenantID(ctx, tenantFromOutgoingMD(ctx))
+			k := &apikeyv1.APIKey{
+				Id:        "sec-gorm-spoof-1",
+				Name:      "spoofed create",
+				AccountId: spoofed, // attacker plants bob's account_id in the body
+				KeyValue:  "sk_spoof_gorm",
+			}
+			created, err := repo.Create(callerCtx, k)
+			if err != nil {
+				return "", err
+			}
+			return created.Id, nil
+		},
+		ReadFn: func(ctx context.Context, id string) error {
+			readCtx := middleware.WithTenantID(ctx, tenantFromOutgoingMD(ctx))
+			_, err := repo.Get(readCtx, id)
+			return mapToNotFound(err)
+		},
+	}
+
+	findings := seccheck.AssertNoCrossTenantCreate(context.Background(), cfg)
+	seccheck.RunT(t, findings)
 }
 
 // ----------------------------------------------------------------------------
