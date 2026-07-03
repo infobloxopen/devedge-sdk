@@ -35,7 +35,7 @@ const fallbackSDKVersion = "v0.51.0"
 // releases in lock-step with the SDK, so this tracks the `de` tag that carries
 // the same build/codegen behavior as this SDK. Pinned (never `@latest`) so a new
 // project's build tooling is reproducible; bump it with each coordinated release.
-const deInstallVersion = "v0.7.0"
+const deInstallVersion = "v0.12.0"
 
 // Pinned dependency versions for the generated go.mod. These mirror the versions
 // the SDK's own testdata modules build against; `go mod tidy` reconciles indirects.
