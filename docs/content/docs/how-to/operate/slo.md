@@ -132,6 +132,53 @@ throughput, or durability, add the indicator by hand and pick the metric it meas
 [`define-slo`](../../../concepts/reliability/) skill walks through choosing the SLI type and writing a
 good ratio. Keep the client-fault exclusion when you override the availability denominator.
 
+## Author a business or journey SLO
+
+The derived objectives cover a single service. A **journey SLO** (Layer 2) states the reliability of a
+critical user journey that spans several services — checkout, sign-up, a data-import flow — and it is
+product-owned. It is a distinct layer from the per-service objectives, with a distinct owner and a
+distinct consequence.
+
+Author a journey SLO in a **separate file** from the derived service `slo.yaml`. The separate file is
+the boundary between a business objective and the raw per-service telemetry: a service team refines
+`slo.yaml`; product owns `journeys/*.slo.yaml`.
+
+A journey SLI uses a **raw-query metric source** instead of the derived otel-rpc source. Set the
+`query` field on the `good` and `total` sides to compose across service moats — typically the product
+of each participating service's availability, read from that service's error-ratio recording rule:
+
+```yaml
+kind: SLI
+metadata:
+  name: checkout-availability
+spec:
+  ratioMetric:
+    counter: false
+    good:
+      type: devedge/journey
+      query: (1 - slo:sli_error:ratio_rate$window{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate$window{slo="orderd-write-availability", service="orderd"})
+    total:
+      type: devedge/journey
+      query: "1"
+```
+
+The `$window` token is replaced with each burn-rate window (`5m`, `1h`, ...) when the rules render, so
+the composed objective gets the same multi-window multi-burn-rate alerting as a service SLO. A raw
+query with no `$window` token is used verbatim at every window. The `query` wins over any typed
+source; a ratio side with neither a query nor a typed signal fails the render, naming the SLO.
+
+A journey SLO carries the same requirements as any objective: mark it `devedge.io/layer: journey`, give
+it a 28-day window, reference a burn-rate `AlertPolicy`, and **write the error-budget policy**. `de slo
+lint` validates it and `de slo render` projects it exactly like a service SLO. The latency-bucket-
+boundary check does not apply to a raw-query SLI. A complete example is in the repository at
+`slo/testdata/checkout.journey.slo.yaml`.
+
+The three layers stay separate: a **signal** (Layer 0) diagnoses and has no target; a **service SLO**
+(Layer 1) is derived from one service's contract; a **journey SLO** (Layer 2) composes several
+services' indicators into a product objective. Keeping them in distinct declaration kinds — and, for
+journeys, a distinct file — is what stops a monitoring signal from being mistaken for a business
+objective.
+
 ## The metric names, and a semconv bump
 
 The generated queries track the instruments this SDK emits by default: the new OpenTelemetry semantic

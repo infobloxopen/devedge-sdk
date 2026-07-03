@@ -1,0 +1,100 @@
+{
+  "title": "checkout SLOs",
+  "uid": "checkout-slo",
+  "editable": true,
+  "schemaVersion": 39,
+  "tags": [
+    "devedge",
+    "slo"
+  ],
+  "time": {
+    "from": "now-28d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Data source"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "checkout-availability — error rate (1h) vs budget",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "1 - (((1 - slo:sli_error:ratio_rate1h{slo=\"cartd-read-availability\", service=\"cartd\"}) * (1 - slo:sli_error:ratio_rate1h{slo=\"orderd-write-availability\", service=\"orderd\"})) / (1))",
+          "legendFormat": "error rate (1h)",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - 0.995)",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "checkout-availability — error-budget burndown (28d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "1 - ((1 - (((1 - slo:sli_error:ratio_rate28d{slo=\"cartd-read-availability\", service=\"cartd\"}) * (1 - slo:sli_error:ratio_rate28d{slo=\"orderd-write-availability\", service=\"orderd\"})) / (1))) / (1 - 0.995))",
+          "legendFormat": "budget remaining",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "checkout-availability — burn rate (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "(1 - (((1 - slo:sli_error:ratio_rate1h{slo=\"cartd-read-availability\", service=\"cartd\"}) * (1 - slo:sli_error:ratio_rate1h{slo=\"orderd-write-availability\", service=\"orderd\"})) / (1))) / (1 - 0.995)",
+          "legendFormat": "burn rate",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}

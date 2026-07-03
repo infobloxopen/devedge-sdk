@@ -1,0 +1,103 @@
+apiVersion: openslo/v1
+kind: Service
+metadata:
+    name: checkout
+spec:
+    description: The checkout critical user journey, composed across the cartd and orderd services.
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+    name: checkout-availability
+spec:
+    description: |-
+        Checkout journey availability: the probability that a checkout succeeds end to end,
+        composed as the product of the cartd and orderd service availabilities. Each service's
+        availability is 1 minus its own error-ratio recording rule, so the journey resolves across
+        both service moats. The $window token is filled with each burn-rate window at render time.
+    ratioMetric:
+        counter: false
+        good:
+            type: devedge/journey
+            query: (1 - slo:sli_error:ratio_rate$window{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate$window{slo="orderd-write-availability", service="orderd"})
+        total:
+            type: devedge/journey
+            query: "1"
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+    name: checkout-availability
+    labels:
+        devedge.io/sli-type: availability
+        devedge.io/service: checkout
+    annotations:
+        devedge.io/error-budget-policy: When the checkout budget is spent, freeze feature releases across cartd and orderd until the budget recovers over a full window, and page the checkout on-call.
+        devedge.io/layer: journey
+spec:
+    description: Checkout journey availability objective (product-owned, tied to the checkout SLA).
+    service: checkout
+    indicatorRef: checkout-availability
+    budgetingMethod: Occurrences
+    timeWindow:
+        - duration: 28d
+          isRolling: true
+    objectives:
+        - displayName: checkout availability
+          target: 0.995
+    alertPolicies:
+        - checkout-burn-rate
+---
+apiVersion: openslo/v1
+kind: AlertPolicy
+metadata:
+    name: checkout-burn-rate
+spec:
+    description: Multi-window multi-burn-rate error-budget policy for the checkout journey (SRE Workbook ch. 5).
+    alertWhenBreaching: true
+    conditions:
+        - conditionRef: checkout-burn-rate-fast
+        - conditionRef: checkout-burn-rate-medium
+        - conditionRef: checkout-burn-rate-slow
+---
+apiVersion: openslo/v1
+kind: AlertCondition
+metadata:
+    name: checkout-burn-rate-fast
+spec:
+    description: Burn rate 14.4 over 1h and 5m.
+    severity: page
+    condition:
+        kind: burnrate
+        op: gt
+        threshold: 14.4
+        lookbackWindow: 1h
+        shortWindow: 5m
+---
+apiVersion: openslo/v1
+kind: AlertCondition
+metadata:
+    name: checkout-burn-rate-medium
+spec:
+    description: Burn rate 6 over 6h and 30m.
+    severity: page
+    condition:
+        kind: burnrate
+        op: gt
+        threshold: 6
+        lookbackWindow: 6h
+        shortWindow: 30m
+---
+apiVersion: openslo/v1
+kind: AlertCondition
+metadata:
+    name: checkout-burn-rate-slow
+spec:
+    description: Burn rate 1 over 3d and 6h.
+    severity: ticket
+    condition:
+        kind: burnrate
+        op: gt
+        threshold: 1
+        lookbackWindow: 3d
+        shortWindow: 6h

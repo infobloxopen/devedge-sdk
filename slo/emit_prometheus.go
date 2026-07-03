@@ -76,9 +76,13 @@ func emitPrometheus(doc *Document, naming MetricNaming) ([]Rendered, error) {
 		// Recording rules: one error-ratio series per distinct window across the
 		// SLO's burn-rate conditions.
 		for _, w := range conditionWindows(conds) {
+			expr, err := errorRatioExpr(naming, sli.Spec.RatioMetric, w)
+			if err != nil {
+				return nil, fmt.Errorf("slo: emit prometheus: SLO %q: %w", s.Metadata.Name, err)
+			}
 			recGroup.Rules = append(recGroup.Rules, promRuleEntry{
 				Record: recordName(w),
-				Expr:   errorRatioExpr(naming, sli.Spec.RatioMetric, w),
+				Expr:   expr,
 				Labels: recordLabels(s),
 			})
 		}
@@ -122,11 +126,34 @@ func recordLabels(s *SLO) map[string]string {
 // errorRatioExpr builds `1 - (good / total)` at a window — the error fraction the
 // burn-rate alert compares to the budget. Uniform across availability and
 // latency (for latency, good = under-threshold, so 1-good/total = the fraction
-// over the threshold).
-func errorRatioExpr(naming MetricNaming, rm *RatioMetric, window string) string {
-	good := rateExpr(naming, rm.Good.Spec, window)
-	total := rateExpr(naming, rm.Total.Spec, window)
-	return fmt.Sprintf("1 - (%s / %s)", good, total)
+// over the threshold) and across derived service SLIs and hand-authored
+// journey SLIs (raw queries).
+func errorRatioExpr(naming MetricNaming, rm *RatioMetric, window string) (string, error) {
+	good, err := sideExpr(naming, rm.Good, window)
+	if err != nil {
+		return "", fmt.Errorf("good side: %w", err)
+	}
+	total, err := sideExpr(naming, rm.Total, window)
+	if err != nil {
+		return "", fmt.Errorf("total side: %w", err)
+	}
+	return fmt.Sprintf("1 - (%s / %s)", good, total), nil
+}
+
+// sideExpr builds the good/total expression for one side of a ratio. Precedence:
+// an explicit raw Query wins (used directly, with the window token substituted —
+// this is the Layer-2 journey path); else a typed otel-rpc source is built into a
+// windowed sum(rate(...)); else it fails loud.
+func sideExpr(naming MetricNaming, ms MetricSource, window string) (string, error) {
+	if q := strings.TrimSpace(ms.Query); q != "" {
+		// Parenthesize a raw query so a compound expression composes safely under
+		// PromQL operator precedence when placed as good / total.
+		return "(" + strings.ReplaceAll(q, windowToken, window) + ")", nil
+	}
+	if ms.Type == MetricSourceTypeOTel && ms.Spec.Signal != "" {
+		return rateExpr(naming, ms.Spec, window), nil
+	}
+	return "", fmt.Errorf("metric source has neither a raw query nor a typed %s signal", MetricSourceTypeOTel)
 }
 
 // rateExpr builds a windowed sum(rate(...)) over the normalized series for one
