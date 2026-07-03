@@ -1,0 +1,285 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+    name: widget-service-slo-rules
+    labels:
+        app.kubernetes.io/managed-by: devedge
+        app.kubernetes.io/part-of: devedge-slo
+spec:
+    groups:
+        - name: devedge-slo-sli-recordings
+          rules:
+            - record: slo:sli_error:ratio_rate5m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[5m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[5m])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-read-availability
+            - record: slo:sli_error:ratio_rate30m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[30m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[30m])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-read-availability
+            - record: slo:sli_error:ratio_rate1h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[1h])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-read-availability
+            - record: slo:sli_error:ratio_rate6h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[6h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[6h])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-read-availability
+            - record: slo:sli_error:ratio_rate3d
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[3d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[3d])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-read-availability
+            - record: slo:sli_error:ratio_rate5m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.25"}[5m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[5m])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-read-latency
+            - record: slo:sli_error:ratio_rate30m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.25"}[30m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[30m])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-read-latency
+            - record: slo:sli_error:ratio_rate1h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.25"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[1h])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-read-latency
+            - record: slo:sli_error:ratio_rate6h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.25"}[6h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[6h])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-read-latency
+            - record: slo:sli_error:ratio_rate3d
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.25"}[3d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"BatchGetWidgets|GetWidget|ListWidgets", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[3d])))
+              labels:
+                method_class: read
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-read-latency
+            - record: slo:sli_error:ratio_rate5m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[5m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[5m])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-write-availability
+            - record: slo:sli_error:ratio_rate30m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[30m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[30m])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-write-availability
+            - record: slo:sli_error:ratio_rate1h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[1h])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-write-availability
+            - record: slo:sli_error:ratio_rate6h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[6h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[6h])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-write-availability
+            - record: slo:sli_error:ratio_rate3d
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS"}[3d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[3d])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: availability
+                slo: widget-service-write-availability
+            - record: slo:sli_error:ratio_rate5m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.5"}[5m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[5m])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-write-latency
+            - record: slo:sli_error:ratio_rate30m
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.5"}[30m])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[30m])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-write-latency
+            - record: slo:sli_error:ratio_rate1h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.5"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[1h])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-write-latency
+            - record: slo:sli_error:ratio_rate6h
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.5"}[6h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[6h])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-write-latency
+            - record: slo:sli_error:ratio_rate3d
+              expr: 1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED", le="0.5"}[3d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service="toy.v1.WidgetService", rpc_method=~"CreateWidget|DeleteWidget|UpdateWidget", rpc_response_status_code!~"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED"}[3d])))
+              labels:
+                method_class: write
+                service: widget-service
+                sli_type: latency
+                slo: widget-service-write-latency
+        - name: devedge-slo-burn-rate-alerts
+          rules:
+            - alert: WidgetServiceReadAvailabilityErrorBudgetBurnFast
+              expr: slo:sli_error:ratio_rate1h{slo="widget-service-read-availability"} > (14.4 * (1 - 0.999)) and slo:sli_error:ratio_rate5m{slo="widget-service-read-availability"} > (14.4 * (1 - 0.999))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-read-availability
+              annotations:
+                description: SLO "widget-service-read-availability" is burning its error budget at >14.4× over 1h and 5m. Objective 0.999.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-read-availability burning error budget (14.4 burn over 1h & 5m)
+            - alert: WidgetServiceReadAvailabilityErrorBudgetBurnMedium
+              expr: slo:sli_error:ratio_rate6h{slo="widget-service-read-availability"} > (6 * (1 - 0.999)) and slo:sli_error:ratio_rate30m{slo="widget-service-read-availability"} > (6 * (1 - 0.999))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-read-availability
+              annotations:
+                description: SLO "widget-service-read-availability" is burning its error budget at >6× over 6h and 30m. Objective 0.999.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-read-availability burning error budget (6 burn over 6h & 30m)
+            - alert: WidgetServiceReadAvailabilityErrorBudgetBurnSlow
+              expr: slo:sli_error:ratio_rate3d{slo="widget-service-read-availability"} > (1 * (1 - 0.999)) and slo:sli_error:ratio_rate6h{slo="widget-service-read-availability"} > (1 * (1 - 0.999))
+              for: 15m
+              labels:
+                service: widget-service
+                severity: ticket
+                slo: widget-service-read-availability
+              annotations:
+                description: SLO "widget-service-read-availability" is burning its error budget at >1× over 3d and 6h. Objective 0.999.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-read-availability burning error budget (1 burn over 3d & 6h)
+            - alert: WidgetServiceReadLatencyErrorBudgetBurnFast
+              expr: slo:sli_error:ratio_rate1h{slo="widget-service-read-latency"} > (14.4 * (1 - 0.99)) and slo:sli_error:ratio_rate5m{slo="widget-service-read-latency"} > (14.4 * (1 - 0.99))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-read-latency
+              annotations:
+                description: SLO "widget-service-read-latency" is burning its error budget at >14.4× over 1h and 5m. Objective 0.99.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-read-latency burning error budget (14.4 burn over 1h & 5m)
+            - alert: WidgetServiceReadLatencyErrorBudgetBurnMedium
+              expr: slo:sli_error:ratio_rate6h{slo="widget-service-read-latency"} > (6 * (1 - 0.99)) and slo:sli_error:ratio_rate30m{slo="widget-service-read-latency"} > (6 * (1 - 0.99))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-read-latency
+              annotations:
+                description: SLO "widget-service-read-latency" is burning its error budget at >6× over 6h and 30m. Objective 0.99.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-read-latency burning error budget (6 burn over 6h & 30m)
+            - alert: WidgetServiceReadLatencyErrorBudgetBurnSlow
+              expr: slo:sli_error:ratio_rate3d{slo="widget-service-read-latency"} > (1 * (1 - 0.99)) and slo:sli_error:ratio_rate6h{slo="widget-service-read-latency"} > (1 * (1 - 0.99))
+              for: 15m
+              labels:
+                service: widget-service
+                severity: ticket
+                slo: widget-service-read-latency
+              annotations:
+                description: SLO "widget-service-read-latency" is burning its error budget at >1× over 3d and 6h. Objective 0.99.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-read-latency burning error budget (1 burn over 3d & 6h)
+            - alert: WidgetServiceWriteAvailabilityErrorBudgetBurnFast
+              expr: slo:sli_error:ratio_rate1h{slo="widget-service-write-availability"} > (14.4 * (1 - 0.999)) and slo:sli_error:ratio_rate5m{slo="widget-service-write-availability"} > (14.4 * (1 - 0.999))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-write-availability
+              annotations:
+                description: SLO "widget-service-write-availability" is burning its error budget at >14.4× over 1h and 5m. Objective 0.999.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-write-availability burning error budget (14.4 burn over 1h & 5m)
+            - alert: WidgetServiceWriteAvailabilityErrorBudgetBurnMedium
+              expr: slo:sli_error:ratio_rate6h{slo="widget-service-write-availability"} > (6 * (1 - 0.999)) and slo:sli_error:ratio_rate30m{slo="widget-service-write-availability"} > (6 * (1 - 0.999))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-write-availability
+              annotations:
+                description: SLO "widget-service-write-availability" is burning its error budget at >6× over 6h and 30m. Objective 0.999.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-write-availability burning error budget (6 burn over 6h & 30m)
+            - alert: WidgetServiceWriteAvailabilityErrorBudgetBurnSlow
+              expr: slo:sli_error:ratio_rate3d{slo="widget-service-write-availability"} > (1 * (1 - 0.999)) and slo:sli_error:ratio_rate6h{slo="widget-service-write-availability"} > (1 * (1 - 0.999))
+              for: 15m
+              labels:
+                service: widget-service
+                severity: ticket
+                slo: widget-service-write-availability
+              annotations:
+                description: SLO "widget-service-write-availability" is burning its error budget at >1× over 3d and 6h. Objective 0.999.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-write-availability burning error budget (1 burn over 3d & 6h)
+            - alert: WidgetServiceWriteLatencyErrorBudgetBurnFast
+              expr: slo:sli_error:ratio_rate1h{slo="widget-service-write-latency"} > (14.4 * (1 - 0.99)) and slo:sli_error:ratio_rate5m{slo="widget-service-write-latency"} > (14.4 * (1 - 0.99))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-write-latency
+              annotations:
+                description: SLO "widget-service-write-latency" is burning its error budget at >14.4× over 1h and 5m. Objective 0.99.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-write-latency burning error budget (14.4 burn over 1h & 5m)
+            - alert: WidgetServiceWriteLatencyErrorBudgetBurnMedium
+              expr: slo:sli_error:ratio_rate6h{slo="widget-service-write-latency"} > (6 * (1 - 0.99)) and slo:sli_error:ratio_rate30m{slo="widget-service-write-latency"} > (6 * (1 - 0.99))
+              for: 2m
+              labels:
+                service: widget-service
+                severity: page
+                slo: widget-service-write-latency
+              annotations:
+                description: SLO "widget-service-write-latency" is burning its error budget at >6× over 6h and 30m. Objective 0.99.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-write-latency burning error budget (6 burn over 6h & 30m)
+            - alert: WidgetServiceWriteLatencyErrorBudgetBurnSlow
+              expr: slo:sli_error:ratio_rate3d{slo="widget-service-write-latency"} > (1 * (1 - 0.99)) and slo:sli_error:ratio_rate6h{slo="widget-service-write-latency"} > (1 * (1 - 0.99))
+              for: 15m
+              labels:
+                service: widget-service
+                severity: ticket
+                slo: widget-service-write-latency
+              annotations:
+                description: SLO "widget-service-write-latency" is burning its error budget at >1× over 3d and 6h. Objective 0.99.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: widget-service-write-latency burning error budget (1 burn over 3d & 6h)

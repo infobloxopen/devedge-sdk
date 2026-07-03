@@ -20,7 +20,20 @@
 # ever missing (a checkout before `de sync` ran), run `de sync` to (re)write it.
 -include .devedge/make/devedge.mk
 
-.PHONY: run api-lint api-breaking api-release
+.PHONY: run api-lint api-breaking api-release slo
+
+# slo regenerates slo.yaml (the service's reliability targets, WS-025) from the
+# enriched OpenAPI, picking up any custom methods beyond the standard CRUD. The
+# scaffold already ships a GOOD default slo.yaml (derived from the resource's AIP
+# methods: good/valid availability + latency, a mandatory error-budget policy, a
+# 28d window, all marked un-calibrated), so this is only needed after you add
+# custom methods. `de` pins the generator to this project's SDK version (hermetic).
+# Then lint it (the classifier rejects a signal-declared-as-an-SLI) and, to deploy
+# the burn-rate rules, render + set monitoring.enabled in your values overlay:
+#     de slo lint slo.yaml
+#     de slo render --target prometheus --in slo.yaml --out deploy/prometheus
+slo:
+	de slo generate
 
 # Run the service locally. Observability is on by default behind the OTel seam:
 # export the standard OTEL_* env to ship traces + RED metrics to a collector (no

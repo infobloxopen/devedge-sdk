@@ -96,3 +96,30 @@ securityContext: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Monitoring (WS-025): the service's SLO burn-rate rules + an optional scrape
+# target. Both are OFF by default so existing installs are unchanged; enable them
+# per environment once your cluster runs the Prometheus Operator CRDs (or Cortex
+# ruler for the rules).
+monitoring:
+  # enabled renders a PrometheusRule with the SLO recording + multi-window
+  # multi-burn-rate rules. It renders only when groups (below) is non-empty.
+  enabled: false
+  prometheusRule:
+    # labels for ruler discovery (e.g. release: kube-prometheus-stack, or the
+    # label your Cortex ruler selects on).
+    labels: {}
+    # groups is the .spec.groups of a generated PrometheusRule. Produce it with
+    #   de slo render --target prometheus --in slo.yaml --out deploy/prometheus
+    # then paste the file's spec.groups here to ship the SLO rules with the chart.
+    groups: []
+
+serviceMonitor:
+  # enabled renders a Prometheus-Operator ServiceMonitor. NOT needed on the SDK
+  # default Alloy→Cortex OTLP-push path; use it only if you additionally expose a
+  # Prometheus /metrics endpoint to be scraped.
+  enabled: false
+  path: /metrics
+  port: http
+  interval: 30s
+  labels: {}
