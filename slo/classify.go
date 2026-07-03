@@ -144,33 +144,59 @@ func Classify(c IndicatorCandidate) (Category, Findings) {
 	return cat, fs
 }
 
-// Lint validates an OpenSLO Document and runs the classifier over every SLI/SLO.
+// Lint validates an OpenSLO Document and runs the classifier over every SLI/SLO
+// using the default gRPC metric naming (its default latency bucket boundaries).
 // It returns structured findings; an error-severity finding fails `slogen lint`.
 func Lint(doc *Document) Findings {
+	return LintWithConfig(doc, DefaultGRPCNaming())
+}
+
+// LintWithConfig is Lint with an explicit MetricNaming, so a service that
+// customizes its histogram buckets can validate its latency thresholds against
+// its own bucket boundaries (MetricNaming.LatencyBucketBoundaries).
+func LintWithConfig(doc *Document, naming MetricNaming) Findings {
 	var fs Findings
 
 	// Every SLI (standalone or inline) is checked for a signal-as-SLI category
-	// error and cause-based indicators.
+	// error, cause-based indicators, and a latency threshold that is not a
+	// histogram bucket boundary (a silently non-firing alert).
 	checkSLI := func(sli *SLI) {
 		// Prefer the metric identifiers over the SLI name; report at most one
 		// saturation error and one cause-based warning per SLI.
 		ids := sliMetricIdentifiers(sli)
+		saturation := false
 		for _, id := range ids {
 			if IsSaturationSignal(id) {
 				fs = append(fs, Finding{
 					Severity: SeverityError, Object: sli.Metadata.Name, Kind: "SLI",
 					Message: fmt.Sprintf("SLI %q measures %q, which is a Layer-0 signal (resource/saturation), not an objective. Objectives are user-visible symptoms (availability/latency); measure resource pressure as a signal with no target.", sli.Metadata.Name, id),
 				})
-				return
+				saturation = true
+				break
 			}
 		}
-		for _, id := range ids {
-			if isCauseBased(id) {
+		if !saturation {
+			for _, id := range ids {
+				if isCauseBased(id) {
+					fs = append(fs, Finding{
+						Severity: SeverityWarn, Object: sli.Metadata.Name, Kind: "SLI",
+						Message: fmt.Sprintf("SLI %q measures %q, which looks cause-based. Prefer a symptom users feel; measure causes as Layer-0 signals.", sli.Metadata.Name, id),
+					})
+					break
+				}
+			}
+		}
+		// Latency threshold must be an actual histogram bucket boundary, or the
+		// emitter's le="<threshold>" matcher selects no series and the burn-rate
+		// alert silently never fires.
+		if rm := sli.Spec.RatioMetric; rm != nil {
+			g := rm.Good.Spec
+			if (g.SLIType == SLITypeLatency || g.LatencyThresholdSeconds > 0) && g.LatencyThresholdSeconds > 0 && !naming.isBucketBoundary(g.LatencyThresholdSeconds) {
 				fs = append(fs, Finding{
-					Severity: SeverityWarn, Object: sli.Metadata.Name, Kind: "SLI",
-					Message: fmt.Sprintf("SLI %q measures %q, which looks cause-based. Prefer a symptom users feel; measure causes as Layer-0 signals.", sli.Metadata.Name, id),
+					Severity: SeverityError, Object: sli.Metadata.Name, Kind: "SLI",
+					Message: fmt.Sprintf("latency SLI %q threshold %ss is not a histogram bucket boundary, so the le=%q matcher selects no series and the burn-rate alert silently never fires. Use the nearest boundary %ss (valid boundaries: %s).",
+						sli.Metadata.Name, formatFloat(g.LatencyThresholdSeconds), formatFloat(g.LatencyThresholdSeconds), formatFloat(naming.nearestBoundary(g.LatencyThresholdSeconds)), boundaryList(naming.boundaries())),
 				})
-				return
 			}
 		}
 	}

@@ -92,6 +92,56 @@ func TestLint_MissingErrorBudgetPolicyRejected(t *testing.T) {
 	}
 }
 
+func TestLint_LatencyThresholdMustBeBucketBoundary(t *testing.T) {
+	// A calibrated threshold that is not a histogram bucket boundary makes the
+	// le="..." matcher select no series → the latency burn-rate alert silently
+	// never fires. Lint must reject it.
+	base := deriveToyDoc(t)
+
+	// Baseline: the derived defaults (0.25 read, 0.5 write) ARE boundaries →
+	// no latency-boundary error.
+	for _, f := range Lint(base) {
+		if f.Severity == SeverityError {
+			t.Fatalf("derived doc (0.25/0.5 thresholds) must have no error findings, got: %+v", f)
+		}
+	}
+
+	// Mutate a latency SLI to 0.18 (between the 0.1 and 0.25 buckets) → error.
+	doc := deriveToyDoc(t)
+	mutated := false
+	for i := range doc.SLIs {
+		if rm := doc.SLIs[i].Spec.RatioMetric; rm != nil && rm.Good.Spec.SLIType == SLITypeLatency {
+			doc.SLIs[i].Spec.RatioMetric.Good.Spec.LatencyThresholdSeconds = 0.18
+			mutated = true
+		}
+	}
+	if !mutated {
+		t.Fatal("no latency SLI found to mutate")
+	}
+	fs := Lint(doc)
+	if !fs.HasError() {
+		t.Fatalf("threshold 0.18 must be a lint error, got: %+v", fs)
+	}
+	found := false
+	for _, f := range fs {
+		if f.Severity == SeverityError && strings.Contains(f.Message, "not a histogram bucket boundary") && strings.Contains(f.Message, "0.25") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want an error naming 0.18 and the nearest boundary 0.25, got: %+v", fs)
+	}
+
+	// A custom boundary set makes 0.18 valid (service customized its buckets).
+	custom := DefaultGRPCNaming()
+	custom.LatencyBucketBoundaries = []float64{0.05, 0.18, 0.5, 1}
+	for _, f := range LintWithConfig(doc, custom) {
+		if f.Severity == SeverityError {
+			t.Fatalf("0.18 must be valid under a custom boundary set, got: %+v", f)
+		}
+	}
+}
+
 func TestIsSaturationSignal(t *testing.T) {
 	sat := []string{"container_memory_utilization", "cpu_usage_seconds", "go_goroutines", "queue_depth", "db_pool_saturation", "disk_used_bytes"}
 	for _, s := range sat {

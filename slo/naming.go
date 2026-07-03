@@ -1,6 +1,19 @@
 package slo
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
+
+// DefaultLatencyBucketBoundaries are the OpenTelemetry duration advisory
+// histogram boundaries (seconds) that otelgrpc/otelhttp use by default. A
+// latency SLI threshold MUST equal one of these: the emitter renders it as a
+// le="<threshold>" matcher on the _bucket series, and if the value is not an
+// actual bucket boundary the matcher selects NO series — the error-ratio
+// recording rule yields an empty vector and the latency burn-rate alert silently
+// never fires. A service that customizes its histogram buckets overrides the set
+// via MetricNaming.LatencyBucketBoundaries.
+var DefaultLatencyBucketBoundaries = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
 
 // MetricNaming maps an OTel instrument to the Prometheus metric name and label
 // names it becomes AFTER the OTel→Prometheus normalization that Grafana Alloy
@@ -34,15 +47,20 @@ type MetricNaming struct {
 	// ServiceLabel is the normalized service label, e.g. rpc_service. Empty
 	// disables service filtering (e.g. the HTTP gateway variant filters by route).
 	ServiceLabel string
+	// LatencyBucketBoundaries are the histogram bucket boundaries (seconds) a
+	// latency SLI threshold must equal. Empty means DefaultLatencyBucketBoundaries.
+	// Override it when a service customizes its histogram buckets.
+	LatencyBucketBoundaries []float64
 }
 
 // DefaultGRPCNaming is the naming this SDK emits by default (new semconv).
 func DefaultGRPCNaming() MetricNaming {
 	return MetricNaming{
-		UnitSuffix:   "seconds",
-		StatusLabel:  "rpc_response_status_code",
-		MethodLabel:  "rpc_method",
-		ServiceLabel: "rpc_service",
+		UnitSuffix:              "seconds",
+		StatusLabel:             "rpc_response_status_code",
+		MethodLabel:             "rpc_method",
+		ServiceLabel:            "rpc_service",
+		LatencyBucketBoundaries: DefaultLatencyBucketBoundaries,
 	}
 }
 
@@ -52,10 +70,11 @@ func DefaultGRPCNaming() MetricNaming {
 // excluded/bad sets are regex fragments (4.., 5..) rather than gRPC names.
 func HTTPGatewayNaming() MetricNaming {
 	return MetricNaming{
-		UnitSuffix:   "seconds",
-		StatusLabel:  "http_response_status_code",
-		MethodLabel:  "http_request_method",
-		ServiceLabel: "",
+		UnitSuffix:              "seconds",
+		StatusLabel:             "http_response_status_code",
+		MethodLabel:             "http_request_method",
+		ServiceLabel:            "",
+		LatencyBucketBoundaries: DefaultLatencyBucketBoundaries,
 	}
 }
 
@@ -64,10 +83,11 @@ func HTTPGatewayNaming() MetricNaming {
 // rpc.grpc.status_code). Pair it with the numeric status sets below.
 func LegacyGRPCNaming() MetricNaming {
 	return MetricNaming{
-		UnitSuffix:   "milliseconds",
-		StatusLabel:  "rpc_grpc_status_code",
-		MethodLabel:  "rpc_method",
-		ServiceLabel: "rpc_service",
+		UnitSuffix:              "milliseconds",
+		StatusLabel:             "rpc_grpc_status_code",
+		MethodLabel:             "rpc_method",
+		ServiceLabel:            "rpc_service",
+		LatencyBucketBoundaries: DefaultLatencyBucketBoundaries,
 	}
 }
 
@@ -138,4 +158,45 @@ func notReMatcher(label string, values []string) string {
 		return ""
 	}
 	return label + `!~"` + strings.Join(values, "|") + `"`
+}
+
+// boundaries returns the effective latency bucket boundaries (the default set
+// when unset).
+func (n MetricNaming) boundaries() []float64 {
+	if len(n.LatencyBucketBoundaries) > 0 {
+		return n.LatencyBucketBoundaries
+	}
+	return DefaultLatencyBucketBoundaries
+}
+
+// isBucketBoundary reports whether v equals one of the configured latency bucket
+// boundaries (within a small tolerance for float representation).
+func (n MetricNaming) isBucketBoundary(v float64) bool {
+	for _, b := range n.boundaries() {
+		if math.Abs(v-b) <= 1e-9 {
+			return true
+		}
+	}
+	return false
+}
+
+// nearestBoundary returns the configured bucket boundary closest to v.
+func (n MetricNaming) nearestBoundary(v float64) float64 {
+	bs := n.boundaries()
+	best := bs[0]
+	for _, b := range bs[1:] {
+		if math.Abs(v-b) < math.Abs(v-best) {
+			best = b
+		}
+	}
+	return best
+}
+
+// boundaryList renders the boundaries as a comma-separated list for messages.
+func boundaryList(bs []float64) string {
+	parts := make([]string, len(bs))
+	for i, b := range bs {
+		parts[i] = formatFloat(b)
+	}
+	return strings.Join(parts, ", ")
 }

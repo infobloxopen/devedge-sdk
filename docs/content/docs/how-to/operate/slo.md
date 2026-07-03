@@ -53,6 +53,16 @@ The generated target is a placeholder. Set it from a measured baseline:
 4. Replace the `devedge.io/error-budget-policy` TODO with the real consequence — for example,
    freezing feature releases until the budget recovers over a full window.
 
+{{< callout type="warning" >}}
+A calibrated **latency threshold must equal a histogram bucket boundary**. The rendered rule compares
+the duration histogram at `le="<threshold>"`; a value that is not a real bucket boundary matches no
+series, so the error ratio is empty and the latency burn-rate alert **silently never fires**. The
+default boundaries (seconds) are `0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5,
+7.5, 10`. Setting a measured target such as `0.18` is a common calibration mistake — round it to the
+nearest boundary (`0.25`). `de slo lint` enforces this and reports the nearest valid boundary. If your
+service customizes its histogram buckets, override the boundary set in the metric naming config.
+{{< /callout >}}
+
 ## Lint
 
 Validate the objectives and run the classifier before you commit:

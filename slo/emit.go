@@ -27,9 +27,10 @@ type RenderOptions struct {
 	PresetDir string
 }
 
-// naming returns the effective MetricNaming (default gRPC when unset).
+// naming returns the effective MetricNaming (default gRPC when unset). A
+// MetricNaming with no status label is treated as unset.
 func (o RenderOptions) naming() MetricNaming {
-	if o.Naming == (MetricNaming{}) {
+	if o.Naming.StatusLabel == "" {
 		return DefaultGRPCNaming()
 	}
 	return o.Naming
