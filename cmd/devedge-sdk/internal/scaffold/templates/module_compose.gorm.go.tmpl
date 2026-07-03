@@ -1,0 +1,45 @@
+// Package module — composable entrypoint (WS-012). NewModule and Models are the
+// uniform, resource-agnostic seam a HOST calls to build this module over a shared
+// database. A composed "suite" host (`de compose build`) opens ONE shared *gorm.DB
+// and calls each member module's NewModule the same way — so the composed host
+// needs no per-resource knowledge (it never names this service's repository or
+// model). The standalone host may call NewModule too.
+//
+// "Module owns domain, host owns process": the HOST opens the shared connection
+// (process behavior); this module builds its OWN typed repository + DB-readiness
+// binding from that connection (domain behavior). This is the seam that keeps a
+// generated composed main.go free of every member's repository/model names.
+package module
+
+import (
+	"gorm.io/gorm"
+
+	"github.com/infobloxopen/devedge-sdk/servicekit"
+
+	{{.GoPkg}} "{{.GoImportPath}}"
+)
+
+// NewModule builds the {{.BinName}} module over the host's shared *gorm.DB. It
+// constructs this service's generated repository and its DB-readiness check from
+// the connection the host owns, then returns the same decorated servicekit.Module
+// the standalone host uses. A composed host calls NewModule for every member
+// uniformly; only the module knows its own repository + model types.
+func NewModule(db *gorm.DB) servicekit.Module {
+	// A live *gorm.DB yields a *sql.DB (a health.Pinger) for the readiness check;
+	// mirror the standalone host's wiring. If the handle is unavailable, register
+	// the module without the DB check rather than panic in a constructor.
+	sqlDB, err := db.DB()
+	if err != nil {
+		return Module({{.GoPkg}}.New{{.Resource}}Repository(db), nil)
+	}
+	return Module({{.GoPkg}}.New{{.Resource}}Repository(db), sqlDB)
+}
+
+// Models returns this module's domain models for the host's SQLite dev-fast-path
+// AutoMigrate. A composed host migrates the UNION of every member's Models() once
+// (host-run, per WS-012 P2). On Postgres the schema-of-record is the versioned
+// SQL in module/migrations, applied through the host's migration seam — these Go
+// models drive only the dev/test AutoMigrate.
+func Models() []any {
+	return []any{&{{.GoPkg}}.{{.Resource}}Model{}}
+}
