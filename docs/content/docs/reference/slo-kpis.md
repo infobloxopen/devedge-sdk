@@ -60,3 +60,26 @@ appended, and a classic histogram becomes `_bucket` / `_count` / `_sum` series. 
 `_sum`), labeled `rpc_response_status_code`, `rpc_method`, and `rpc_service`. The
 [SLO generator](../../how-to/operate/slo/) references these normalized names, so you do not write query
 strings by hand.
+
+## The `devedge/otel-rpc` SLI source
+
+Each derived Layer-1 indicator is a good/valid ratio whose `good` and `total` sides carry a typed
+metric source, `type: devedge/otel-rpc`, with the fields below under `spec`. The `de slo render`
+emitters translate this source into a backend query, so you set these fields rather than write PromQL.
+Use this reference when you hand-author an indicator for a method the generator does not cover (see
+[Add a non-default indicator](../../how-to/operate/slo/#add-a-non-default-indicator)); the fastest
+start is to copy a generated block from `slo.yaml` and edit the `methods` list.
+
+| Field | Type | Values | Meaning |
+|---|---|---|---|
+| `sliType` | string | `availability`, `latency` | Which indicator this side measures. |
+| `signal` | string | e.g. `rpc.server.call.duration` | OTel metric base name, before Prometheus normalization. |
+| `transport` | string | `grpc`, `http` | Selects the status- and duration-label conventions. |
+| `service` | string | proto FQN, e.g. `linkd.v1.LinkService` | The `rpc.service` label value the query filters on. Optional; omit to filter by method only. |
+| `methods` | list of string | method names, e.g. `[Resolve]` | The `rpc.method` label values this indicator groups. |
+| `methodClass` | string | `read`, `write` | Documentation only; does not affect the query. |
+| `excludeStatuses` | list of string | status-label values | Outcomes removed from this count. For an availability `total` this is the client-fault set (so `valid = all − client-fault`); for its `good` it is client-fault plus server-fault (so `good = valid − bad`). |
+| `latencyThresholdSeconds` | float | a histogram bucket boundary | On the `good` side of a latency SLI, counts only requests at or under this duration. Must equal a real bucket boundary — see the calibration callout in [Define SLOs](../../how-to/operate/slo/#calibrate-the-target). |
+
+A journey (Layer-2) SLI uses a raw `query` instead of this typed source; see
+[Author a business or journey SLO](../../how-to/operate/slo/#author-a-business-or-journey-slo).

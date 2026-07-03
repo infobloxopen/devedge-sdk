@@ -171,6 +171,35 @@ func DefaultsFromOpenAPI(data []byte, serviceLabel string, opts DeriveOptions) (
 	return doc, nil
 }
 
+// UnclassifiedMethods returns the operations in an enriched OpenAPI doc that the
+// grouped default SLOs do NOT cover: custom (AIP-136) methods and any operation
+// whose x-aip-method is not a standard read/write class. DefaultsFromOpenAPI
+// groups only the standard AIP methods (Get/List/BatchGet as read;
+// Create/Update/Delete/Undelete as write); everything else is left for the
+// service to author by hand. `de slo generate` reports this set so a service's
+// hot-path custom method is not silently dropped from its reliability targets.
+// The names are the short method names (e.g. "Resolve"), sorted and de-duplicated.
+func UnclassifiedMethods(data []byte) ([]string, error) {
+	_, ops, err := parseOpenAPI(data)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, op := range ops {
+		if readMethods[op.AIPMethod] || writeMethods[op.AIPMethod] {
+			continue
+		}
+		if op.Method == "" || seen[op.Method] {
+			continue
+		}
+		seen[op.Method] = true
+		out = append(out, op.Method)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // buildServiceSLOs appends one Service + four SLIs/SLOs + one AlertPolicy + three
 // AlertConditions for a service to doc.
 func buildServiceSLOs(doc *Document, serviceShort, serviceLabel string, read, write []string, opts DeriveOptions) {

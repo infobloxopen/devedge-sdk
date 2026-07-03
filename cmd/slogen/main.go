@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/slo"
 	"github.com/spf13/cobra"
@@ -72,6 +73,13 @@ func generateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "wrote %s (%d SLOs)\n", out, len(doc.SLOs))
+			// The grouped defaults cover only the standard AIP CRUD methods. Report
+			// any custom (AIP-136) method so its hot-path SLI is not silently missing —
+			// the developer authors these by hand (see the define-slo skill).
+			if skipped, serr := slo.UnclassifiedMethods(data); serr == nil && len(skipped) > 0 {
+				fmt.Fprintf(os.Stderr, "note: %d custom (non-CRUD) method(s) were not grouped and have no objective: %s\n", len(skipped), strings.Join(skipped, ", "))
+				fmt.Fprintln(os.Stderr, "      author an SLI for each by hand — see \"Add a non-default indicator\" in the SLO how-to (the define-slo skill).")
+			}
 			return nil
 		},
 	}

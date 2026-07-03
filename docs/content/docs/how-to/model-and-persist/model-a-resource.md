@@ -127,6 +127,16 @@ message APIKey {
 }
 ```
 
+{{< callout type="warning" >}}
+`OUTPUT_ONLY` gives a field **no storage of its own**. The framework fields above are the exception —
+their mixins own a column — as is the resource `name`, which the projection derives from `id`. Mark
+any other field `OUTPUT_ONLY` and `de generate` fails and names the field, because it would otherwise
+get no column and no projection and lose every write silently. To persist a value your server computes
+— a hit counter, a last-seen timestamp — declare it as a **plain column** (no `OUTPUT_ONLY`) and set it
+in your handler through a field mask; guard the field in the handler if clients must not set it on
+create or update.
+{{< /callout >}}
+
 ## Constraints and column overrides
 
 `(infoblox.field.v1.opts)` carries per-field storage constraints that the generators translate into
