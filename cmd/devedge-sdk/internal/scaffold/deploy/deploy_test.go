@@ -121,6 +121,8 @@ func TestK8sValuesOverlay_WiresFoundation(t *testing.T) {
 		"image:",
 		"ghcr.io/acme/orders",
 		"existingSecret:", // postgres dep => DSN via a pre-provisioned Secret
+		"monitoring:",     // F071: SLO burn-rate rules stub (off by default)
+		"de slo render --target prometheus",
 	} {
 		if !strings.Contains(overlay, want) {
 			t.Errorf("k8s values overlay missing %q:\n%s", want, overlay)

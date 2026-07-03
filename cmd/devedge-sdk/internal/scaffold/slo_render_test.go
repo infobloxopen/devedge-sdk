@@ -50,4 +50,23 @@ func TestRenderSLO_EmitsGoodDefault(t *testing.T) {
 	if !found {
 		t.Errorf("SLIs should filter by the proto FQN rpc.service label orders.v1.OrderService")
 	}
+
+	// F070: the slug derives from the gRPC service short name (OrderService ->
+	// order-service), matching `de slo generate`, NOT the binary name "orders".
+	for _, s := range doc.SLOs {
+		if s.Spec.Service != "order-service" {
+			t.Errorf("SLO %q service slug = %q, want order-service (the gRPC short name)", s.Metadata.Name, s.Spec.Service)
+		}
+	}
+	// F070: no phantom methods — the scaffold proto has no BatchGet or Undelete RPC.
+	for _, sli := range doc.SLIs {
+		if sli.Spec.RatioMetric == nil {
+			continue
+		}
+		for _, meth := range sli.Spec.RatioMetric.Good.Spec.Methods {
+			if meth == "BatchGetOrders" || meth == "UndeleteOrder" {
+				t.Errorf("phantom method %q in SLI %q (scaffold proto has no such RPC)", meth, sli.Metadata.Name)
+			}
+		}
+	}
 }

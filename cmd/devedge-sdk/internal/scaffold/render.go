@@ -207,12 +207,20 @@ func renderSLO(dir string, m *Model) error {
 	if plural != "" {
 		plural = strings.ToUpper(plural[:1]) + plural[1:]
 	}
+	// The day-one slo.yaml must be byte-identical to `de slo generate` (which reads
+	// the enriched OpenAPI via slo.DefaultsFromOpenAPI). So the slug derives from
+	// the gRPC service short name (ServiceType, e.g. "OrderService" -> slug
+	// "order-service"), NOT ServiceLower, and the method set matches the scaffold's
+	// proto template exactly: Create/Get/List/Update/Delete — no BatchGet, no
+	// Undelete. (See templates/proto.proto.tmpl; if that gains RPCs, flip the flags
+	// here and the parity test catches any drift.)
 	doc, err := slo.DefaultsForResource(slo.ResourceDefaults{
-		ServiceShort:   m.ServiceLower,
-		ServiceLabel:   m.ProtoPackage + "." + m.ServiceType,
-		Resource:       m.Resource,
-		ResourcePlural: plural,
-		SoftDelete:     true,
+		ServiceShort:    m.ServiceType,
+		ServiceLabel:    m.ProtoPackage + "." + m.ServiceType,
+		Resource:        m.Resource,
+		ResourcePlural:  plural,
+		IncludeBatchGet: false,
+		SoftDelete:      false,
 	}, slo.DefaultDeriveOptions())
 	if err != nil {
 		return fmt.Errorf("derive slo defaults: %w", err)

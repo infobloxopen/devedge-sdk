@@ -69,9 +69,14 @@ func DefaultDeriveOptions() DeriveOptions {
 }
 
 // ResourceDefaults describes a resource well enough to emit its standard AIP
-// method SLOs without an OpenAPI doc (the scaffold path).
+// method SLOs without an OpenAPI doc (the scaffold path). The caller sets the
+// method-set flags to match the service's ACTUAL proto — a service with no
+// BatchGet or Undelete RPC leaves them off, so the day-one output matches what
+// DefaultsFromOpenAPI produces for the same service.
 type ResourceDefaults struct {
-	// ServiceShort is the short service name used for object names, e.g. "orders".
+	// ServiceShort is the gRPC service short name (e.g. "OrderService"), the same
+	// value DefaultsFromOpenAPI reads from the operation-id prefix. It drives the
+	// object-name slug, so both paths must pass the same string.
 	ServiceShort string
 	// ServiceLabel is the value of the rpc.service label (proto FQN), e.g.
 	// orders.v1.OrderService. Optional; empty filters by method only.
@@ -80,14 +85,20 @@ type ResourceDefaults struct {
 	Resource string
 	// ResourcePlural is the PascalCase plural, e.g. "Orders".
 	ResourcePlural string
-	// SoftDelete adds Undelete<Resource> to the write group.
+	// IncludeBatchGet adds BatchGet<Plural> to the read group. Set it only when
+	// the proto actually serves a BatchGet RPC.
+	IncludeBatchGet bool
+	// SoftDelete adds Undelete<Resource> to the write group. Set it only when the
+	// proto actually serves an Undelete RPC.
 	SoftDelete bool
 }
 
 // DefaultsForResource emits the four grouped default SLOs from a resource's
 // standard AIP method names — no OpenAPI required, so the scaffold can write a
-// good slo.yaml on day one. read = {Get, List, BatchGet}; write = {Create,
-// Update, Delete[, Undelete]}.
+// good slo.yaml on day one. The read group is {Get, List} (+ BatchGet when
+// IncludeBatchGet); the write group is {Create, Update, Delete} (+ Undelete when
+// SoftDelete). Method names are sorted and the slug derives from ServiceShort, so
+// the output is byte-identical to DefaultsFromOpenAPI for the same service.
 func DefaultsForResource(rd ResourceDefaults, opts DeriveOptions) (*Document, error) {
 	if rd.Resource == "" {
 		return nil, fmt.Errorf("slo: DefaultsForResource: empty resource")
@@ -96,19 +107,18 @@ func DefaultsForResource(rd ResourceDefaults, opts DeriveOptions) (*Document, er
 	if plural == "" {
 		plural = rd.Resource + "s"
 	}
-	read := []string{
-		"Get" + rd.Resource,
-		"List" + plural,
-		"BatchGet" + plural,
+	read := []string{"Get" + rd.Resource, "List" + plural}
+	if rd.IncludeBatchGet {
+		read = append(read, "BatchGet"+plural)
 	}
-	write := []string{
-		"Create" + rd.Resource,
-		"Update" + rd.Resource,
-		"Delete" + rd.Resource,
-	}
+	write := []string{"Create" + rd.Resource, "Update" + rd.Resource, "Delete" + rd.Resource}
 	if rd.SoftDelete {
 		write = append(write, "Undelete"+rd.Resource)
 	}
+	// Sort so the method regex + methods list match DefaultsFromOpenAPI's
+	// keysSorted ordering exactly (no drift between the two derivation paths).
+	sort.Strings(read)
+	sort.Strings(write)
 	short := rd.ServiceShort
 	if short == "" {
 		short = strings.ToLower(rd.Resource)

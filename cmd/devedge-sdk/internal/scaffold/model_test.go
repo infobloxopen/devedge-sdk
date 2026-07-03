@@ -105,16 +105,17 @@ func TestMakefileIsThinDeShim(t *testing.T) {
 			if !strings.Contains(mk, "-include .devedge/make/devedge.mk") {
 				t.Errorf("thin Makefile must `-include .devedge/make/devedge.mk`:\n%s", mk)
 			}
-			// No baked-in codegen-tool installs — the logic lives in `de`. (The one
-			// legitimate `go install` is the pinned `de` install hint, checked below.)
-			for _, banned := range []string{"@latest", "SDK_VERSION", "protoc-gen-", "make tools", "make bootstrap"} {
+			// No baked-in codegen-tool installs — the logic lives in `de`. `de` itself
+			// is not `go install`-able (its module uses a replace directive), so the
+			// Makefile must not send a newcomer to a broken `go install` (F069).
+			for _, banned := range []string{"@latest", "SDK_VERSION", "protoc-gen-", "make tools", "make bootstrap", "go install github.com/infobloxopen/devedge/cmd/de"} {
 				if strings.Contains(mk, banned) {
 					t.Errorf("thin Makefile must not contain %q (that logic moved to `de`):\n%s", banned, mk)
 				}
 			}
-			// `de` install hint must pin an exact version.
-			if !strings.Contains(mk, "cmd/de@"+m.DeVersion) {
-				t.Errorf("Makefile must pin the `de` install to %q:\n%s", m.DeVersion, mk)
+			// `de` install hint points at the release binaries, not a broken go install.
+			if !strings.Contains(mk, "github.com/infobloxopen/devedge/releases") {
+				t.Errorf("Makefile must point at the `de` release-binary install:\n%s", mk)
 			}
 			// The project-specific targets survive (they don't delegate to `de`).
 			for _, tgt := range []string{"run:", "api-lint:", "api-breaking:", "api-release:"} {
