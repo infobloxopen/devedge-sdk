@@ -1,0 +1,81 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+    name: checkout-slo-rules
+    labels:
+        app.kubernetes.io/managed-by: devedge
+        app.kubernetes.io/part-of: devedge-slo
+spec:
+    groups:
+        - name: devedge-slo-sli-recordings
+          rules:
+            - record: slo:sli_error:ratio_rate5m
+              expr: 1 - (((1 - slo:sli_error:ratio_rate5m{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate5m{slo="orderd-write-availability", service="orderd"})) / (1))
+              labels:
+                method_class: ""
+                service: checkout
+                sli_type: availability
+                slo: checkout-availability
+            - record: slo:sli_error:ratio_rate30m
+              expr: 1 - (((1 - slo:sli_error:ratio_rate30m{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate30m{slo="orderd-write-availability", service="orderd"})) / (1))
+              labels:
+                method_class: ""
+                service: checkout
+                sli_type: availability
+                slo: checkout-availability
+            - record: slo:sli_error:ratio_rate1h
+              expr: 1 - (((1 - slo:sli_error:ratio_rate1h{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate1h{slo="orderd-write-availability", service="orderd"})) / (1))
+              labels:
+                method_class: ""
+                service: checkout
+                sli_type: availability
+                slo: checkout-availability
+            - record: slo:sli_error:ratio_rate6h
+              expr: 1 - (((1 - slo:sli_error:ratio_rate6h{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate6h{slo="orderd-write-availability", service="orderd"})) / (1))
+              labels:
+                method_class: ""
+                service: checkout
+                sli_type: availability
+                slo: checkout-availability
+            - record: slo:sli_error:ratio_rate3d
+              expr: 1 - (((1 - slo:sli_error:ratio_rate3d{slo="cartd-read-availability", service="cartd"}) * (1 - slo:sli_error:ratio_rate3d{slo="orderd-write-availability", service="orderd"})) / (1))
+              labels:
+                method_class: ""
+                service: checkout
+                sli_type: availability
+                slo: checkout-availability
+        - name: devedge-slo-burn-rate-alerts
+          rules:
+            - alert: CheckoutAvailabilityErrorBudgetBurnFast
+              expr: slo:sli_error:ratio_rate1h{slo="checkout-availability"} > (14.4 * (1 - 0.995)) and slo:sli_error:ratio_rate5m{slo="checkout-availability"} > (14.4 * (1 - 0.995))
+              for: 2m
+              labels:
+                service: checkout
+                severity: page
+                slo: checkout-availability
+              annotations:
+                description: SLO "checkout-availability" is burning its error budget at >14.4× over 1h and 5m. Objective 0.995.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: checkout-availability burning error budget (14.4 burn over 1h & 5m)
+            - alert: CheckoutAvailabilityErrorBudgetBurnMedium
+              expr: slo:sli_error:ratio_rate6h{slo="checkout-availability"} > (6 * (1 - 0.995)) and slo:sli_error:ratio_rate30m{slo="checkout-availability"} > (6 * (1 - 0.995))
+              for: 2m
+              labels:
+                service: checkout
+                severity: page
+                slo: checkout-availability
+              annotations:
+                description: SLO "checkout-availability" is burning its error budget at >6× over 6h and 30m. Objective 0.995.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: checkout-availability burning error budget (6 burn over 6h & 30m)
+            - alert: CheckoutAvailabilityErrorBudgetBurnSlow
+              expr: slo:sli_error:ratio_rate3d{slo="checkout-availability"} > (1 * (1 - 0.995)) and slo:sli_error:ratio_rate6h{slo="checkout-availability"} > (1 * (1 - 0.995))
+              for: 15m
+              labels:
+                service: checkout
+                severity: ticket
+                slo: checkout-availability
+              annotations:
+                description: SLO "checkout-availability" is burning its error budget at >1× over 3d and 6h. Objective 0.995.
+                runbook: 'TODO: link the error-budget-policy runbook (define with `de slo` / define-slo skill).'
+                summary: checkout-availability burning error budget (1 burn over 3d & 6h)

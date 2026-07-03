@@ -34,6 +34,14 @@ under [History](#history).
 - A scaffolded service ships a starter `slo.yaml` with the four grouped defaults on disk. The deploy
   Helm chart gains gated `PrometheusRule` and `ServiceMonitor` templates (off by default). The
   `define-slo` skill drives an author to a good objective.
+- Business/journey SLOs (Layer 2) render end to end. A hand-authored SLI can use a raw backend query
+  on its `good`/`total` metric source to compose an objective across services — for example the product
+  of two services' availability recording rules. The Prometheus, Grafana, and Loki emitters use the
+  raw query directly (a `$window` token is filled with each burn-rate window, so a composed journey
+  gets the same multi-window multi-burn-rate alerting); a raw query takes precedence over the typed
+  otel-rpc source, and a source with neither fails loud. Journey SLOs are authored in a separate file
+  from the derived service `slo.yaml` and carry `devedge.io/layer: journey`. The latency-bucket-
+  boundary lint applies only to typed otel-rpc latency sources.
 
 ### Resource identity
 

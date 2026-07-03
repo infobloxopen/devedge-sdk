@@ -118,8 +118,14 @@ func emitGrafana(doc *Document, naming MetricNaming) ([]Rendered, error) {
 			if len(s.Spec.TimeWindow) > 0 {
 				window = s.Spec.TimeWindow[0].Duration
 			}
-			errRatio1h := errorRatioExpr(naming, rm, "1h")
-			errRatioWin := errorRatioExpr(naming, rm, window)
+			errRatio1h, err := errorRatioExpr(naming, rm, "1h")
+			if err != nil {
+				return nil, fmt.Errorf("slo: emit grafana: SLO %q: %w", s.Metadata.Name, err)
+			}
+			errRatioWin, err := errorRatioExpr(naming, rm, window)
+			if err != nil {
+				return nil, fmt.Errorf("slo: emit grafana: SLO %q: %w", s.Metadata.Name, err)
+			}
 
 			id++
 			dash.Panels = append(dash.Panels, grafanaPanel{

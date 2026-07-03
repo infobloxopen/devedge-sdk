@@ -188,10 +188,12 @@ func LintWithConfig(doc *Document, naming MetricNaming) Findings {
 		}
 		// Latency threshold must be an actual histogram bucket boundary, or the
 		// emitter's le="<threshold>" matcher selects no series and the burn-rate
-		// alert silently never fires.
-		if rm := sli.Spec.RatioMetric; rm != nil {
+		// alert silently never fires. This applies ONLY to a typed otel-rpc source
+		// (a raw-query journey SLI builds its own expression, so there is no le
+		// matcher to validate).
+		if rm := sli.Spec.RatioMetric; rm != nil && strings.TrimSpace(rm.Good.Query) == "" {
 			g := rm.Good.Spec
-			if (g.SLIType == SLITypeLatency || g.LatencyThresholdSeconds > 0) && g.LatencyThresholdSeconds > 0 && !naming.isBucketBoundary(g.LatencyThresholdSeconds) {
+			if g.LatencyThresholdSeconds > 0 && !naming.isBucketBoundary(g.LatencyThresholdSeconds) {
 				fs = append(fs, Finding{
 					Severity: SeverityError, Object: sli.Metadata.Name, Kind: "SLI",
 					Message: fmt.Sprintf("latency SLI %q threshold %ss is not a histogram bucket boundary, so the le=%q matcher selects no series and the burn-rate alert silently never fires. Use the nearest boundary %ss (valid boundaries: %s).",

@@ -15,6 +15,12 @@ const (
 	TargetLoki       = "loki"
 )
 
+// windowToken is the placeholder a raw-query metric source may use for the rate
+// window; emitters replace it with each burn-rate window (5m, 1h, ...) when
+// generating the per-window recording rules. A raw query with no token is used
+// verbatim at every window.
+const windowToken = "$window"
+
 // RenderOptions tune projection.
 type RenderOptions struct {
 	// Naming maps OTel signals to the Prometheus metric/label names. Zero value

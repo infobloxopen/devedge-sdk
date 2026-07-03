@@ -33,10 +33,29 @@ func emitLoki(doc *Document, _ MetricNaming) ([]Rendered, error) {
 			continue
 		}
 		sli := doc.sliByName(s.Spec.IndicatorRef)
+		if sli == nil {
+			sli = s.Spec.Indicator
+		}
 		if sli == nil || sli.Spec.RatioMetric == nil {
 			continue
 		}
-		serverFault := setDiff(sli.Spec.RatioMetric.Good.Spec.ExcludeStatuses, sli.Spec.RatioMetric.Total.Spec.ExcludeStatuses)
+		rm := sli.Spec.RatioMetric
+
+		// Raw-query source (Layer-2 journey path): use the author's LogQL good/total
+		// directly, substituting the window token. Takes precedence over the typed
+		// server-fault derivation.
+		if strings.TrimSpace(rm.Good.Query) != "" && strings.TrimSpace(rm.Total.Query) != "" {
+			good := strings.ReplaceAll(rm.Good.Query, windowToken, "5m")
+			total := strings.ReplaceAll(rm.Total.Query, windowToken, "5m")
+			group.Rules = append(group.Rules, promRuleEntry{
+				Record: "slo:log_sli_error:ratio_rate5m",
+				Expr:   fmt.Sprintf("1 - ((%s) / (%s))", good, total),
+				Labels: map[string]string{"slo": s.Metadata.Name, "service": s.Spec.Service},
+			})
+			continue
+		}
+
+		serverFault := setDiff(rm.Good.Spec.ExcludeStatuses, rm.Total.Spec.ExcludeStatuses)
 		if len(serverFault) == 0 {
 			continue
 		}
