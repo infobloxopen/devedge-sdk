@@ -10,6 +10,13 @@ under [History](#history).
 
 ## History
 
+### Security (tenant isolation on Create)
+
+- Generated `Create` stamps `account_id` from the caller's tenant context unconditionally, ignoring
+  any client-supplied value, on both the GORM and ent backends. A caller can no longer plant a
+  resource under another tenant's `account_id`; this mirrors the existing `Update` tenant-key guard
+  and is covered by a `seccheck.AssertNoCrossTenantCreate` regression test.
+
 ### Reliability (SLI/SLO codification)
 
 - Services declare reliability targets as data. The `slo` package is an OpenSLO v1 intermediate
