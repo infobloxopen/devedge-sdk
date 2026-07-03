@@ -80,15 +80,18 @@ Scalar proto types map to columns as follows:
 | `bytes` | `[]byte` (BLOB) |
 
 {{< callout type="warning" >}}
-**Not every proto type maps to a column.** Repeated scalars and nested messages without a
-[relationship annotation](#relationships) are skipped — they require a JSON/JSONB serialization
-strategy that the generator does not yet produce. The one exception is `map<string, string>`, which
-persists as a JSONB column (see [Tags](#tags)). Enums do not map to a typed column; represent an
-enum as a `string` field and constrain it with `allowed_values` (see
-[Constraints and column overrides](#constraints-and-column-overrides)), or as an integer field.
-`google.protobuf.Timestamp`
-carries built-in storage meaning only for the two [framework fields](#framework-managed-fields)
-described below; other timestamp fields are not persisted by the generator.
+**Not every proto type maps to a column, and code generation fails rather than silently dropping
+one.** A nested message, a repeated field, or an enum without a mappable representation has no
+automatic column, so `de generate` (both the ent and GORM backends) **fails fast** and names the
+field — it does not skip it. Give each unmappable field a representation:
+
+- **`google.protobuf.Timestamp`** — model it as an `int64` (unix seconds), or use one of the two
+  [framework fields](#framework-managed-fields) below, which do carry built-in timestamp storage.
+- **Enum** — represent it as a `string` field constrained with `allowed_values` (see
+  [Constraints and column overrides](#constraints-and-column-overrides)), or as an integer field.
+- **Nested message / repeated field** — give it a [relationship annotation](#relationships) so it
+  becomes an association, or flatten it into scalar fields. The one built-in exception is
+  `map<string, string>`, which persists as a JSONB column (see [Tags](#tags)).
 {{< /callout >}}
 
 ## Framework-managed fields
