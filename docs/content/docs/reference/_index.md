@@ -17,4 +17,5 @@ This section covers every public package and code-generation plugin in devedge-s
   {{< card link="seccheck/" title="seccheck" icon="shield-check" subtitle="All Assert* functions and RunT." >}}
   {{< card link="codegen/" title="codegen" icon="cog" subtitle="protoc-gen-devedge-authz, svc, storage, ent (+ gateway)." >}}
   {{< card link="graphql-federation/" title="graphql-federation" icon="share" subtitle="federationgql: the cross-service GraphQL federation gateway." >}}
+  {{< card link="slo-kpis/" title="API KPIs" icon="chart-bar" subtitle="The Layer-0 signals a service emits: RED, golden signals, and USE, in OTel semconv terms." >}}
 {{< /cards >}}

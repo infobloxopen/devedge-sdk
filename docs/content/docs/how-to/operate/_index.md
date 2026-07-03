@@ -13,4 +13,5 @@ This section covers how to operate a devedge-sdk service in production. Use the 
   {{< card link="resilience/" title="Resilience" icon="lightning-bolt" subtitle="Request timeouts, rate limiting, and circuit-breaker seam." >}}
   {{< card link="deploy/" title="Deploy" icon="cloud-upload" subtitle="Kubernetes/k3s (Helm + Flux GitOps) and Docker Compose deploy targets." >}}
   {{< card link="publish-openapi/" title="Publish OpenAPI v3" icon="globe-alt" subtitle="Publish your service's public API to the apx catalog and generate typed clients." >}}
+  {{< card link="slo/" title="Define SLOs" icon="shield-check" subtitle="Derive reliability objectives from the contract, lint them, and render burn-rate rules + dashboards." >}}
 {{< /cards >}}

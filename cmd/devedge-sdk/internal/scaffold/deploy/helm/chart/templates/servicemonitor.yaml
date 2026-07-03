@@ -1,0 +1,25 @@
+{{- /*
+Optional Prometheus-Operator ServiceMonitor (WS-025). Off by default. The SDK's
+default telemetry path is Alloy→Cortex OTLP-push, which needs no scrape target;
+enable this only if the service additionally exposes a Prometheus /metrics
+endpoint you want a Prometheus Operator to scrape.
+*/ -}}
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "devedge-service.fullname" . }}
+  labels:
+    {{- include "devedge-service.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "devedge-service.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: {{ .Values.serviceMonitor.port }}
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

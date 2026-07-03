@@ -10,6 +10,7 @@ import (
 	"text/template"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk/internal/scaffold/deploy"
+	"github.com/infobloxopen/devedge-sdk/slo"
 )
 
 // renderTemplate executes the named template (under templates/) against m.
@@ -173,6 +174,15 @@ func renderTemplates(dir string, m *Model) error {
 			return fmt.Errorf("write %s: %w", o.rel, err)
 		}
 	}
+	// WS-025: a starter slo.yaml with the four grouped default SLOs derived from
+	// the resource's standard AIP method names — a GOOD default reliability target
+	// on disk day one (good/valid availability, mandatory error-budget policy stub,
+	// 28d window, marked un-calibrated). `make slo` regenerates it from the real
+	// OpenAPI (picking up custom methods).
+	if err := renderSLO(dir, m); err != nil {
+		return err
+	}
+
 	// Container image: the GHCR publish workflow (ko builds a distroless static
 	// image — no Dockerfile). Emitted for every service regardless of --deploy (the
 	// image is the unit of delivery; the k8s overlay + compose both reference it).
@@ -187,6 +197,31 @@ func renderTemplates(dir string, m *Model) error {
 		return err
 	}
 	return appendGitignore(dir, m)
+}
+
+// renderSLO writes a starter slo.yaml with the resource's grouped default SLOs
+// (WS-025). It derives from the standard AIP method names, so it needs no
+// generated OpenAPI — the service has a good default SLO before its first build.
+func renderSLO(dir string, m *Model) error {
+	plural := m.ResourcePlural
+	if plural != "" {
+		plural = strings.ToUpper(plural[:1]) + plural[1:]
+	}
+	doc, err := slo.DefaultsForResource(slo.ResourceDefaults{
+		ServiceShort:   m.ServiceLower,
+		ServiceLabel:   m.ProtoPackage + "." + m.ServiceType,
+		Resource:       m.Resource,
+		ResourcePlural: plural,
+		SoftDelete:     true,
+	}, slo.DefaultDeriveOptions())
+	if err != nil {
+		return fmt.Errorf("derive slo defaults: %w", err)
+	}
+	b, err := doc.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal slo.yaml: %w", err)
+	}
+	return writeFile(dir, "slo.yaml", b, 0o644)
 }
 
 // renderDeploy renders the selected deploy targets (F038) into the generated

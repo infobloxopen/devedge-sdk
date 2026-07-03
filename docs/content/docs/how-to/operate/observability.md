@@ -92,5 +92,14 @@ To use a different logger, set `server.Config.Logger`. It defaults to `slog.Defa
 | Signal  | Source                                                                                 |
 |---------|----------------------------------------------------------------------------------------|
 | Traces  | `otelgrpc` server span per RPC; `otelhttp` server span at the gateway; `otelgrpc` client span on the in-process dial — one linked trace. |
-| Metrics | `otelgrpc` RED metrics (`rpc.server.duration`, request/response sizes) via the global meter. |
+| Metrics | `otelgrpc` RED metrics (`rpc.server.call.duration`, request/response sizes) via the global meter. |
 | Logs    | `middleware.LoggingUnary` — one trace-correlated, secret-redacted record per RPC.      |
+
+## From signals to objectives
+
+The RED metrics on this page are Layer-0 signals: always-on and diagnostic, with no target. To set a
+reliability target on top of them — an availability or latency objective with an error budget and
+burn-rate alerts — define a service-level objective. The SDK derives a good default objective from your
+API contract and projects it to Cortex rules and Grafana dashboards. See
+[Define SLOs](../slo/) for the workflow and [API KPIs](../../../reference/slo-kpis/) for the signal
+catalog these objectives measure.

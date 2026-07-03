@@ -1,0 +1,22 @@
+{{- /*
+WS-025 SLO burn-rate rules. Rendered only when monitoring is enabled AND rule
+groups are supplied (from `de slo render --target prometheus`). Off by default so
+existing installs are unchanged. The groups carry the SLI recording rules + the
+multi-window multi-burn-rate alerting rules; the Cortex ruler (or Prometheus)
+evaluates them against the Alloy-normalized OTel RED metrics.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRule.groups }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "devedge-service.fullname" . }}-slo
+  labels:
+    {{- include "devedge-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slo
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- toYaml .Values.monitoring.prometheusRule.groups | nindent 4 }}
+{{- end }}

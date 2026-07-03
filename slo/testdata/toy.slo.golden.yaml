@@ -1,0 +1,356 @@
+apiVersion: openslo/v1
+kind: Service
+metadata:
+    name: widget-service
+spec:
+    description: Reliability targets for the WidgetService service (derived defaults — calibrate before paging).
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+    name: widget-service-read-availability
+spec:
+    description: 'WidgetService read availability: server-fault responses over valid requests (client faults excluded).'
+    ratioMetric:
+        counter: true
+        good:
+            type: devedge/otel-rpc
+            spec:
+                sliType: availability
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - BatchGetWidgets
+                    - GetWidget
+                    - ListWidgets
+                methodClass: read
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+                    - UNKNOWN
+                    - DEADLINE_EXCEEDED
+                    - INTERNAL
+                    - UNAVAILABLE
+                    - DATA_LOSS
+        total:
+            type: devedge/otel-rpc
+            spec:
+                sliType: availability
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - BatchGetWidgets
+                    - GetWidget
+                    - ListWidgets
+                methodClass: read
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+    name: widget-service-read-latency
+spec:
+    description: 'WidgetService read latency: fraction of valid requests completing within 0.25s.'
+    ratioMetric:
+        counter: true
+        good:
+            type: devedge/otel-rpc
+            spec:
+                sliType: latency
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - BatchGetWidgets
+                    - GetWidget
+                    - ListWidgets
+                methodClass: read
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+                latencyThresholdSeconds: 0.25
+        total:
+            type: devedge/otel-rpc
+            spec:
+                sliType: latency
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - BatchGetWidgets
+                    - GetWidget
+                    - ListWidgets
+                methodClass: read
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+    name: widget-service-write-availability
+spec:
+    description: 'WidgetService write availability: server-fault responses over valid requests (client faults excluded).'
+    ratioMetric:
+        counter: true
+        good:
+            type: devedge/otel-rpc
+            spec:
+                sliType: availability
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - CreateWidget
+                    - DeleteWidget
+                    - UpdateWidget
+                methodClass: write
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+                    - UNKNOWN
+                    - DEADLINE_EXCEEDED
+                    - INTERNAL
+                    - UNAVAILABLE
+                    - DATA_LOSS
+        total:
+            type: devedge/otel-rpc
+            spec:
+                sliType: availability
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - CreateWidget
+                    - DeleteWidget
+                    - UpdateWidget
+                methodClass: write
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+    name: widget-service-write-latency
+spec:
+    description: 'WidgetService write latency: fraction of valid requests completing within 0.5s.'
+    ratioMetric:
+        counter: true
+        good:
+            type: devedge/otel-rpc
+            spec:
+                sliType: latency
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - CreateWidget
+                    - DeleteWidget
+                    - UpdateWidget
+                methodClass: write
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+                latencyThresholdSeconds: 0.5
+        total:
+            type: devedge/otel-rpc
+            spec:
+                sliType: latency
+                signal: rpc.server.call.duration
+                transport: grpc
+                service: toy.v1.WidgetService
+                methods:
+                    - CreateWidget
+                    - DeleteWidget
+                    - UpdateWidget
+                methodClass: write
+                excludeStatuses:
+                    - INVALID_ARGUMENT
+                    - NOT_FOUND
+                    - ALREADY_EXISTS
+                    - PERMISSION_DENIED
+                    - UNAUTHENTICATED
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+    name: widget-service-read-availability
+    labels:
+        devedge.io/method-class: read
+        devedge.io/service: widget-service
+        devedge.io/sli-type: availability
+    annotations:
+        devedge.io/error-budget-policy: 'TODO: define the consequence when this budget is spent (e.g. freeze feature releases for widget-service until the budget recovers over a full window).'
+        devedge.io/layer: service
+        devedge.io/uncalibrated: "true"
+spec:
+    description: WidgetService read availability objective (un-calibrated default — set from a measured baseline before it pages).
+    service: widget-service
+    indicatorRef: widget-service-read-availability
+    budgetingMethod: Occurrences
+    timeWindow:
+        - duration: 28d
+          isRolling: true
+    objectives:
+        - displayName: read availability
+          target: 0.999
+    alertPolicies:
+        - widget-service-burn-rate
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+    name: widget-service-read-latency
+    labels:
+        devedge.io/method-class: read
+        devedge.io/service: widget-service
+        devedge.io/sli-type: latency
+    annotations:
+        devedge.io/error-budget-policy: 'TODO: define the consequence when this budget is spent (e.g. freeze feature releases for widget-service until the budget recovers over a full window).'
+        devedge.io/layer: service
+        devedge.io/uncalibrated: "true"
+spec:
+    description: WidgetService read latency objective (un-calibrated default — set from a measured baseline before it pages).
+    service: widget-service
+    indicatorRef: widget-service-read-latency
+    budgetingMethod: Occurrences
+    timeWindow:
+        - duration: 28d
+          isRolling: true
+    objectives:
+        - displayName: read latency
+          target: 0.99
+    alertPolicies:
+        - widget-service-burn-rate
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+    name: widget-service-write-availability
+    labels:
+        devedge.io/method-class: write
+        devedge.io/service: widget-service
+        devedge.io/sli-type: availability
+    annotations:
+        devedge.io/error-budget-policy: 'TODO: define the consequence when this budget is spent (e.g. freeze feature releases for widget-service until the budget recovers over a full window).'
+        devedge.io/layer: service
+        devedge.io/uncalibrated: "true"
+spec:
+    description: WidgetService write availability objective (un-calibrated default — set from a measured baseline before it pages).
+    service: widget-service
+    indicatorRef: widget-service-write-availability
+    budgetingMethod: Occurrences
+    timeWindow:
+        - duration: 28d
+          isRolling: true
+    objectives:
+        - displayName: write availability
+          target: 0.999
+    alertPolicies:
+        - widget-service-burn-rate
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+    name: widget-service-write-latency
+    labels:
+        devedge.io/method-class: write
+        devedge.io/service: widget-service
+        devedge.io/sli-type: latency
+    annotations:
+        devedge.io/error-budget-policy: 'TODO: define the consequence when this budget is spent (e.g. freeze feature releases for widget-service until the budget recovers over a full window).'
+        devedge.io/layer: service
+        devedge.io/uncalibrated: "true"
+spec:
+    description: WidgetService write latency objective (un-calibrated default — set from a measured baseline before it pages).
+    service: widget-service
+    indicatorRef: widget-service-write-latency
+    budgetingMethod: Occurrences
+    timeWindow:
+        - duration: 28d
+          isRolling: true
+    objectives:
+        - displayName: write latency
+          target: 0.99
+    alertPolicies:
+        - widget-service-burn-rate
+---
+apiVersion: openslo/v1
+kind: AlertPolicy
+metadata:
+    name: widget-service-burn-rate
+spec:
+    description: Multi-window multi-burn-rate error-budget policy (SRE Workbook ch. 5).
+    alertWhenBreaching: true
+    conditions:
+        - conditionRef: widget-service-burn-rate-fast
+        - conditionRef: widget-service-burn-rate-medium
+        - conditionRef: widget-service-burn-rate-slow
+---
+apiVersion: openslo/v1
+kind: AlertCondition
+metadata:
+    name: widget-service-burn-rate-fast
+spec:
+    description: Burn rate 14.4 over 1h and 5m.
+    severity: page
+    condition:
+        kind: burnrate
+        op: gt
+        threshold: 14.4
+        lookbackWindow: 1h
+        shortWindow: 5m
+---
+apiVersion: openslo/v1
+kind: AlertCondition
+metadata:
+    name: widget-service-burn-rate-medium
+spec:
+    description: Burn rate 6 over 6h and 30m.
+    severity: page
+    condition:
+        kind: burnrate
+        op: gt
+        threshold: 6
+        lookbackWindow: 6h
+        shortWindow: 30m
+---
+apiVersion: openslo/v1
+kind: AlertCondition
+metadata:
+    name: widget-service-burn-rate-slow
+spec:
+    description: Burn rate 1 over 3d and 6h.
+    severity: ticket
+    condition:
+        kind: burnrate
+        op: gt
+        threshold: 1
+        lookbackWindow: 3d
+        shortWindow: 6h

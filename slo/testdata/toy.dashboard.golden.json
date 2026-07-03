@@ -1,0 +1,313 @@
+{
+  "title": "widget-service SLOs",
+  "uid": "widget-service-slo",
+  "editable": true,
+  "schemaVersion": 39,
+  "tags": [
+    "devedge",
+    "slo"
+  ],
+  "time": {
+    "from": "now-28d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Data source"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "widget-service-read-availability — error rate (1h) vs budget",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))",
+          "legendFormat": "error rate (1h)",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - 0.999)",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "widget-service-read-availability — error-budget burndown (28d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "1 - ((1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS\"}[28d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[28d])))) / (1 - 0.999))",
+          "legendFormat": "budget remaining",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "widget-service-read-availability — burn rate (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))) / (1 - 0.999)",
+          "legendFormat": "burn rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "widget-service-read-latency — error rate (1h) vs budget",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\", le=\"0.25\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))",
+          "legendFormat": "error rate (1h)",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - 0.99)",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "widget-service-read-latency — error-budget burndown (28d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "1 - ((1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\", le=\"0.25\"}[28d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[28d])))) / (1 - 0.99))",
+          "legendFormat": "budget remaining",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "widget-service-read-latency — burn rate (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\", le=\"0.25\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"BatchGetWidgets|GetWidget|ListWidgets\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))) / (1 - 0.99)",
+          "legendFormat": "burn rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "widget-service-write-availability — error rate (1h) vs budget",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))",
+          "legendFormat": "error rate (1h)",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - 0.999)",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "widget-service-write-availability — error-budget burndown (28d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "1 - ((1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS\"}[28d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[28d])))) / (1 - 0.999))",
+          "legendFormat": "budget remaining",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "widget-service-write-availability — burn rate (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED|UNKNOWN|DEADLINE_EXCEEDED|INTERNAL|UNAVAILABLE|DATA_LOSS\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))) / (1 - 0.999)",
+          "legendFormat": "burn rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "widget-service-write-latency — error rate (1h) vs budget",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\", le=\"0.5\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))",
+          "legendFormat": "error rate (1h)",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - 0.99)",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "widget-service-write-latency — error-budget burndown (28d)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "1 - ((1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\", le=\"0.5\"}[28d])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[28d])))) / (1 - 0.99))",
+          "legendFormat": "budget remaining",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "widget-service-write-latency — burn rate (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(rpc_server_call_duration_seconds_bucket{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\", le=\"0.5\"}[1h])) / sum(rate(rpc_server_call_duration_seconds_count{rpc_service=\"toy.v1.WidgetService\", rpc_method=~\"CreateWidget|DeleteWidget|UpdateWidget\", rpc_response_status_code!~\"INVALID_ARGUMENT|NOT_FOUND|ALREADY_EXISTS|PERMISSION_DENIED|UNAUTHENTICATED\"}[1h])))) / (1 - 0.99)",
+          "legendFormat": "burn rate",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}
