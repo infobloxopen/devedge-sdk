@@ -17,6 +17,12 @@ func TestMappable_classification(t *testing.T) {
 		{"tags", Field{Name: "tags", IsTags: true}, true},
 		{"plain scalar", Field{Name: "vin", HasColumnType: true}, true},
 		{"output-only scalar (name)", Field{Name: "name", OutputOnly: true}, true},
+		// An OUTPUT_ONLY Timestamp/message keeps the prior behavior: an unstored
+		// computed field, dropped (not a hard failure).
+		{"output-only message (timestamp)", Field{Name: "archived_time", OutputOnly: true, IsMessage: true}, true},
+		// A plain OUTPUT_ONLY scalar outside the framework vocabulary would get no
+		// column and no projection — every write silently lost. Fail generation.
+		{"output-only scalar (non-name)", Field{Name: "hit_count", OutputOnly: true, HasColumnType: true}, false},
 		{"scalar FK", Field{Name: "fleet_id", IsScalarFK: true, HasColumnType: true}, true},
 		{"relationship message", Field{Name: "fleet", IsMessage: true, IsRelationship: true}, true},
 		{"relationship repeated", Field{Name: "vehicles", IsRepeated: true, IsRelationship: true}, true},

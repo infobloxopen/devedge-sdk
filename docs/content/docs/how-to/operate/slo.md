@@ -24,8 +24,7 @@ your SDK version.
 
 ## Generate objectives from the contract
 
-The scaffold already wrote `slo.yaml`. Regenerate it after you add custom methods, so the new methods
-join the grouped objectives:
+The scaffold already wrote `slo.yaml`. Regenerate it after you change the service's resource methods:
 
 ```bash
 de slo generate
@@ -40,6 +39,14 @@ slogen generate --openapi openapi/<service>.openapi.yaml \
 
 The `--service` value is the proto fully-qualified service name (for example
 `orders.v1.OrderService`), which is the `rpc.service` label the generated queries filter on.
+
+{{< callout type="info" >}}
+`de slo generate` groups only the standard AIP methods — `Get`/`List`/`BatchGet` as read,
+`Create`/`Update`/`Delete`/`Undelete` as write. It does **not** derive an objective for a custom
+(AIP-136) method such as `Resolve`, and it lists the ones it skipped. A custom method is often the
+service's hot path, so author its indicator by hand — see [Add a non-default
+indicator](#add-a-non-default-indicator).
+{{< /callout >}}
 
 ## Calibrate the target
 

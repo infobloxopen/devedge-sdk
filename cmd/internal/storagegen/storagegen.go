@@ -39,7 +39,24 @@ func Mappable(f Field) bool {
 	case f.IsRelationship:
 		return true // ent edge / GORM association
 	case f.OutputOnly:
-		return true // server-computed/never-written; surfaced on read if derivable or via owned hook
+		// An OUTPUT_ONLY field is server-managed: never written from Create/Update
+		// input. The generators back exactly two OUTPUT_ONLY shapes with real
+		// storage: the framework fields (etag/delete_time/expire_time), which their
+		// mixins own and which both plugins exclude upstream before classification,
+		// and the AIP-122 resource `name`, which the projection derives from id (no
+		// column). A plain OUTPUT_ONLY SCALAR outside that vocabulary has neither a
+		// mixin nor a derivation, so it would get no column and no projection — every
+		// write to it is silently discarded and every read returns the zero value.
+		// Report it as unmapped so generation fails loudly (the developer drops
+		// OUTPUT_ONLY to persist it as a server-writable column, or names it `name`
+		// for the derived resource name) rather than shipping silent data loss.
+		if f.Name == "name" {
+			return true // derived AIP-122 resource name
+		}
+		if f.IsMessage || f.IsRepeated || f.IsEnum {
+			return true // unstored computed field (e.g. an OUTPUT_ONLY Timestamp) — dropped as before
+		}
+		return false
 	case f.IsMessage || f.IsRepeated || f.IsEnum:
 		return false // nested non-relationship message, repeated scalar, or enum
 	case f.IsID, f.IsTenant, f.IsSecret, f.IsTags, f.IsScalarFK:
@@ -66,6 +83,8 @@ func Classify(fields []Field) (auto, unmapped []Field) {
 // field is unmapped. Only meaningful for fields where Mappable is false.
 func Reason(f Field) string {
 	switch {
+	case f.OutputOnly:
+		return "OUTPUT_ONLY field is server-managed, so the generated repository never writes it: outside the framework fields (etag/delete_time/expire_time) and the derived resource name, it gets no column and no projection, and every write to it is silently lost. To persist a server-computed value, remove OUTPUT_ONLY and set it in your handler (the field stays writable via a field mask); for the AIP-122 resource name, name the field \"name\""
 	case f.IsMessage:
 		return "nested message field has no scalar storage column — for a well-known type such as google.protobuf.Timestamp, model it as an int64 (unix seconds) column; otherwise add a relationship annotation (belongs_to/has_one/has_many) or flatten it into scalar fields"
 	case f.IsRepeated:
