@@ -16,6 +16,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/format"
 	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
@@ -322,6 +323,12 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	content := renderStorageFile(string(f.GoPackageName), messages, ownerByName)
 	if content == "" {
 		return
+	}
+	// Emit gofmt-clean output so a repo that gates CI on `gofmt -l` does not fail
+	// on generated code it is told never to hand-edit. Fall back to the raw
+	// content if formatting fails, so a render bug still emits debuggable output.
+	if formatted, err := format.Source([]byte(content)); err == nil {
+		content = string(formatted)
 	}
 
 	outPath := f.GeneratedFilenamePrefix + ".storage.go"

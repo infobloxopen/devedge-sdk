@@ -12,4 +12,5 @@ This section covers how to define your service contract, describe your data mode
   {{< card link="model-a-resource/" title="Model a resource" icon="cube" subtitle="Field types, framework fields, constraints, relationships, and secret fields." >}}
   {{< card link="storage-shapes/" title="Storage shapes" icon="database" subtitle="GORM vs ent — when to use each." >}}
   {{< card link="custom-methods/" title="Add a custom method or second resource" icon="puzzle" subtitle="Grow a scaffolded service: a custom RPC and a second resource, wired through the servicekit module and host." >}}
+  {{< card link="change-the-database-schema/" title="Change the database schema" icon="adjustments" subtitle="Author a versioned, reversible migration with de migrate — safe on a large, live database." >}}
 {{< /cards >}}

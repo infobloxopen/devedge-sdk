@@ -225,7 +225,7 @@ On PostgreSQL (and MySQL) the schema-of-record evolves through **versioned, sequ
 
 **Dev fast-path.** SQLite (dev/test only) keeps `AutoMigrate`, which also creates the domain tables so a freshly scaffolded service runs out of the box; the versioned-SQL path is verified against real PostgreSQL in CI. To adopt the versioned path, switch the dialector to Postgres, set a `postgres://` DSN, and add your domain tables as `module/migrations/0002_*.up.sql`.
 
-See the `change-database-schema` skill for the authoring workflow.
+To author and apply a migration step by step, see [Change the database schema](../../how-to/model-and-persist/change-the-database-schema/).
 
 ## Storage shapes
 
