@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/apikey"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/predicate"
+	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/servicetoken"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/token"
 )
 
@@ -25,8 +26,9 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeAPIKey = "APIKey"
-	TypeToken  = "Token"
+	TypeAPIKey       = "APIKey"
+	TypeServiceToken = "ServiceToken"
+	TypeToken        = "Token"
 )
 
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
@@ -946,6 +948,652 @@ func (m *APIKeyMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *APIKeyMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown APIKey edge %s", name)
+}
+
+// ServiceTokenMutation represents an operation that mutates the ServiceToken nodes in the graph.
+type ServiceTokenMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *string
+	label                  *string
+	secret_value_public_id *string
+	secret_value_salt      *string
+	secret_value_hash      *string
+	secret_value_hashspec  *string
+	clearedFields          map[string]struct{}
+	done                   bool
+	oldValue               func(context.Context) (*ServiceToken, error)
+	predicates             []predicate.ServiceToken
+}
+
+var _ ent.Mutation = (*ServiceTokenMutation)(nil)
+
+// servicetokenOption allows management of the mutation configuration using functional options.
+type servicetokenOption func(*ServiceTokenMutation)
+
+// newServiceTokenMutation creates new mutation for the ServiceToken entity.
+func newServiceTokenMutation(c config, op Op, opts ...servicetokenOption) *ServiceTokenMutation {
+	m := &ServiceTokenMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeServiceToken,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withServiceTokenID sets the ID field of the mutation.
+func withServiceTokenID(id string) servicetokenOption {
+	return func(m *ServiceTokenMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ServiceToken
+		)
+		m.oldValue = func(ctx context.Context) (*ServiceToken, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ServiceToken.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withServiceToken sets the old ServiceToken of the mutation.
+func withServiceToken(node *ServiceToken) servicetokenOption {
+	return func(m *ServiceTokenMutation) {
+		m.oldValue = func(context.Context) (*ServiceToken, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ServiceTokenMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ServiceTokenMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of ServiceToken entities.
+func (m *ServiceTokenMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ServiceTokenMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ServiceTokenMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ServiceToken.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetLabel sets the "label" field.
+func (m *ServiceTokenMutation) SetLabel(s string) {
+	m.label = &s
+}
+
+// Label returns the value of the "label" field in the mutation.
+func (m *ServiceTokenMutation) Label() (r string, exists bool) {
+	v := m.label
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLabel returns the old "label" field's value of the ServiceToken entity.
+// If the ServiceToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ServiceTokenMutation) OldLabel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLabel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLabel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLabel: %w", err)
+	}
+	return oldValue.Label, nil
+}
+
+// ClearLabel clears the value of the "label" field.
+func (m *ServiceTokenMutation) ClearLabel() {
+	m.label = nil
+	m.clearedFields[servicetoken.FieldLabel] = struct{}{}
+}
+
+// LabelCleared returns if the "label" field was cleared in this mutation.
+func (m *ServiceTokenMutation) LabelCleared() bool {
+	_, ok := m.clearedFields[servicetoken.FieldLabel]
+	return ok
+}
+
+// ResetLabel resets all changes to the "label" field.
+func (m *ServiceTokenMutation) ResetLabel() {
+	m.label = nil
+	delete(m.clearedFields, servicetoken.FieldLabel)
+}
+
+// SetSecretValuePublicID sets the "secret_value_public_id" field.
+func (m *ServiceTokenMutation) SetSecretValuePublicID(s string) {
+	m.secret_value_public_id = &s
+}
+
+// SecretValuePublicID returns the value of the "secret_value_public_id" field in the mutation.
+func (m *ServiceTokenMutation) SecretValuePublicID() (r string, exists bool) {
+	v := m.secret_value_public_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSecretValuePublicID returns the old "secret_value_public_id" field's value of the ServiceToken entity.
+// If the ServiceToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ServiceTokenMutation) OldSecretValuePublicID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSecretValuePublicID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSecretValuePublicID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSecretValuePublicID: %w", err)
+	}
+	return oldValue.SecretValuePublicID, nil
+}
+
+// ClearSecretValuePublicID clears the value of the "secret_value_public_id" field.
+func (m *ServiceTokenMutation) ClearSecretValuePublicID() {
+	m.secret_value_public_id = nil
+	m.clearedFields[servicetoken.FieldSecretValuePublicID] = struct{}{}
+}
+
+// SecretValuePublicIDCleared returns if the "secret_value_public_id" field was cleared in this mutation.
+func (m *ServiceTokenMutation) SecretValuePublicIDCleared() bool {
+	_, ok := m.clearedFields[servicetoken.FieldSecretValuePublicID]
+	return ok
+}
+
+// ResetSecretValuePublicID resets all changes to the "secret_value_public_id" field.
+func (m *ServiceTokenMutation) ResetSecretValuePublicID() {
+	m.secret_value_public_id = nil
+	delete(m.clearedFields, servicetoken.FieldSecretValuePublicID)
+}
+
+// SetSecretValueSalt sets the "secret_value_salt" field.
+func (m *ServiceTokenMutation) SetSecretValueSalt(s string) {
+	m.secret_value_salt = &s
+}
+
+// SecretValueSalt returns the value of the "secret_value_salt" field in the mutation.
+func (m *ServiceTokenMutation) SecretValueSalt() (r string, exists bool) {
+	v := m.secret_value_salt
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSecretValueSalt returns the old "secret_value_salt" field's value of the ServiceToken entity.
+// If the ServiceToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ServiceTokenMutation) OldSecretValueSalt(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSecretValueSalt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSecretValueSalt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSecretValueSalt: %w", err)
+	}
+	return oldValue.SecretValueSalt, nil
+}
+
+// ClearSecretValueSalt clears the value of the "secret_value_salt" field.
+func (m *ServiceTokenMutation) ClearSecretValueSalt() {
+	m.secret_value_salt = nil
+	m.clearedFields[servicetoken.FieldSecretValueSalt] = struct{}{}
+}
+
+// SecretValueSaltCleared returns if the "secret_value_salt" field was cleared in this mutation.
+func (m *ServiceTokenMutation) SecretValueSaltCleared() bool {
+	_, ok := m.clearedFields[servicetoken.FieldSecretValueSalt]
+	return ok
+}
+
+// ResetSecretValueSalt resets all changes to the "secret_value_salt" field.
+func (m *ServiceTokenMutation) ResetSecretValueSalt() {
+	m.secret_value_salt = nil
+	delete(m.clearedFields, servicetoken.FieldSecretValueSalt)
+}
+
+// SetSecretValueHash sets the "secret_value_hash" field.
+func (m *ServiceTokenMutation) SetSecretValueHash(s string) {
+	m.secret_value_hash = &s
+}
+
+// SecretValueHash returns the value of the "secret_value_hash" field in the mutation.
+func (m *ServiceTokenMutation) SecretValueHash() (r string, exists bool) {
+	v := m.secret_value_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSecretValueHash returns the old "secret_value_hash" field's value of the ServiceToken entity.
+// If the ServiceToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ServiceTokenMutation) OldSecretValueHash(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSecretValueHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSecretValueHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSecretValueHash: %w", err)
+	}
+	return oldValue.SecretValueHash, nil
+}
+
+// ClearSecretValueHash clears the value of the "secret_value_hash" field.
+func (m *ServiceTokenMutation) ClearSecretValueHash() {
+	m.secret_value_hash = nil
+	m.clearedFields[servicetoken.FieldSecretValueHash] = struct{}{}
+}
+
+// SecretValueHashCleared returns if the "secret_value_hash" field was cleared in this mutation.
+func (m *ServiceTokenMutation) SecretValueHashCleared() bool {
+	_, ok := m.clearedFields[servicetoken.FieldSecretValueHash]
+	return ok
+}
+
+// ResetSecretValueHash resets all changes to the "secret_value_hash" field.
+func (m *ServiceTokenMutation) ResetSecretValueHash() {
+	m.secret_value_hash = nil
+	delete(m.clearedFields, servicetoken.FieldSecretValueHash)
+}
+
+// SetSecretValueHashspec sets the "secret_value_hashspec" field.
+func (m *ServiceTokenMutation) SetSecretValueHashspec(s string) {
+	m.secret_value_hashspec = &s
+}
+
+// SecretValueHashspec returns the value of the "secret_value_hashspec" field in the mutation.
+func (m *ServiceTokenMutation) SecretValueHashspec() (r string, exists bool) {
+	v := m.secret_value_hashspec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSecretValueHashspec returns the old "secret_value_hashspec" field's value of the ServiceToken entity.
+// If the ServiceToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ServiceTokenMutation) OldSecretValueHashspec(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSecretValueHashspec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSecretValueHashspec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSecretValueHashspec: %w", err)
+	}
+	return oldValue.SecretValueHashspec, nil
+}
+
+// ClearSecretValueHashspec clears the value of the "secret_value_hashspec" field.
+func (m *ServiceTokenMutation) ClearSecretValueHashspec() {
+	m.secret_value_hashspec = nil
+	m.clearedFields[servicetoken.FieldSecretValueHashspec] = struct{}{}
+}
+
+// SecretValueHashspecCleared returns if the "secret_value_hashspec" field was cleared in this mutation.
+func (m *ServiceTokenMutation) SecretValueHashspecCleared() bool {
+	_, ok := m.clearedFields[servicetoken.FieldSecretValueHashspec]
+	return ok
+}
+
+// ResetSecretValueHashspec resets all changes to the "secret_value_hashspec" field.
+func (m *ServiceTokenMutation) ResetSecretValueHashspec() {
+	m.secret_value_hashspec = nil
+	delete(m.clearedFields, servicetoken.FieldSecretValueHashspec)
+}
+
+// Where appends a list predicates to the ServiceTokenMutation builder.
+func (m *ServiceTokenMutation) Where(ps ...predicate.ServiceToken) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ServiceTokenMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ServiceTokenMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ServiceToken, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ServiceTokenMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ServiceTokenMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ServiceToken).
+func (m *ServiceTokenMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ServiceTokenMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.label != nil {
+		fields = append(fields, servicetoken.FieldLabel)
+	}
+	if m.secret_value_public_id != nil {
+		fields = append(fields, servicetoken.FieldSecretValuePublicID)
+	}
+	if m.secret_value_salt != nil {
+		fields = append(fields, servicetoken.FieldSecretValueSalt)
+	}
+	if m.secret_value_hash != nil {
+		fields = append(fields, servicetoken.FieldSecretValueHash)
+	}
+	if m.secret_value_hashspec != nil {
+		fields = append(fields, servicetoken.FieldSecretValueHashspec)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ServiceTokenMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case servicetoken.FieldLabel:
+		return m.Label()
+	case servicetoken.FieldSecretValuePublicID:
+		return m.SecretValuePublicID()
+	case servicetoken.FieldSecretValueSalt:
+		return m.SecretValueSalt()
+	case servicetoken.FieldSecretValueHash:
+		return m.SecretValueHash()
+	case servicetoken.FieldSecretValueHashspec:
+		return m.SecretValueHashspec()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ServiceTokenMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case servicetoken.FieldLabel:
+		return m.OldLabel(ctx)
+	case servicetoken.FieldSecretValuePublicID:
+		return m.OldSecretValuePublicID(ctx)
+	case servicetoken.FieldSecretValueSalt:
+		return m.OldSecretValueSalt(ctx)
+	case servicetoken.FieldSecretValueHash:
+		return m.OldSecretValueHash(ctx)
+	case servicetoken.FieldSecretValueHashspec:
+		return m.OldSecretValueHashspec(ctx)
+	}
+	return nil, fmt.Errorf("unknown ServiceToken field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ServiceTokenMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case servicetoken.FieldLabel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLabel(v)
+		return nil
+	case servicetoken.FieldSecretValuePublicID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSecretValuePublicID(v)
+		return nil
+	case servicetoken.FieldSecretValueSalt:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSecretValueSalt(v)
+		return nil
+	case servicetoken.FieldSecretValueHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSecretValueHash(v)
+		return nil
+	case servicetoken.FieldSecretValueHashspec:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSecretValueHashspec(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ServiceToken field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ServiceTokenMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ServiceTokenMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ServiceTokenMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown ServiceToken numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ServiceTokenMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(servicetoken.FieldLabel) {
+		fields = append(fields, servicetoken.FieldLabel)
+	}
+	if m.FieldCleared(servicetoken.FieldSecretValuePublicID) {
+		fields = append(fields, servicetoken.FieldSecretValuePublicID)
+	}
+	if m.FieldCleared(servicetoken.FieldSecretValueSalt) {
+		fields = append(fields, servicetoken.FieldSecretValueSalt)
+	}
+	if m.FieldCleared(servicetoken.FieldSecretValueHash) {
+		fields = append(fields, servicetoken.FieldSecretValueHash)
+	}
+	if m.FieldCleared(servicetoken.FieldSecretValueHashspec) {
+		fields = append(fields, servicetoken.FieldSecretValueHashspec)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ServiceTokenMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ServiceTokenMutation) ClearField(name string) error {
+	switch name {
+	case servicetoken.FieldLabel:
+		m.ClearLabel()
+		return nil
+	case servicetoken.FieldSecretValuePublicID:
+		m.ClearSecretValuePublicID()
+		return nil
+	case servicetoken.FieldSecretValueSalt:
+		m.ClearSecretValueSalt()
+		return nil
+	case servicetoken.FieldSecretValueHash:
+		m.ClearSecretValueHash()
+		return nil
+	case servicetoken.FieldSecretValueHashspec:
+		m.ClearSecretValueHashspec()
+		return nil
+	}
+	return fmt.Errorf("unknown ServiceToken nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ServiceTokenMutation) ResetField(name string) error {
+	switch name {
+	case servicetoken.FieldLabel:
+		m.ResetLabel()
+		return nil
+	case servicetoken.FieldSecretValuePublicID:
+		m.ResetSecretValuePublicID()
+		return nil
+	case servicetoken.FieldSecretValueSalt:
+		m.ResetSecretValueSalt()
+		return nil
+	case servicetoken.FieldSecretValueHash:
+		m.ResetSecretValueHash()
+		return nil
+	case servicetoken.FieldSecretValueHashspec:
+		m.ResetSecretValueHashspec()
+		return nil
+	}
+	return fmt.Errorf("unknown ServiceToken field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ServiceTokenMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ServiceTokenMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ServiceTokenMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ServiceTokenMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ServiceTokenMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ServiceTokenMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ServiceTokenMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown ServiceToken unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ServiceTokenMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown ServiceToken edge %s", name)
 }
 
 // TokenMutation represents an operation that mutates the Token nodes in the graph.

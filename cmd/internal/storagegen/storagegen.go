@@ -16,6 +16,7 @@ type Field struct {
 	IsID           bool   // the resource primary key
 	IsTenant       bool   // account_id (supplied by the tenant mixin)
 	IsSecret       bool   // secret field (stored hash+cipher)
+	IsCredential   bool   // verify-only credential field (stored public_id + salted hash)
 	IsTags         bool   // map<string,string> (stored as a JSON column)
 	OutputOnly     bool   // AIP-203 OUTPUT_ONLY (surfaced on read, never written)
 	IsRepeated     bool   // a repeated (list) field
@@ -59,7 +60,7 @@ func Mappable(f Field) bool {
 		return false
 	case f.IsMessage || f.IsRepeated || f.IsEnum:
 		return false // nested non-relationship message, repeated scalar, or enum
-	case f.IsID, f.IsTenant, f.IsSecret, f.IsTags, f.IsScalarFK:
+	case f.IsID, f.IsTenant, f.IsSecret, f.IsCredential, f.IsTags, f.IsScalarFK:
 		return true
 	default:
 		return f.HasColumnType // a plain scalar with a known column type

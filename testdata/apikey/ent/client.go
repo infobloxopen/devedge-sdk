@@ -15,6 +15,7 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/apikey"
+	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/servicetoken"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/token"
 )
 
@@ -25,6 +26,8 @@ type Client struct {
 	Schema *migrate.Schema
 	// APIKey is the client for interacting with the APIKey builders.
 	APIKey *APIKeyClient
+	// ServiceToken is the client for interacting with the ServiceToken builders.
+	ServiceToken *ServiceTokenClient
 	// Token is the client for interacting with the Token builders.
 	Token *TokenClient
 }
@@ -39,6 +42,7 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.APIKey = NewAPIKeyClient(c.config)
+	c.ServiceToken = NewServiceTokenClient(c.config)
 	c.Token = NewTokenClient(c.config)
 }
 
@@ -130,10 +134,11 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:    ctx,
-		config: cfg,
-		APIKey: NewAPIKeyClient(cfg),
-		Token:  NewTokenClient(cfg),
+		ctx:          ctx,
+		config:       cfg,
+		APIKey:       NewAPIKeyClient(cfg),
+		ServiceToken: NewServiceTokenClient(cfg),
+		Token:        NewTokenClient(cfg),
 	}, nil
 }
 
@@ -151,10 +156,11 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:    ctx,
-		config: cfg,
-		APIKey: NewAPIKeyClient(cfg),
-		Token:  NewTokenClient(cfg),
+		ctx:          ctx,
+		config:       cfg,
+		APIKey:       NewAPIKeyClient(cfg),
+		ServiceToken: NewServiceTokenClient(cfg),
+		Token:        NewTokenClient(cfg),
 	}, nil
 }
 
@@ -184,6 +190,7 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	c.APIKey.Use(hooks...)
+	c.ServiceToken.Use(hooks...)
 	c.Token.Use(hooks...)
 }
 
@@ -191,6 +198,7 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	c.APIKey.Intercept(interceptors...)
+	c.ServiceToken.Intercept(interceptors...)
 	c.Token.Intercept(interceptors...)
 }
 
@@ -199,6 +207,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
 	case *APIKeyMutation:
 		return c.APIKey.mutate(ctx, m)
+	case *ServiceTokenMutation:
+		return c.ServiceToken.mutate(ctx, m)
 	case *TokenMutation:
 		return c.Token.mutate(ctx, m)
 	default:
@@ -341,6 +351,139 @@ func (c *APIKeyClient) mutate(ctx context.Context, m *APIKeyMutation) (Value, er
 	}
 }
 
+// ServiceTokenClient is a client for the ServiceToken schema.
+type ServiceTokenClient struct {
+	config
+}
+
+// NewServiceTokenClient returns a client for the ServiceToken from the given config.
+func NewServiceTokenClient(c config) *ServiceTokenClient {
+	return &ServiceTokenClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `servicetoken.Hooks(f(g(h())))`.
+func (c *ServiceTokenClient) Use(hooks ...Hook) {
+	c.hooks.ServiceToken = append(c.hooks.ServiceToken, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `servicetoken.Intercept(f(g(h())))`.
+func (c *ServiceTokenClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ServiceToken = append(c.inters.ServiceToken, interceptors...)
+}
+
+// Create returns a builder for creating a ServiceToken entity.
+func (c *ServiceTokenClient) Create() *ServiceTokenCreate {
+	mutation := newServiceTokenMutation(c.config, OpCreate)
+	return &ServiceTokenCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ServiceToken entities.
+func (c *ServiceTokenClient) CreateBulk(builders ...*ServiceTokenCreate) *ServiceTokenCreateBulk {
+	return &ServiceTokenCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ServiceTokenClient) MapCreateBulk(slice any, setFunc func(*ServiceTokenCreate, int)) *ServiceTokenCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ServiceTokenCreateBulk{err: fmt.Errorf("calling to ServiceTokenClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ServiceTokenCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ServiceTokenCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ServiceToken.
+func (c *ServiceTokenClient) Update() *ServiceTokenUpdate {
+	mutation := newServiceTokenMutation(c.config, OpUpdate)
+	return &ServiceTokenUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ServiceTokenClient) UpdateOne(_m *ServiceToken) *ServiceTokenUpdateOne {
+	mutation := newServiceTokenMutation(c.config, OpUpdateOne, withServiceToken(_m))
+	return &ServiceTokenUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ServiceTokenClient) UpdateOneID(id string) *ServiceTokenUpdateOne {
+	mutation := newServiceTokenMutation(c.config, OpUpdateOne, withServiceTokenID(id))
+	return &ServiceTokenUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ServiceToken.
+func (c *ServiceTokenClient) Delete() *ServiceTokenDelete {
+	mutation := newServiceTokenMutation(c.config, OpDelete)
+	return &ServiceTokenDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ServiceTokenClient) DeleteOne(_m *ServiceToken) *ServiceTokenDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ServiceTokenClient) DeleteOneID(id string) *ServiceTokenDeleteOne {
+	builder := c.Delete().Where(servicetoken.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ServiceTokenDeleteOne{builder}
+}
+
+// Query returns a query builder for ServiceToken.
+func (c *ServiceTokenClient) Query() *ServiceTokenQuery {
+	return &ServiceTokenQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeServiceToken},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ServiceToken entity by its id.
+func (c *ServiceTokenClient) Get(ctx context.Context, id string) (*ServiceToken, error) {
+	return c.Query().Where(servicetoken.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ServiceTokenClient) GetX(ctx context.Context, id string) *ServiceToken {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ServiceTokenClient) Hooks() []Hook {
+	return c.hooks.ServiceToken
+}
+
+// Interceptors returns the client interceptors.
+func (c *ServiceTokenClient) Interceptors() []Interceptor {
+	return c.inters.ServiceToken
+}
+
+func (c *ServiceTokenClient) mutate(ctx context.Context, m *ServiceTokenMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ServiceTokenCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ServiceTokenUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ServiceTokenUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ServiceTokenDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ServiceToken mutation op: %q", m.Op())
+	}
+}
+
 // TokenClient is a client for the Token schema.
 type TokenClient struct {
 	config
@@ -477,9 +620,9 @@ func (c *TokenClient) mutate(ctx context.Context, m *TokenMutation) (Value, erro
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		APIKey, Token []ent.Hook
+		APIKey, ServiceToken, Token []ent.Hook
 	}
 	inters struct {
-		APIKey, Token []ent.Interceptor
+		APIKey, ServiceToken, Token []ent.Interceptor
 	}
 )

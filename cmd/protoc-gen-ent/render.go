@@ -5,9 +5,9 @@ import (
 	"path"
 	"strings"
 
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
-	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 )
 
 // toStorageFields projects a message's fields onto the engine-neutral
@@ -19,15 +19,16 @@ func toStorageFields(msg entMessageInfo) []storagegen.Field {
 	out := make([]storagegen.Field, 0, len(msg.Fields))
 	for _, f := range msg.Fields {
 		out = append(out, storagegen.Field{
-			Name:           f.Name,
-			IsID:           f.IsID,
-			IsTenant:       f.Name == "account_id" || f.SnakeName == "account_id",
-			IsSecret:       f.IsSecret,
-			IsTags:         f.IsTags,
-			OutputOnly:     f.OutputOnly,
-			IsRepeated:     f.IsRepeated,
-			IsMessage:      f.IsMessage,
-			IsEnum:         f.IsEnum,
+			Name:         f.Name,
+			IsID:         f.IsID,
+			IsTenant:     f.Name == "account_id" || f.SnakeName == "account_id",
+			IsSecret:     f.IsSecret,
+			IsCredential: f.IsCredential,
+			IsTags:       f.IsTags,
+			OutputOnly:   f.OutputOnly,
+			IsRepeated:   f.IsRepeated,
+			IsMessage:    f.IsMessage,
+			IsEnum:       f.IsEnum,
 			// A references field (cross-aggregate link) is wirable like a
 			// relationship for the F027 coverage check: its message field is dropped
 			// (no edge), only its scalar foreign_key column is persisted. Without
@@ -170,8 +171,16 @@ type entFieldInfo struct {
 	IsTags     bool   // map<string,string> field — emitted as a JSON field
 	IsEnum     bool   // enum field — not deterministically wirable (F027 fail-closed)
 	IsSecret   bool   // secret field — emitted as _hash + _cipher, never plaintext
-	OutputOnly bool   // AIP-203 OUTPUT_ONLY — never written by Create/Update/batch
-	InputOnly  bool   // AIP-203 effective INPUT_ONLY — write-only, omitted from responses
+	// IsCredential marks a verify-only credential field (WS-033): emitted as
+	// <field>_public_id (UNIQUE) + <field>_salt + <field>_hash + <field>_hashspec,
+	// minted on Create and returned once, never stored/returned as plaintext.
+	// Mutually exclusive with IsSecret (enforced in main.go).
+	IsCredential bool
+	// CredentialPrefix overrides the minted token prefix for a credential field
+	// (from the credential_prefix annotation); empty means the minter default.
+	CredentialPrefix string
+	OutputOnly       bool // AIP-203 OUTPUT_ONLY — never written by Create/Update/batch
+	InputOnly        bool // AIP-203 effective INPUT_ONLY — write-only, omitted from responses
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull bool
 	Unique  bool
@@ -215,6 +224,18 @@ func msgHasTenantField(msg entMessageInfo) bool {
 func msgHasSecretField(msg entMessageInfo) bool {
 	for _, f := range msg.Fields {
 		if f.IsSecret {
+			return true
+		}
+	}
+	return false
+}
+
+// msgHasCredentialField reports whether the message has any verify-only credential
+// field (WS-033), which drives the split public_id/salt/hash/hashspec columns, the
+// UNIQUE index on public_id, and the Verify<Field> helper.
+func msgHasCredentialField(msg entMessageInfo) bool {
+	for _, f := range msg.Fields {
+		if f.IsCredential {
 			return true
 		}
 	}
@@ -433,6 +454,7 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	hasTenant := msgHasTenantField(msg)
 	hasSoftDelete := msg.SoftDelete
 	hasSecret := msgHasSecretField(msg)
+	hasCredential := msgHasCredentialField(msg)
 	hasIndex := msgHasIndexField(msg)
 	hasTenantUnique := msgHasTenantUnique(msg)
 	hasEdges := msgHasEdges(msg)
@@ -464,7 +486,7 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 		b.WriteString("\t\"entgo.io/ent/schema/edge\"\n")
 	}
 	b.WriteString("\t\"entgo.io/ent/schema/field\"\n")
-	if hasSecret || hasIndex || hasTenantUnique {
+	if hasSecret || hasCredential || hasIndex || hasTenantUnique {
 		b.WriteString("\t\"entgo.io/ent/schema/index\"\n")
 	}
 	if usePartial || hasCascade {
@@ -546,6 +568,16 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 				continue
 			}
 			fmt.Fprintf(&b, "\t\t// TODO: nested message %s skipped\n", f.Name)
+		case f.IsCredential:
+			// Verify-only credential (WS-033): never stored as plaintext, and no
+			// reversible cipher. Store a public lookup id (UNIQUE, indexed below), a
+			// per-credential salt, the salted one-way hash, and the self-describing
+			// hash spec. Verify<Field> looks up by public_id and constant-time-compares.
+			fmt.Fprintf(&b, "\t\t// %s is a verify-only credential — stored as public_id + salted hash, never plaintext\n", f.Name)
+			fmt.Fprintf(&b, "\t\tfield.String(\"%s_public_id\").Optional().Comment(\"public lookup id for %s\"),\n", f.SnakeName, f.SnakeName)
+			fmt.Fprintf(&b, "\t\tfield.String(\"%s_salt\").Optional().Comment(\"per-credential salt for %s\"),\n", f.SnakeName, f.SnakeName)
+			fmt.Fprintf(&b, "\t\tfield.String(\"%s_hash\").Optional().Comment(\"salted one-way hash of %s\"),\n", f.SnakeName, f.SnakeName)
+			fmt.Fprintf(&b, "\t\tfield.String(\"%s_hashspec\").Optional().Comment(\"hash spec for %s (verify-time agility)\"),\n", f.SnakeName, f.SnakeName)
 		case f.IsSecret:
 			// Secret fields are never stored as plaintext: a lookup hash and a
 			// recovery cipher take the place of the raw value.
@@ -666,13 +698,19 @@ func renderEntSchema(msg entMessageInfo, siblings []entMessageInfo) string {
 	// becomes a COMPOSITE unique index (account_id, <field>) — account_id leading —
 	// so uniqueness holds per tenant, not globally (GH #44); the index is named
 	// ux_<message>_account_<field> to match the GORM backend.
-	if hasSecret || hasIndex || hasTenantUnique {
+	if hasSecret || hasCredential || hasIndex || hasTenantUnique {
 		lowerMsg := strings.ToLower(msg.MessageName)
 		fmt.Fprintf(&b, "// Indexes defines the indexes of %s.\n", msg.MessageName)
 		fmt.Fprintf(&b, "func (%s) Indexes() []ent.Index {\n", msg.MessageName)
 		b.WriteString("\treturn []ent.Index{\n")
 		for _, f := range msg.Fields {
 			switch {
+			case f.IsCredential:
+				// WS-033: the public_id is the lookup handle and the ONLY unique part of
+				// a credential — a global UNIQUE index (never per-tenant) so Verify can
+				// resolve a token without the tenant, and a duplicate mint (~2^-128) hits
+				// the constraint and re-mints. The salt/hash are never looked up.
+				fmt.Fprintf(&b, "\t\tindex.Fields(\"%s_public_id\").Unique().StorageKey(\"ux_%s_%s_public_id\"),\n", f.SnakeName, lowerMsg, f.SnakeName)
 			case f.IsSecret:
 				fmt.Fprintf(&b, "\t\tindex.Fields(\"%s_hash\"),\n", f.SnakeName)
 			case hasTenant && f.Unique && !f.IsID:
@@ -858,6 +896,7 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	maskLower := strings.ToLower(res) // per-surface InMask helper prefix (unique per surface)
 	hasTenant := msgHasTenantField(owner)
 	hasSecret := msgHasSecretField(msg)
+	hasCredential := msgHasCredentialField(msg)
 	soft := owner.SoftDelete
 
 	entImport := path.Dir(goImportPath) + "/ent"
@@ -867,6 +906,11 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	// Skip id, the tenant discriminator, output-only, repeated and message fields.
 	var writable, secrets []entFieldInfo
 	for _, f := range msg.Fields {
+		if f.IsCredential {
+			// WS-033: a verify-only credential is minted on Create only; it is never
+			// written by a batch update (rotate is a separate P1 operation).
+			continue
+		}
 		if f.IsSecret {
 			secrets = append(secrets, f)
 			continue
@@ -895,7 +939,9 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/middleware\"\n")
 	}
 	b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence\"\n")
-	if hasSecret {
+	if hasSecret || hasCredential {
+		// secret.Encryptor (secret fields) and/or secret.CredentialMinter (credential
+		// fields) — the batch constructor forwards the minter to New<R>EntRepository.
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
 	if hasTenant {
@@ -920,13 +966,26 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	b.WriteString("}\n\n")
 
 	fmt.Fprintf(&b, "// New%sEntBatchRepository wraps the hand-written ent adapter with batch support.\n", res)
+	// Build the constructor param list + the forwarding args for New<R>EntRepository.
+	// enc rides only when the resource has secret fields; minter only when it has
+	// credential fields (WS-033) — the batch loop never mints, but it must pass the
+	// minter through so the embedded single-op Create can.
+	batchParams := "client *ent.Client"
+	batchFwd := "client"
 	if hasSecret {
-		fmt.Fprintf(&b, "func New%sEntBatchRepository(client *ent.Client, enc secret.Encryptor) *%sEntRepository {\n", res, res)
-		fmt.Fprintf(&b, "\treturn &%sEntRepository{Repository: New%sEntRepository(client, enc), client: client, enc: enc}\n}\n\n", res, res)
-	} else {
-		fmt.Fprintf(&b, "func New%sEntBatchRepository(client *ent.Client) *%sEntRepository {\n", res, res)
-		fmt.Fprintf(&b, "\treturn &%sEntRepository{Repository: New%sEntRepository(client), client: client}\n}\n\n", res, res)
+		batchParams += ", enc secret.Encryptor"
+		batchFwd += ", enc"
 	}
+	if hasCredential {
+		batchParams += ", minter *secret.CredentialMinter"
+		batchFwd += ", minter"
+	}
+	structExtra := ", client: client"
+	if hasSecret {
+		structExtra += ", enc: enc"
+	}
+	fmt.Fprintf(&b, "func New%sEntBatchRepository(%s) *%sEntRepository {\n", res, batchParams, res)
+	fmt.Fprintf(&b, "\treturn &%sEntRepository{Repository: New%sEntRepository(%s)%s}\n}\n\n", res, res, batchFwd, structExtra)
 
 	// Mask helper.
 	fmt.Fprintf(&b, "func %sInMask(mask []string, field string) bool {\n", maskLower)
@@ -1089,7 +1148,7 @@ func renderEntColumns(msg entMessageInfo, pkgName string) string {
 		// Tags are handled by the JSON column map below. Skip id, relationships,
 		// secrets (stored hashed) and output-only computed fields — none are
 		// filterable scalar columns. A scalar FK (belongs_to) stays in.
-		if f.IsID || f.IsRepeated || f.IsMessage || f.IsTags || f.IsSecret || f.OutputOnly {
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsTags || f.IsSecret || f.IsCredential || f.OutputOnly {
 			continue
 		}
 		fmt.Fprintf(&b, "\t%q: %q,\n", f.Name, f.SnakeName)
@@ -1180,8 +1239,9 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	ownerTenant := msgHasTenantField(owner)
 	soft := owner.SoftDelete // Delete_/Undelete_ semantics follow the model's table
 	hasSecret := msgHasSecretField(msg)
+	hasCredential := msgHasCredentialField(msg)
 	hasTags := msgHasTags(msg)
-	projectSoft := msg.SoftDelete    // fromEnt projects delete_time only if the surface declares it
+	projectSoft := msg.SoftDelete // fromEnt projects delete_time only if the surface declares it
 	projectExpire := msg.HasExpireTime
 	// BC-12 resource identity follows the OWNER (Create persists into the owner's
 	// table). serverGenID selects mint-on-empty (the default) vs reject-empty
@@ -1198,8 +1258,12 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// output-only, repeated and message fields. Foreign-key detection uses the
 	// OWNER's belongs_to bindings, since the columns live on the owner's table.
 	fkSet := msgForeignKeyFields(owner)
-	var plainWritable, fkWritable, secrets []entFieldInfo
+	var plainWritable, fkWritable, secrets, credentials []entFieldInfo
 	for _, f := range msg.Fields {
+		if f.IsCredential {
+			credentials = append(credentials, f)
+			continue
+		}
 		if f.IsSecret {
 			secrets = append(secrets, f)
 			continue
@@ -1249,7 +1313,9 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if msgHasResourceName(msg) && !withStorage {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/persistence/resourcename\"\n")
 	}
-	if hasSecret {
+	if hasSecret || hasCredential {
+		// secret.Encryptor for secret fields; secret.CredentialMinter + secret.Parse/
+		// Verify/StoredCredential for verify-only credential fields (WS-033).
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
 	if !serverGenID || ownerTenant {
@@ -1283,26 +1349,33 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// the Create_ closure captures it to mint an id when the caller leaves it empty.
 	// A USER_SETTABLE id is never minted, so idGen is not bound (the option is
 	// accepted but unused — the signature stays uniform across resources).
+	// Constructor param list: enc rides only for secret fields, minter only for
+	// verify-only credential fields (WS-033). The minter is captured by the Create_
+	// closure to mint each credential token; it is not stored on EntRepository.
+	ctorParams := "client *ent.Client"
+	if hasSecret {
+		ctorParams += ", enc secret.Encryptor"
+	}
+	if hasCredential {
+		ctorParams += ", minter *secret.CredentialMinter"
+	}
+	ctorParams += ", opts ...persistence.RepoOption"
 	if hasSecret {
 		b.WriteString("// enc may be nil only if no secret values will be written.\n")
-		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, enc secret.Encryptor, opts ...persistence.RepoOption) persistence.Repository[*%s, string] {\n", res, res)
-		writeEntTxClientResolver(&b, txClientVar, model)
-		if serverGenID {
-			fmt.Fprintf(&b, "\tidGen := persistence.NewRepoConfig(%s, opts...).IDGenerator\n", idGenDefault)
-		} else {
-			b.WriteString("\t_ = opts // id is USER_SETTABLE; the generator option is accepted but unused\n")
-		}
-		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
-		b.WriteString("\t\tEnc: enc,\n")
+	}
+	if hasCredential {
+		b.WriteString("// minter must be non-nil: a credential value is minted on every Create.\n")
+	}
+	fmt.Fprintf(&b, "func New%sEntRepository(%s) persistence.Repository[*%s, string] {\n", res, ctorParams, res)
+	writeEntTxClientResolver(&b, txClientVar, model)
+	if serverGenID {
+		fmt.Fprintf(&b, "\tidGen := persistence.NewRepoConfig(%s, opts...).IDGenerator\n", idGenDefault)
 	} else {
-		fmt.Fprintf(&b, "func New%sEntRepository(client *ent.Client, opts ...persistence.RepoOption) persistence.Repository[*%s, string] {\n", res, res)
-		writeEntTxClientResolver(&b, txClientVar, model)
-		if serverGenID {
-			fmt.Fprintf(&b, "\tidGen := persistence.NewRepoConfig(%s, opts...).IDGenerator\n", idGenDefault)
-		} else {
-			b.WriteString("\t_ = opts // id is USER_SETTABLE; the generator option is accepted but unused\n")
-		}
-		fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
+		b.WriteString("\t_ = opts // id is USER_SETTABLE; the generator option is accepted but unused\n")
+	}
+	fmt.Fprintf(&b, "\treturn &entrepo.EntRepository[*%s, string]{\n", res)
+	if hasSecret {
+		b.WriteString("\t\tEnc: enc,\n")
 	}
 
 	// ---- Create_ ----
@@ -1367,12 +1440,45 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		fmt.Fprintf(&b, "\t\t\t\tentity.%s = \"\" // never persist plaintext\n", getName)
 		b.WriteString("\t\t\t}\n")
 	}
+	// WS-033: mint each verify-only credential. The server ALWAYS mints on Create
+	// (the client never supplies the value); it stores the split public_id + salted
+	// hash columns and returns the full token ONCE on the response below.
+	for _, f := range credentials {
+		pubSetter := entSetterGoName(f.SnakeName + "_public_id")
+		saltSetter := entSetterGoName(f.SnakeName + "_salt")
+		hashSetter := entSetterGoName(f.SnakeName + "_hash")
+		specSetter := entSetterGoName(f.SnakeName + "_hashspec")
+		minterVar := "m" + entSetterGoName(f.SnakeName)
+		tokVar := "tok" + entSetterGoName(f.SnakeName)
+		credVar := "cred" + entSetterGoName(f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tif minter == nil {\n\t\t\t\treturn nil, fmt.Errorf(\"credential field %%q set but no minter configured: %%w\", %q, persistence.ErrNoMinter)\n\t\t\t}\n", f.SnakeName)
+		if f.CredentialPrefix != "" {
+			// Per-field prefix override (credential_prefix annotation): copy the
+			// injected minter's spec/entropy but stamp this field's known prefix.
+			fmt.Fprintf(&b, "\t\t\t%s := *minter\n", minterVar)
+			fmt.Fprintf(&b, "\t\t\t%s.Prefix = %q\n", minterVar, f.CredentialPrefix)
+			fmt.Fprintf(&b, "\t\t\t%s, %s, merr := %s.Mint()\n", tokVar, credVar, minterVar)
+		} else {
+			fmt.Fprintf(&b, "\t\t\t%s, %s, merr := minter.Mint()\n", tokVar, credVar)
+		}
+		fmt.Fprintf(&b, "\t\t\tif merr != nil {\n\t\t\t\treturn nil, fmt.Errorf(\"mint %s: %%w\", merr)\n\t\t\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\t\t\tb = b.Set%s(%s.PublicID).Set%s(%s.Salt).Set%s(%s.Hash).Set%s(%s.Spec.Algo)\n", pubSetter, credVar, saltSetter, credVar, hashSetter, credVar, specSetter, credVar)
+	}
 	fmt.Fprintf(&b, "\t\t\tif ToEnt%sOnCreate != nil {\n\t\t\t\tToEnt%sOnCreate(entity, b)\n\t\t\t}\n", res, res)
 	b.WriteString("\t\t\tcreated, err := b.Save(ctx)\n")
 	b.WriteString("\t\t\tif err != nil {\n")
 	b.WriteString("\t\t\t\tif ce := persistence.ConstraintError(err); ce != nil {\n\t\t\t\t\treturn nil, ce\n\t\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\t\treturn nil, fmt.Errorf(\"create %s: %%w\", err)\n\t\t\t}\n", lower)
-	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(created), nil\n", res)
+	if len(credentials) > 0 {
+		fmt.Fprintf(&b, "\t\t\tresult := fromEnt%s(created)\n", res)
+		for _, f := range credentials {
+			tokVar := "tok" + entSetterGoName(f.SnakeName)
+			fmt.Fprintf(&b, "\t\t\tresult.%s = %s // WS-033: return the minted token ONCE\n", entGoName(f.SnakeName), tokVar)
+		}
+		b.WriteString("\t\t\treturn result, nil\n")
+	} else {
+		fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(created), nil\n", res)
+	}
 	b.WriteString("\t\t},\n")
 
 	// ---- Get_ ----
@@ -1580,6 +1686,10 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	fmt.Fprintf(&b, "\tp := &%s{\n", res)
 	for _, f := range msg.Fields {
 		switch {
+		case f.IsCredential:
+			// WS-033: a verify-only credential is returned ONCE by Create (the minted
+			// token) and NEVER on any read — only public_id/salt/hash are stored.
+			fmt.Fprintf(&b, "\t\t// %s omitted — verify-only credential, never returned on read\n", f.SnakeName)
 		case f.IsSecret:
 			fmt.Fprintf(&b, "\t\t// %s omitted — secret, never returned\n", f.SnakeName)
 		case f.InputOnly:
@@ -1648,6 +1758,30 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		fmt.Fprintf(&b, "\te, err := client.%s.Query().Where(ent%s.%sHash(hash)).Only(ctx)\n", model, lower, setName)
 		b.WriteString("\tif err != nil {\n\t\tif ent.IsNotFound(err) {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n\t\treturn nil, err\n\t}\n")
 		fmt.Fprintf(&b, "\treturn fromEnt%s(e), nil\n}\n", res)
+	}
+
+	// ---- Verify<Field> helpers (WS-033) ----
+	for _, f := range credentials {
+		setName := entSetterGoName(f.SnakeName)                // Verify<Field> suffix
+		pubPred := entSetterGoName(f.SnakeName + "_public_id") // ent predicate + struct field
+		saltField := entSetterGoName(f.SnakeName + "_salt")
+		hashField := entSetterGoName(f.SnakeName + "_hash")
+		specField := entSetterGoName(f.SnakeName + "_hashspec")
+		fmt.Fprintf(&b, "\n// Verify%s verifies a presented %s credential token: it parses the token,\n", setName, f.SnakeName)
+		b.WriteString("// looks up the record by its public_id (a GLOBAL unique — no tenant needed, so a\n")
+		b.WriteString("// gateway can resolve a token without the caller's tenant), and constant-time-\n")
+		b.WriteString("// compares the salted hash. Returns (record, true, nil) on a valid token,\n")
+		b.WriteString("// (nil, false, nil) when the token is malformed / unknown / wrong, and a non-nil\n")
+		b.WriteString("// error only on a storage or verify fault.\n")
+		fmt.Fprintf(&b, "func Verify%s(ctx context.Context, client *ent.Client, token string) (*%s, bool, error) {\n", setName, res)
+		b.WriteString("\t_, publicID, presented, perr := secret.Parse(token)\n")
+		b.WriteString("\tif perr != nil {\n\t\treturn nil, false, nil\n\t}\n")
+		fmt.Fprintf(&b, "\te, err := client.%s.Query().Where(ent%s.%s(publicID)).Only(ctx)\n", model, lower, pubPred)
+		b.WriteString("\tif err != nil {\n\t\tif ent.IsNotFound(err) {\n\t\t\treturn nil, false, nil\n\t\t}\n\t\treturn nil, false, err\n\t}\n")
+		fmt.Fprintf(&b, "\tok, verr := secret.Verify(presented, secret.StoredCredential{PublicID: e.%s, Salt: e.%s, Hash: e.%s, Spec: secret.HashSpec{Algo: e.%s}})\n", pubPred, saltField, hashField, specField)
+		b.WriteString("\tif verr != nil {\n\t\treturn nil, false, verr\n\t}\n")
+		b.WriteString("\tif !ok {\n\t\treturn nil, false, nil\n\t}\n")
+		fmt.Fprintf(&b, "\treturn fromEnt%s(e), true, nil\n}\n", res)
 	}
 
 	// ---- F031 aggregate graph-load primitive (D-2 option a) ----

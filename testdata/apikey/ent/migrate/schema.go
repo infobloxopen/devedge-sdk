@@ -34,6 +34,28 @@ var (
 			},
 		},
 	}
+	// ServiceTokensColumns holds the columns for the "service_tokens" table.
+	ServiceTokensColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "label", Type: field.TypeString, Nullable: true},
+		{Name: "secret_value_public_id", Type: field.TypeString, Nullable: true},
+		{Name: "secret_value_salt", Type: field.TypeString, Nullable: true},
+		{Name: "secret_value_hash", Type: field.TypeString, Nullable: true},
+		{Name: "secret_value_hashspec", Type: field.TypeString, Nullable: true},
+	}
+	// ServiceTokensTable holds the schema information for the "service_tokens" table.
+	ServiceTokensTable = &schema.Table{
+		Name:       "service_tokens",
+		Columns:    ServiceTokensColumns,
+		PrimaryKey: []*schema.Column{ServiceTokensColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "ux_servicetoken_secret_value_public_id",
+				Unique:  true,
+				Columns: []*schema.Column{ServiceTokensColumns[2]},
+			},
+		},
+	}
 	// TokensColumns holds the columns for the "tokens" table.
 	TokensColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -48,6 +70,7 @@ var (
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		APIKeysTable,
+		ServiceTokensTable,
 		TokensTable,
 	}
 )

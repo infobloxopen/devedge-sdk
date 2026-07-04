@@ -1,7 +1,14 @@
 // MIRROR — codegen input only. The canonical schema lives at
 // github.com/infobloxopen/apis/proto/infoblox/field/v1/field.proto
-// (released via apx). This copy exists solely so buf can resolve the import
-// when generating test fixtures. Keep byte-identical to the canonical file.
+// (released via apx). This copy exists so buf can resolve the import when
+// generating test fixtures. It is normally byte-identical to the canonical file.
+//
+// WS-033 (verify-only credential primitive): this mirror is TEMPORARILY AHEAD of
+// canonical — it adds `credential` (10) and `credential_prefix` (11) to
+// FieldOptions. Until the apis module releases these fields, the Go binding is
+// resolved from a workspace-local override (hack/apisfield-override, wired via
+// go.work + a cmd/go.mod replace) so the codegen's fopts.GetCredential() exists.
+// When apis ships the fields, drop the override and re-pin the canonical require.
 syntax = "proto3";
 
 package infoblox.field.v1;
@@ -19,7 +26,28 @@ message FieldOptions {
   //   - never store the plaintext value (hash + optional cipher only),
   //   - redact the value in logs ("[REDACTED]"),
   //   - reject any Get/List response that returns a non-empty value.
+  // Use secret for values a service must READ BACK (retrievable secrets). For an
+  // API key / token — a value that only needs to be VERIFIED — use credential.
   bool secret = 1;
+
+  // credential marks a field as a VERIFY-ONLY credential (an API key / token).
+  // Unlike secret (which keeps a reversible cipher so the value can be read
+  // back), the framework:
+  //   - MINTS the value on Create as a prefixed split token
+  //     "<prefix>_<public_id>_<secret>" and returns it to the client EXACTLY
+  //     ONCE (in the Create response's field),
+  //   - stores only the public_id (UNIQUE) plus a salted one-way hash and the
+  //     self-describing hash spec — NEVER a reversible copy,
+  //   - omits the field from every read response,
+  //   - generates Verify<Field> for constant-time verification of a presented
+  //     token.
+  // Mutually exclusive with secret. The field type must be string.
+  bool credential = 10;
+
+  // credential_prefix overrides the minted token's prefix for a credential
+  // field (default "ib"). A known, constant prefix is what lets secret scanners
+  // recognize a leaked token. Ignored unless credential = true.
+  string credential_prefix = 11;
 
   // Storage constraints.
   bool   not_null    = 2;  // DB NOT NULL constraint

@@ -190,9 +190,9 @@ func TestParseRejectsMalformed(t *testing.T) {
 		"",
 		"noseparators",
 		"ib_onlytwo",
-		"ib__emptysecret",  // empty middle/secret segments
-		"_pub_secret",      // empty prefix
-		"ib_pub_",          // empty secret
+		"ib__emptysecret",   // empty middle/secret segments
+		"_pub_secret",       // empty prefix
+		"ib_pub_",           // empty secret
 		"ib_pub_secret!bad", // non-base62 secret
 	}
 	for _, c := range cases {

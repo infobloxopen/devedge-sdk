@@ -25,8 +25,8 @@ import (
 
 // Common errors.
 var (
-	ErrNotFound          = errors.New("persistence: not found")
-	ErrConflict          = errors.New("persistence: conflict")
+	ErrNotFound           = errors.New("persistence: not found")
+	ErrConflict           = errors.New("persistence: conflict")
 	ErrPreconditionFailed = errors.New("persistence: precondition failed")
 	// ErrNoEncryptor signals that a Create/Update carried a non-empty secret field
 	// value but the repository was constructed with a nil secret.Encryptor, so the
@@ -34,6 +34,12 @@ var (
 	// with the field name) rather than silently dropping the secret (ent singular)
 	// or panicking (ent batch / GORM) — a uniform fail-loud contract (SEC-006).
 	ErrNoEncryptor = errors.New("persistence: secret field set but no encryptor configured")
+	// ErrNoMinter signals that a Create would mint a credential field value but the
+	// repository was constructed with a nil *secret.CredentialMinter, so no token
+	// can be produced. Generated repositories return this (wrapped with the field
+	// name) rather than panicking — the verify-only credential analogue of
+	// ErrNoEncryptor (WS-033).
+	ErrNoMinter = errors.New("persistence: credential field set but no minter configured")
 )
 
 // MaxPageSize is the AIP-158 upper bound the generated List paths clamp a
@@ -45,10 +51,10 @@ const MaxPageSize = 1000
 // ListOptions carries resource-oriented list parameters (filter/order/paging),
 // aligned with standard API list semantics.
 type ListOptions struct {
-	Filter      string
-	OrderBy     string
-	PageSize    int
-	PageToken   string
+	Filter    string
+	OrderBy   string
+	PageSize  int
+	PageToken string
 	// ShowDeleted includes soft-deleted resources in List results (AIP-148).
 	// When false (the zero value), soft-deleted resources are excluded.
 	ShowDeleted bool
