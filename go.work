@@ -10,6 +10,7 @@ go 1.25.5
 
 use (
 	.
+	./authn/oidc
 	./cmd
 	./config/koanf
 	./events/kafkabus
