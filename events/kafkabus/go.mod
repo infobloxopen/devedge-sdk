@@ -12,7 +12,7 @@ module github.com/infobloxopen/devedge-sdk/events/kafkabus
 go 1.25.5
 
 require (
-	github.com/infobloxopen/devedge-sdk v0.52.0
+	github.com/infobloxopen/devedge-sdk v0.53.0
 	github.com/twmb/franz-go v1.21.4
 )
 
