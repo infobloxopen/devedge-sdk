@@ -30,6 +30,12 @@ var (
 	ErrPreconditionFailed = errors.New("persistence: precondition failed")
 )
 
+// MaxPageSize is the AIP-158 upper bound the generated List paths clamp a
+// caller-requested page_size to. A request for more than this many resources is
+// silently reduced to MaxPageSize (the response still paginates via next_page_token),
+// so a single unbounded List cannot exhaust server memory.
+const MaxPageSize = 1000
+
 // ListOptions carries resource-oriented list parameters (filter/order/paging),
 // aligned with standard API list semantics.
 type ListOptions struct {

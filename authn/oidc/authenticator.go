@@ -103,8 +103,15 @@ type Config struct {
 	// IdP's in single-issuer. Required (fail closed).
 	ExpectedIssuer string
 	// ExpectedAudience is the required `aud` member — this microservice's audience.
-	// Empty skips the audience check (discouraged outside single-issuer bootstrap).
+	// Required (fail closed): NewAuthenticator errors when it is empty unless
+	// AllowAnyAudience is set. A verifier that accepts any audience will honor a
+	// token minted for a DIFFERENT service, so the default must not skip the check.
 	ExpectedAudience string
+	// AllowAnyAudience opts OUT of the audience check — the ONLY way to leave
+	// ExpectedAudience empty. Reserve it for a single-issuer bootstrap where the
+	// issuer alone scopes the token; never set it on a service that shares an
+	// issuer with other audiences.
+	AllowAnyAudience bool
 	// Leeway tolerates clock skew when validating exp/nbf. <=0 defaults to 30s.
 	Leeway time.Duration
 }
@@ -120,13 +127,17 @@ type Authenticator struct {
 }
 
 // NewAuthenticator constructs a verifier from cfg. It errors if the key source
-// or expected issuer is missing (fail-closed configuration).
+// or expected issuer is missing, or if the expected audience is empty without
+// AllowAnyAudience (fail-closed configuration).
 func NewAuthenticator(cfg Config) (*Authenticator, error) {
 	if cfg.Keys == nil {
 		return nil, fmt.Errorf("oidc: Keys (KeySource) is required")
 	}
 	if cfg.ExpectedIssuer == "" {
 		return nil, fmt.Errorf("oidc: ExpectedIssuer is required (fail closed)")
+	}
+	if cfg.ExpectedAudience == "" && !cfg.AllowAnyAudience {
+		return nil, fmt.Errorf("oidc: ExpectedAudience is required (fail closed); set AllowAnyAudience to accept any audience (single-issuer bootstrap only)")
 	}
 	lw := cfg.Leeway
 	if lw <= 0 {

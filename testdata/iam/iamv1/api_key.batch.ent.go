@@ -8,6 +8,8 @@ import (
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/secret"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
 	entapikey "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/apikey"
 )
@@ -85,6 +87,9 @@ func (r *ApiKeyEntRepository) BatchUpdate(ctx context.Context, items []persisten
 		return []*ApiKey{}, nil
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "apikey: no tenant on a tenant-scoped batch update")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -97,7 +102,7 @@ func (r *ApiKeyEntRepository) BatchUpdate(ctx context.Context, items []persisten
 	out := make([]*ApiKey, 0, len(items))
 	for _, it := range items {
 		u := tx.ApiKey.UpdateOneID(it.Key)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			u = u.Where(entapikey.AccountID(tenantID))
 		}
 		if apikeyInMask(it.FieldMask, "user_id") {
@@ -151,6 +156,9 @@ func (r *ApiKeyEntRepository) BatchDelete(ctx context.Context, keys []string) er
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "apikey: no tenant on a tenant-scoped batch delete")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -161,7 +169,7 @@ func (r *ApiKeyEntRepository) BatchDelete(ctx context.Context, keys []string) er
 		}
 	}
 	del := tx.ApiKey.Delete().Where(entapikey.IDIn(uniq...))
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		del = del.Where(entapikey.AccountID(tenantID))
 	}
 	n, derr := del.Exec(ctx)

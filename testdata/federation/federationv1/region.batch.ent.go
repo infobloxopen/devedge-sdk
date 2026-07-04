@@ -7,6 +7,8 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/federation/ent"
 	entregion "github.com/infobloxopen/devedge-sdk/testdata/federation/ent/region"
 )
@@ -83,6 +85,9 @@ func (r *RegionEntRepository) BatchUpdate(ctx context.Context, items []persisten
 		return []*Region{}, nil
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "region: no tenant on a tenant-scoped batch update")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -95,7 +100,7 @@ func (r *RegionEntRepository) BatchUpdate(ctx context.Context, items []persisten
 	out := make([]*Region, 0, len(items))
 	for _, it := range items {
 		u := tx.Region.UpdateOneID(it.Key)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			u = u.Where(entregion.AccountID(tenantID))
 		}
 		if regionInMask(it.FieldMask, "display_name") {
@@ -133,6 +138,9 @@ func (r *RegionEntRepository) BatchDelete(ctx context.Context, keys []string) er
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "region: no tenant on a tenant-scoped batch delete")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -143,7 +151,7 @@ func (r *RegionEntRepository) BatchDelete(ctx context.Context, keys []string) er
 		}
 	}
 	del := tx.Region.Delete().Where(entregion.IDIn(uniq...))
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		del = del.Where(entregion.AccountID(tenantID))
 	}
 	n, derr := del.Exec(ctx)

@@ -184,6 +184,9 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 	if pageSize <= 0 {
 		pageSize = 50
 	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
+	}
 	offset := 0
 	if opts.PageToken != "" {
 		if dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {

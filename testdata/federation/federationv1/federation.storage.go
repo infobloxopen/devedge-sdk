@@ -122,8 +122,11 @@ func (r *RegionRepository) conn(ctx context.Context) *gorm.DB {
 func (r *RegionRepository) Get(ctx context.Context, key string) (*Region, error) {
 	var m RegionModel
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped get")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -139,7 +142,10 @@ func (r *RegionRepository) List(ctx context.Context, opts persistence.ListOption
 	var models []RegionModel
 	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, "", status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped list")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
@@ -162,6 +168,9 @@ func (r *RegionRepository) List(ctx context.Context, opts persistence.ListOption
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
 	}
 	offset := 0
 	if opts.PageToken != "" {
@@ -188,7 +197,11 @@ func (r *RegionRepository) Create(ctx context.Context, entity *Region) (*Region,
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Region(entity)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped create")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
@@ -214,8 +227,11 @@ func (r *RegionRepository) Update(ctx context.Context, key string, entity *Regio
 		ToModelRegionOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped update")
+	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	ifMatch := etag.IfMatchFromContext(ctx)
@@ -246,7 +262,7 @@ func (r *RegionRepository) Update(ctx context.Context, key string, entity *Regio
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&RegionModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -276,7 +292,7 @@ func (r *RegionRepository) Update(ctx context.Context, key string, entity *Regio
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&RegionModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -295,8 +311,11 @@ func (r *RegionRepository) Update(ctx context.Context, key string, entity *Regio
 
 func (r *RegionRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped delete")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	res := q.Unscoped().Delete(&RegionModel{})
@@ -320,7 +339,10 @@ func (r *RegionRepository) BatchGet(ctx context.Context, keys []string) ([]*Regi
 	var models []RegionModel
 	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped batch get")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.Find(&models).Error; err != nil {
@@ -387,9 +409,12 @@ func (r *RegionRepository) BatchDelete(ctx context.Context, keys []string) error
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Region: no tenant on a tenant-scoped batch delete")
+	}
 	run := func(db *gorm.DB) error {
 		q := db.WithContext(ctx).Where("id IN ?", uniq)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			q = q.Where("account_id = ?", tenantID)
 		}
 		res := q.Unscoped().Delete(&RegionModel{})
@@ -509,8 +534,11 @@ func (r *AssetRepository) conn(ctx context.Context) *gorm.DB {
 func (r *AssetRepository) Get(ctx context.Context, key string) (*Asset, error) {
 	var m AssetModel
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped get")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -526,7 +554,10 @@ func (r *AssetRepository) List(ctx context.Context, opts persistence.ListOptions
 	var models []AssetModel
 	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, "", status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped list")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
@@ -549,6 +580,9 @@ func (r *AssetRepository) List(ctx context.Context, opts persistence.ListOptions
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
 	}
 	offset := 0
 	if opts.PageToken != "" {
@@ -575,7 +609,11 @@ func (r *AssetRepository) Create(ctx context.Context, entity *Asset) (*Asset, er
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Asset(entity)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped create")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
@@ -601,8 +639,11 @@ func (r *AssetRepository) Update(ctx context.Context, key string, entity *Asset,
 		ToModelAssetOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped update")
+	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	ifMatch := etag.IfMatchFromContext(ctx)
@@ -633,7 +674,7 @@ func (r *AssetRepository) Update(ctx context.Context, key string, entity *Asset,
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&AssetModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -664,7 +705,7 @@ func (r *AssetRepository) Update(ctx context.Context, key string, entity *Asset,
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&AssetModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -683,8 +724,11 @@ func (r *AssetRepository) Update(ctx context.Context, key string, entity *Asset,
 
 func (r *AssetRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped delete")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	res := q.Unscoped().Delete(&AssetModel{})
@@ -708,7 +752,10 @@ func (r *AssetRepository) BatchGet(ctx context.Context, keys []string) ([]*Asset
 	var models []AssetModel
 	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped batch get")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.Find(&models).Error; err != nil {
@@ -775,9 +822,12 @@ func (r *AssetRepository) BatchDelete(ctx context.Context, keys []string) error 
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Asset: no tenant on a tenant-scoped batch delete")
+	}
 	run := func(db *gorm.DB) error {
 		q := db.WithContext(ctx).Where("id IN ?", uniq)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			q = q.Where("account_id = ?", tenantID)
 		}
 		res := q.Unscoped().Delete(&AssetModel{})

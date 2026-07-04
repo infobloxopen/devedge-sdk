@@ -13,6 +13,10 @@ import (
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
 	"github.com/infobloxopen/devedge-sdk/secret"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	ent "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent"
 	entapikey "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/apikey"
 	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/predicate"
@@ -38,7 +42,10 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "apikey: no tenant on a tenant-scoped create")
+				}
 				entity.AccountId = tenantID
 			}
 			b := apikeyClient(ctx).Create().
@@ -72,7 +79,15 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 			return fromEntAPIKey(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*APIKey, error) {
-			e, err := apikeyClient(ctx).Get(ctx, key)
+			q := apikeyClient(ctx).Query().Where(entapikey.ID(key))
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "apikey: no tenant on a tenant-scoped get")
+				}
+				q = q.Where(entapikey.AccountID(tenantID))
+			}
+			e, err := q.Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -97,6 +112,9 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
+			}
+			if opts.PageSize > persistence.MaxPageSize {
+				opts.PageSize = persistence.MaxPageSize
 			}
 			offset := 0
 			if opts.PageToken != "" {
@@ -127,7 +145,11 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 			if apikeyInMask(fieldMask, "tags") {
 				u = u.SetTags(entity.GetTags())
 			}
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "apikey: no tenant on a tenant-scoped update")
+				}
 				u = u.Where(entapikey.AccountID(tenantID))
 			}
 			if apikeyInMask(fieldMask, "key_value") && enc != nil && entity.GetKeyValue() != "" {
@@ -152,7 +174,7 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 			if err != nil {
 				if ent.IsNotFound(err) && ifMatch != "" {
 					check := apikeyClient(ctx).Query().Where(entapikey.ID(key))
-					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+					if !middleware.IsSystemContext(ctx) {
 						check = check.Where(entapikey.AccountID(tenantID))
 					}
 					check = check.Where(entapikey.DeleteTimeIsNil())
@@ -178,7 +200,11 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 		},
 		Delete_: func(ctx context.Context, key string) error {
 			q := apikeyClient(ctx).UpdateOneID(key)
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return status.Error(codes.PermissionDenied, "apikey: no tenant on a tenant-scoped delete")
+				}
 				q = q.Where(entapikey.AccountID(tenantID))
 			}
 			q = q.Where(entapikey.DeleteTimeIsNil())

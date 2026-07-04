@@ -9,6 +9,10 @@ import (
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	ent "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
 	entuser "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/predicate"
@@ -32,7 +36,10 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "user: no tenant on a tenant-scoped create")
+				}
 				entity.AccountId = tenantID
 			}
 			b := userClient(ctx).Create().
@@ -53,7 +60,15 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 			return fromEntUser(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*User, error) {
-			e, err := userClient(ctx).Get(ctx, key)
+			q := userClient(ctx).Query().Where(entuser.ID(key))
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "user: no tenant on a tenant-scoped get")
+				}
+				q = q.Where(entuser.AccountID(tenantID))
+			}
+			e, err := q.Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -75,6 +90,9 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
+			}
+			if opts.PageSize > persistence.MaxPageSize {
+				opts.PageSize = persistence.MaxPageSize
 			}
 			offset := 0
 			if opts.PageToken != "" {
@@ -102,7 +120,11 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 			if userInMask(fieldMask, "display_name") {
 				u = u.SetDisplayName(entity.GetDisplayName())
 			}
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "user: no tenant on a tenant-scoped update")
+				}
 				u = u.Where(entuser.AccountID(tenantID))
 			}
 			ifMatch := etag.IfMatchFromContext(ctx)
@@ -116,7 +138,7 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 			if err != nil {
 				if ent.IsNotFound(err) && ifMatch != "" {
 					check := userClient(ctx).Query().Where(entuser.ID(key))
-					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+					if !middleware.IsSystemContext(ctx) {
 						check = check.Where(entuser.AccountID(tenantID))
 					}
 					exists, cerr := check.Exist(ctx)
@@ -141,7 +163,11 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 		},
 		Delete_: func(ctx context.Context, key string) error {
 			del := userClient(ctx).Delete().Where(entuser.ID(key))
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return status.Error(codes.PermissionDenied, "user: no tenant on a tenant-scoped delete")
+				}
 				del = del.Where(entuser.AccountID(tenantID))
 			}
 			n, err := del.Exec(ctx)

@@ -205,22 +205,25 @@ func bearerCtx(t *testing.T, ctx context.Context, iss *oidc.Issuer, p authz.Prin
 }
 ```
 
-Then replace the header-based identity in the generated tests. In `TestSmoke`, the `account-id`
-header still scopes the tenant, but the caller's identity now rides in the bearer:
+Then replace the header-based identity in the generated tests. The **tenant now rides on the
+verified principal**, not the `account-id` header — the header is a routing/cells hint, never the
+isolation authority (the storage fence scopes off the principal and fails closed when it carries no
+tenant). Put the tenant in the principal the bearer authors:
 
 ```go
-// before: identity from headers
+// before: identity AND tenant from headers
 mdCtx := metadata.NewOutgoingContext(context.Background(),
     metadata.Pairs("account-id", "tenant1", "groups", "admin"))
 
-// after: account-id still scopes the tenant; the bearer carries the verified principal
-base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("account-id", "tenant1"))
-mdCtx := bearerCtx(t, base, iss, authz.Principal{Subject: "alice", Groups: []string{"admin"}})
+// after: the bearer carries the verified principal, INCLUDING its tenant
+mdCtx := bearerCtx(t, context.Background(), iss,
+    authz.Principal{Subject: "alice", Tenant: "tenant1", Groups: []string{"admin"}})
 ```
 
 In `TestSecurity`, change the `asAdmin` helper the same way — wrap the seccheck-supplied context
-with a bearer for an admin principal instead of appending a `groups` header. The seccheck helper
-still sets `account-id` for tenant scoping; the bearer supplies the group the grant matches.
+with a bearer for an admin principal whose `Tenant` is set, instead of relying on the `account-id`
+header. Your `ClaimsMapper` must populate `Principal.Tenant` (as in the mapper above) so every
+verified principal carries the tenant the fence enforces.
 
 {{< callout type="info" >}}
 **The deny cases need no change.** `TestSmoke_DeniedForUnknownPrincipal` and the
@@ -310,9 +313,12 @@ drive three requests against a non-public method:
 | No bearer | `codes.PermissionDenied` — empty principal, default-deny |
 | A garbage or expired bearer | `codes.Unauthenticated` — rejected at verify, before authz |
 
-Confirm too that a spoofed `account-id` or `groups` header changes nothing: identity comes only from
-the verified token. The runnable reference for the whole chain is the `devedge-idp` project's `e2e/`
-tests — `twotier_test.go`, `cli_devicegrant_test.go`, and `verifydecide_test.go`.
+Confirm too that a spoofed `account-id` header cannot change the tenant a request is scoped to: the
+storage fence anchors on the **verified principal's** `Tenant`, and the header is only a routing
+hint. With a valid bearer for `tenant1`, appending `account-id: tenant2` still confines every
+query to `tenant1`; presenting no verified tenant fails closed rather than falling back to the
+header. The runnable reference for the whole chain is the `devedge-idp` project's `e2e/` tests —
+`twotier_test.go`, `cli_devicegrant_test.go`, and `verifydecide_test.go`.
 
 ## See also
 

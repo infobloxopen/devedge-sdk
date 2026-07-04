@@ -897,6 +897,11 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	if hasSecret {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
+	if hasTenant {
+		// The fail-closed batch fences below return codes.PermissionDenied.
+		b.WriteString("\t\"google.golang.org/grpc/codes\"\n")
+		b.WriteString("\t\"google.golang.org/grpc/status\"\n")
+	}
 	fmt.Fprintf(&b, "\tent %q\n", entImport)
 	fmt.Fprintf(&b, "\tent%s %q\n", lower, entPredImport)
 	b.WriteString(")\n\n")
@@ -966,7 +971,10 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	fmt.Fprintf(&b, "func (r *%sEntRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*%s, string]) ([]*%s, error) {\n", res, res, res)
 	fmt.Fprintf(&b, "\tif len(items) == 0 {\n\t\treturn []*%s{}, nil\n\t}\n", res)
 	if hasTenant {
+		// Fail closed: a tenant-scoped batch update with no established tenant is
+		// rejected unless the caller opted into a system/admin operation.
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		fmt.Fprintf(&b, "\tif !middleware.IsSystemContext(ctx) && tenantID == \"\" {\n\t\treturn nil, status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped batch update\")\n\t}\n", lower)
 	}
 	b.WriteString("\ttx, ownTx, err := r.batchTx(ctx)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
 	b.WriteString("\trollback := func() {\n\t\tif ownTx {\n\t\t\t_ = tx.Rollback()\n\t\t}\n\t}\n")
@@ -974,7 +982,9 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	b.WriteString("\tfor _, it := range items {\n")
 	fmt.Fprintf(&b, "\t\tu := tx.%s.UpdateOneID(it.Key)\n", model)
 	if hasTenant {
-		fmt.Fprintf(&b, "\t\tif tenantID != \"\" {\n\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n\t\t}\n", lower)
+		b.WriteString("\t\tif !middleware.IsSystemContext(ctx) {\n")
+		fmt.Fprintf(&b, "\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n", lower)
+		b.WriteString("\t\t}\n")
 	}
 	if soft {
 		fmt.Fprintf(&b, "\t\tu = u.Where(ent%s.DeleteTimeIsNil())\n", lower)
@@ -1012,21 +1022,28 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 	b.WriteString("\tseen := make(map[string]struct{}, len(keys))\n\tuniq := make([]string, 0, len(keys))\n")
 	b.WriteString("\tfor _, k := range keys {\n\t\tif _, ok := seen[k]; ok {\n\t\t\tcontinue\n\t\t}\n\t\tseen[k] = struct{}{}\n\t\tuniq = append(uniq, k)\n\t}\n")
 	if hasTenant {
+		// Fail closed: a tenant-scoped batch delete with no established tenant is
+		// rejected unless the caller opted into a system/admin operation.
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		fmt.Fprintf(&b, "\tif !middleware.IsSystemContext(ctx) && tenantID == \"\" {\n\t\treturn status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped batch delete\")\n\t}\n", lower)
 	}
 	b.WriteString("\ttx, ownTx, err := r.batchTx(ctx)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"begin tx: %w\", err)\n\t}\n")
 	b.WriteString("\trollback := func() {\n\t\tif ownTx {\n\t\t\t_ = tx.Rollback()\n\t\t}\n\t}\n")
 	if soft {
 		fmt.Fprintf(&b, "\tupd := tx.%s.Update().Where(ent%s.IDIn(uniq...))\n", model, lower)
 		if hasTenant {
-			fmt.Fprintf(&b, "\tif tenantID != \"\" {\n\t\tupd = upd.Where(ent%s.AccountID(tenantID))\n\t}\n", lower)
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\tupd = upd.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t}\n")
 		}
 		fmt.Fprintf(&b, "\tupd = upd.Where(ent%s.DeleteTimeIsNil())\n", lower)
 		b.WriteString("\tn, derr := upd.SetDeleteTime(time.Now()).Save(ctx)\n")
 	} else {
 		fmt.Fprintf(&b, "\tdel := tx.%s.Delete().Where(ent%s.IDIn(uniq...))\n", model, lower)
 		if hasTenant {
-			fmt.Fprintf(&b, "\tif tenantID != \"\" {\n\t\tdel = del.Where(ent%s.AccountID(tenantID))\n\t}\n", lower)
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\tdel = del.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t}\n")
 		}
 		b.WriteString("\tn, derr := del.Exec(ctx)\n")
 	}
@@ -1231,8 +1248,10 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if hasSecret {
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
-	if !serverGenID {
-		// BC-12: a USER_SETTABLE id rejects an empty id with InvalidArgument.
+	if !serverGenID || ownerTenant {
+		// BC-12: a USER_SETTABLE id rejects an empty id with InvalidArgument; a
+		// tenant-scoped resource fails closed with PermissionDenied when no tenant is
+		// established. Both use codes/status.
 		b.WriteString("\n\t\"google.golang.org/grpc/codes\"\n")
 		b.WriteString("\t\"google.golang.org/grpc/status\"\n\n")
 	}
@@ -1297,11 +1316,15 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		// Stamp the tenant from context, OVERRIDING any client-supplied account_id, so
 		// the row is always scoped to the authenticated caller's tenant. account_id is
 		// the IMMUTABLE tenant key: a caller must not be able to plant a row under another
-		// tenant's account_id on Create (the mirror of Update, which never Sets it). When
-		// the context carries no tenant (unscoped/dev, matching the tenantID == "" query
-		// guards), the caller-supplied value is left as-is.
+		// tenant's account_id on Create (the mirror of Update, which never Sets it). Fail
+		// closed: a create with no established tenant is rejected unless the caller opted
+		// into a system/admin operation via middleware.WithSystemContext (in which case
+		// the caller-supplied account_id is honored).
 		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\t\t\tif tenantID != \"\" {\n\t\t\t\tentity.AccountId = tenantID\n\t\t\t}\n")
+		b.WriteString("\t\t\tif !middleware.IsSystemContext(ctx) {\n")
+		fmt.Fprintf(&b, "\t\t\t\tif tenantID == \"\" {\n\t\t\t\t\treturn nil, status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped create\")\n\t\t\t\t}\n", lower)
+		b.WriteString("\t\t\t\tentity.AccountId = tenantID\n")
+		b.WriteString("\t\t\t}\n")
 	}
 	// Build the create setter chain: id, account_id (if tenant), then writable.
 	b.WriteString("\t\t\tb := " + txClientVar + "(ctx).Create().\n")
@@ -1347,7 +1370,21 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 
 	// ---- Get_ ----
 	fmt.Fprintf(&b, "\t\tGet_: func(ctx context.Context, key string) (*%s, error) {\n", res)
-	fmt.Fprintf(&b, "\t\t\te, err := %s(ctx).Get(ctx, key)\n", txClientVar)
+	if ownerTenant {
+		// Fail closed with an EXPLICIT tenant clause rather than trusting the
+		// TenantMixin query interceptor: a tenant-scoped Get with no established
+		// tenant is rejected unless the caller opted into a system/admin operation
+		// via middleware.WithSystemContext.
+		fmt.Fprintf(&b, "\t\t\tq := %s(ctx).Query().Where(ent%s.ID(key))\n", txClientVar, lower)
+		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\t\t\tif !middleware.IsSystemContext(ctx) {\n")
+		fmt.Fprintf(&b, "\t\t\t\tif tenantID == \"\" {\n\t\t\t\t\treturn nil, status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped get\")\n\t\t\t\t}\n", lower)
+		fmt.Fprintf(&b, "\t\t\t\tq = q.Where(ent%s.AccountID(tenantID))\n", lower)
+		b.WriteString("\t\t\t}\n")
+		b.WriteString("\t\t\te, err := q.Only(ctx)\n")
+	} else {
+		fmt.Fprintf(&b, "\t\t\te, err := %s(ctx).Get(ctx, key)\n", txClientVar)
+	}
 	b.WriteString("\t\t\tif err != nil {\n\t\t\t\tif ent.IsNotFound(err) {\n\t\t\t\t\treturn nil, persistence.ErrNotFound\n\t\t\t\t}\n\t\t\t\treturn nil, err\n\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\treturn fromEnt%s(e), nil\n", res)
 	b.WriteString("\t\t},\n")
@@ -1368,6 +1405,7 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	fmt.Fprintf(&b, "\t\t\t\tif pred != nil {\n\t\t\t\t\tq = q.Where(entpredicate.%s(pred))\n\t\t\t\t}\n", model)
 	b.WriteString("\t\t\t}\n")
 	b.WriteString("\t\t\tif opts.PageSize <= 0 {\n\t\t\t\topts.PageSize = 50\n\t\t\t}\n")
+	b.WriteString("\t\t\tif opts.PageSize > persistence.MaxPageSize {\n\t\t\t\topts.PageSize = persistence.MaxPageSize\n\t\t\t}\n")
 	b.WriteString("\t\t\toffset := 0\n\t\t\tif opts.PageToken != \"\" {\n\t\t\t\tfmt.Sscanf(opts.PageToken, \"%d\", &offset) //nolint:errcheck\n\t\t\t}\n")
 	b.WriteString("\t\t\titems, err := q.Limit(opts.PageSize).Offset(offset).All(ctx)\n")
 	b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn nil, \"\", err\n\t\t\t}\n")
@@ -1398,8 +1436,14 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	}
 	if ownerTenant {
 		// Tenant guard: ent query interceptors do NOT run for mutations, so the
-		// account_id predicate must be applied explicitly.
-		fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
+		// account_id predicate must be applied explicitly. Fail closed: an update with
+		// no established tenant is rejected unless the caller opted into a system/admin
+		// operation via middleware.WithSystemContext.
+		b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		b.WriteString("\t\t\tif !middleware.IsSystemContext(ctx) {\n")
+		fmt.Fprintf(&b, "\t\t\t\tif tenantID == \"\" {\n\t\t\t\t\treturn nil, status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped update\")\n\t\t\t\t}\n", lower)
+		fmt.Fprintf(&b, "\t\t\t\tu = u.Where(ent%s.AccountID(tenantID))\n", lower)
+		b.WriteString("\t\t\t}\n")
 	}
 	for _, f := range secrets {
 		getName := entGoName(f.SnakeName)
@@ -1434,7 +1478,12 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		b.WriteString("\t\t\t\tif ent.IsNotFound(err) && ifMatch != \"\" {\n")
 		fmt.Fprintf(&b, "\t\t\t\t\tcheck := %s(ctx).Query().Where(ent%s.ID(key))\n", txClientVar, lower)
 		if ownerTenant {
-			fmt.Fprintf(&b, "\t\t\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\t\t\tcheck = check.Where(ent%s.AccountID(tenantID))\n\t\t\t\t\t}\n", lower)
+			// Mirror the update's tenant clause: tenantID is in scope and non-empty on
+			// the non-system path; a system context scopes neither the update nor this
+			// existence re-check.
+			b.WriteString("\t\t\t\t\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\t\t\t\t\tcheck = check.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t\t\t\t\t}\n")
 		}
 		if soft {
 			fmt.Fprintf(&b, "\t\t\t\t\tcheck = check.Where(ent%s.DeleteTimeIsNil())\n", lower)
@@ -1456,7 +1505,13 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	if soft {
 		fmt.Fprintf(&b, "\t\t\tq := %s(ctx).UpdateOneID(key)\n", txClientVar)
 		if ownerTenant {
-			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tq = q.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
+			// Fail closed: a delete with no established tenant is rejected unless the
+			// caller opted into a system/admin operation via middleware.WithSystemContext.
+			b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			b.WriteString("\t\t\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\t\t\tif tenantID == \"\" {\n\t\t\t\t\treturn status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped delete\")\n\t\t\t\t}\n", lower)
+			fmt.Fprintf(&b, "\t\t\t\tq = q.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t\t\t}\n")
 		}
 		fmt.Fprintf(&b, "\t\t\tq = q.Where(ent%s.DeleteTimeIsNil())\n", lower)
 		b.WriteString("\t\t\terr := q.SetDeleteTime(time.Now()).Exec(ctx)\n")
@@ -1464,7 +1519,13 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	} else {
 		fmt.Fprintf(&b, "\t\t\tdel := %s(ctx).Delete().Where(ent%s.ID(key))\n", txClientVar, lower)
 		if ownerTenant {
-			fmt.Fprintf(&b, "\t\t\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n\t\t\t\tdel = del.Where(ent%s.AccountID(tenantID))\n\t\t\t}\n", lower)
+			// Fail closed: a delete with no established tenant is rejected unless the
+			// caller opted into a system/admin operation via middleware.WithSystemContext.
+			b.WriteString("\t\t\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			b.WriteString("\t\t\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\t\t\tif tenantID == \"\" {\n\t\t\t\t\treturn status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped delete\")\n\t\t\t\t}\n", lower)
+			fmt.Fprintf(&b, "\t\t\t\tdel = del.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t\t\t}\n")
 		}
 		b.WriteString("\t\t\tn, err := del.Exec(ctx)\n")
 		b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tif n == 0 {\n\t\t\t\treturn persistence.ErrNotFound\n\t\t\t}\n\t\t\treturn nil\n")
