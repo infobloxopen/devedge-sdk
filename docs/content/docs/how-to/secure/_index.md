@@ -13,4 +13,5 @@ For a conceptual overview of the security model, see [Security posture](../../ex
   {{< card link="security-check/" title="Security Check" icon="shield-check" subtitle="Prove authz completeness, unknown-principal denial, tenant isolation, and no-secret-leak in CI." >}}
   {{< card link="secret-fields/" title="Secret Fields" icon="lock-closed" subtitle="How secret fields are stored (hash + cipher), redacted, and checked. Vault Transit for production." >}}
   {{< card link="add-authentication/" title="Add Authentication" icon="key" subtitle="Verify caller tokens with the authn seam so the authorizer sees a token-verified principal, and run it locally against the dev IdP." >}}
+  {{< card link="call-another-service/" title="Call Another Service" icon="switch-horizontal" subtitle="Attach an outbound token: pass the bearer through within a trust domain, or exchange it for a scoped token across audiences (RFC 8693), cached." >}}
 {{< /cards >}}

@@ -20,6 +20,7 @@ const (
 var (
 	_ authn.Issuer        = (*oidc.Issuer)(nil)
 	_ authn.Authenticator = (*oidc.Authenticator)(nil)
+	_ authn.TokenSource   = (*oidc.Exchanger)(nil)
 )
 
 func newIssuer(t *testing.T, opts ...oidc.IssuerOption) *oidc.Issuer {
@@ -96,9 +97,21 @@ func TestVerify_WrongAudience_FailsClosed(t *testing.T) {
 }
 
 func TestVerify_Expired_FailsClosed(t *testing.T) {
-	iss := newIssuer(t, oidc.WithTTL(500*time.Millisecond))
-	a, err := oidc.NewAuthenticator(oidc.Config{
-		Keys:             oidc.StaticKeySet{Keys: iss.KeySet()},
+	// A fresh token validates. Use a normal (1h) TTL so the freshness assertion is
+	// not a race with a tiny lifetime: a GC/scheduler pause between mint and verify
+	// cannot make a 1h token look expired.
+	fresh := newIssuer(t)
+	af := newAuth(t, fresh, appIssuer, appAud)
+	freshTok, _ := fresh.Mint(context.Background(), authz.Principal{Subject: "alice"})
+	if _, err := af.Authenticate(context.Background(), freshTok); err != nil {
+		t.Fatalf("fresh token should validate: %v", err)
+	}
+
+	// A short-lived token, once its lifetime has clearly elapsed, fails closed.
+	// This direction is robust: a pause can only make the token MORE expired.
+	short := newIssuer(t, oidc.WithTTL(100*time.Millisecond))
+	as, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:             oidc.StaticKeySet{Keys: short.KeySet()},
 		ExpectedIssuer:   appIssuer,
 		ExpectedAudience: appAud,
 		Leeway:           5 * time.Millisecond, // tight skew so the test need not wait 30s
@@ -106,14 +119,9 @@ func TestVerify_Expired_FailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
-	bearer, _ := iss.Mint(context.Background(), authz.Principal{Subject: "alice"})
-	// Valid immediately (well inside the 500ms TTL).
-	if _, err := a.Authenticate(context.Background(), bearer); err != nil {
-		t.Fatalf("fresh token should validate: %v", err)
-	}
-	// Expired beyond leeway.
-	time.Sleep(700 * time.Millisecond)
-	if _, err := a.Authenticate(context.Background(), bearer); err == nil {
+	shortTok, _ := short.Mint(context.Background(), authz.Principal{Subject: "alice"})
+	time.Sleep(300 * time.Millisecond) // well past the 100ms TTL + 5ms leeway
+	if _, err := as.Authenticate(context.Background(), shortTok); err == nil {
 		t.Fatal("expired token accepted (not fail-closed)")
 	}
 }
@@ -189,16 +197,16 @@ func TestNewAuthenticator_RequiresAudience(t *testing.T) {
 	if _, err := oidc.NewAuthenticator(oidc.Config{
 		Keys:           oidc.StaticKeySet{},
 		ExpectedIssuer: appIssuer,
-		// ExpectedAudience intentionally empty, AllowAnyAudience not set.
+		// ExpectedAudience/ExpectedAudiences intentionally empty, AllowAnyAudience not set.
 	}); err == nil {
-		t.Error("empty ExpectedAudience without AllowAnyAudience must error (fail closed)")
+		t.Error("empty audience set without AllowAnyAudience must error (fail closed)")
 	}
 	if _, err := oidc.NewAuthenticator(oidc.Config{
 		Keys:             oidc.StaticKeySet{},
 		ExpectedIssuer:   appIssuer,
 		AllowAnyAudience: true,
 	}); err != nil {
-		t.Errorf("empty ExpectedAudience WITH AllowAnyAudience must succeed, got %v", err)
+		t.Errorf("empty audience set WITH AllowAnyAudience must succeed, got %v", err)
 	}
 	if _, err := oidc.NewAuthenticator(oidc.Config{
 		Keys:             oidc.StaticKeySet{},
@@ -206,5 +214,66 @@ func TestNewAuthenticator_RequiresAudience(t *testing.T) {
 		ExpectedAudience: "svc-a",
 	}); err != nil {
 		t.Errorf("non-empty ExpectedAudience must succeed, got %v", err)
+	}
+	if _, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:              oidc.StaticKeySet{},
+		ExpectedIssuer:    appIssuer,
+		ExpectedAudiences: []string{"svc-a", "svc-b"},
+	}); err != nil {
+		t.Errorf("non-empty ExpectedAudiences must succeed, got %v", err)
+	}
+}
+
+// SEC-004 / WS-028 multi-audience: a token validates when ANY of its `aud` values
+// matches ANY configured audience, so one audience can cover a whole app's
+// services and a domain-spanning service can accept a set — while a token whose
+// audiences intersect NONE of the configured set still fails closed.
+func TestVerify_MultiAudience(t *testing.T) {
+	// Issuer mints tokens with aud = {"orders-api", "billing-api"}.
+	iss, err := oidc.NewIssuer(appIssuer, []string{"orders-api", "billing-api"})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	bearer, _ := iss.Mint(context.Background(), authz.Principal{Subject: "alice"})
+
+	// A verifier configured with a SET that intersects the token's aud accepts it,
+	// even though neither of its configured audiences is the only one on the token.
+	a, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:              oidc.StaticKeySet{Keys: iss.KeySet()},
+		ExpectedIssuer:    appIssuer,
+		ExpectedAudiences: []string{"reports-api", "billing-api"}, // billing-api intersects
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	if _, err := a.Authenticate(context.Background(), bearer); err != nil {
+		t.Fatalf("multi-audience intersection should validate: %v", err)
+	}
+
+	// The ExpectedAudience convenience alias is appended to the set: a single
+	// matching audience via the alias also validates.
+	aAlias, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:             oidc.StaticKeySet{Keys: iss.KeySet()},
+		ExpectedIssuer:   appIssuer,
+		ExpectedAudience: "orders-api",
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator (alias): %v", err)
+	}
+	if _, err := aAlias.Authenticate(context.Background(), bearer); err != nil {
+		t.Fatalf("alias audience should validate: %v", err)
+	}
+
+	// No intersection -> fail closed.
+	aNone, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:              oidc.StaticKeySet{Keys: iss.KeySet()},
+		ExpectedIssuer:    appIssuer,
+		ExpectedAudiences: []string{"reports-api", "audit-api"},
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator (none): %v", err)
+	}
+	if _, err := aNone.Authenticate(context.Background(), bearer); err == nil {
+		t.Fatal("token whose audiences intersect none of the configured set was accepted (not fail-closed)")
 	}
 }

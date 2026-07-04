@@ -45,6 +45,39 @@ confirmed vulnerabilities:
 - If you construct `oidc.Authenticator` directly with an empty audience, set
   `AllowAnyAudience: true`.
 
+### Service-to-service tokens + multi-audience verification (WS-028)
+
+Additive. An ergonomic, cached helper for calling another service, plus the
+SEC-004 refinement it builds on. The trust boundary is the audience: within one
+audience (an app's own services) the caller's inbound bearer is passed through;
+across audiences the caller obtains a token scoped to the target via RFC 8693
+token exchange, cached and one line for the developer.
+
+- **Multi-audience verification (SEC-004 refinement).** `oidc.Config` now takes
+  `ExpectedAudiences []string`; a token validates when ANY of its `aud` values
+  matches ANY accepted audience, so one audience can cover a whole app's services.
+  `ExpectedAudience` remains a convenience alias appended to the set. The
+  fail-closed default (an empty set errors) and the `AllowAnyAudience` opt-out are
+  unchanged.
+- **Inbound-bearer stashing.** `authn.UnaryServerInterceptor` now stashes the raw
+  verified bearer via `middleware.WithInboundBearer` next to the principal;
+  `middleware.InboundBearerFromContext` reads it. This is the `subject_token` a
+  delegation exchange acts on behalf of. Purely additive.
+- **Outbound token seam (root `authn`, stdlib + grpc only).** `authn.TokenSource`
+  (`TokenFor(ctx, targetAudience)`), `authn.AudienceResolver` +
+  `authn.StaticAudiences` (target → audience map), `authn.UnaryClientInterceptor`
+  (sets `authorization: Bearer` for outbound gRPC; fail-closed on an unmapped
+  target), and `authn.NewRoundTripper` (the REST equivalent). No new root
+  dependencies — the graph-isolation gate stays green.
+- **The Exchanger (nested `authn/oidc` module).** `oidc.NewExchanger` implements
+  `authn.TokenSource`: passthrough when the target audience is one the caller
+  already holds, else an RFC 8693 form-POST to the STS token endpoint, with an
+  in-memory cache keyed by `(subject, target-audience)` (TTL = token lifetime −
+  skew) and single-flight to avoid a stampede. Fail-closed on a missing inbound
+  bearer or any exchange error. go-jose stays confined to this module.
+
+See the how-to: [Call another service](docs/content/docs/how-to/secure/call-another-service.md).
+
 ### Authentication (two-tier token model, WS-026)
 
 - A new `authn` package defines the pluggable authentication seams — the "verify"

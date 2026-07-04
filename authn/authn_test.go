@@ -100,6 +100,24 @@ func TestInterceptor_ValidBearer_StashesPrincipal(t *testing.T) {
 	}
 }
 
+func TestInterceptor_StashesInboundBearer(t *testing.T) {
+	a := authn.AuthenticatorFunc(func(_ context.Context, bearer string) (authz.Principal, error) {
+		if bearer != "good" {
+			return authz.Principal{}, errors.New("bad")
+		}
+		return authz.Principal{Subject: "alice"}, nil
+	})
+	var seen context.Context
+	_, err := authn.UnaryServerInterceptor(a)(incoming("authorization", "Bearer good"), nil, &grpc.UnaryServerInfo{}, passHandler(&seen))
+	if err != nil {
+		t.Fatalf("interceptor: %v", err)
+	}
+	raw, ok := middleware.InboundBearerFromContext(seen)
+	if !ok || raw != "good" {
+		t.Fatalf("inbound bearer not stashed: raw=%q ok=%v", raw, ok)
+	}
+}
+
 func TestInterceptor_InvalidBearer_FailsClosed(t *testing.T) {
 	a := authn.AuthenticatorFunc(func(context.Context, string) (authz.Principal, error) {
 		return authz.Principal{}, errors.New("invalid signature")

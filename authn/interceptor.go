@@ -46,8 +46,10 @@ func WithRequired() InterceptorOption {
 // UnaryServerInterceptor returns the authentication interceptor (Role 3). It
 // runs BEFORE the authz interceptor: it pulls the bearer from request metadata,
 // verifies it with the [Authenticator], and stashes the verified
-// [authz.Principal] on the context via [middleware.WithPrincipal]. The authz
-// interceptor then reads it through [VerifiedPrincipal] (wired as its
+// [authz.Principal] on the context via [middleware.WithPrincipal] — plus the raw
+// bearer via [middleware.WithInboundBearer], so a delegation [TokenSource] can
+// act on behalf of the caller when calling another service (WS-028). The authz
+// interceptor then reads the principal through [VerifiedPrincipal] (wired as its
 // grpcauthz.PrincipalFunc). It is fail-closed: an invalid bearer is rejected
 // with codes.Unauthenticated and the handler never runs.
 //
@@ -75,7 +77,12 @@ func UnaryServerInterceptor(a Authenticator, opts ...InterceptorOption) grpc.Una
 			// silently downgraded to an empty principal.
 			return nil, status.Error(codes.Unauthenticated, "authn: invalid bearer token")
 		}
-		return handler(middleware.WithPrincipal(ctx, p), req)
+		// Stash the verified principal AND the raw bearer: the bearer is the
+		// `subject_token` a delegation TokenSource (WS-028) needs to obtain a
+		// token scoped to another service's audience via RFC 8693 exchange.
+		ctx = middleware.WithPrincipal(ctx, p)
+		ctx = middleware.WithInboundBearer(ctx, bearer)
+		return handler(ctx, req)
 	}
 }
 
