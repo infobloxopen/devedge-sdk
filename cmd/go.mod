@@ -18,7 +18,7 @@ go 1.25.5
 require (
 	github.com/getkin/kin-openapi v0.140.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
 	github.com/infobloxopen/devedge-sdk v0.57.0
 	github.com/spf13/cobra v1.10.2
@@ -43,5 +43,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 )
-
-replace github.com/infobloxopen/apis/proto/infoblox/field => ../hack/apisfield-override

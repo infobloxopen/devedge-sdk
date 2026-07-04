@@ -36,6 +36,10 @@ is no reversible copy at rest.
   `*secret.CredentialMinter` returns this (wrapped with the field name) rather than storing an
   unusable credential — the verify-only analogue of `ErrNoEncryptor`.
 
+The `credential` / `credential_prefix` options ship in the canonical
+`github.com/infobloxopen/apis/proto/infoblox/field` **v1.0.0-alpha.4**, which the SDK now consumes
+directly (no workspace override).
+
 Additive: `credential` is a new annotation, so existing services are unaffected until they adopt it.
 However, switching a field from `secret` to `credential` **changes its schema** (the plaintext/cipher
 and `secret` hash columns are replaced by the four credential columns), and old values cannot be

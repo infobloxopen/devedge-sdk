@@ -15,13 +15,10 @@ generate:
 	# Engine-neutral storage options (infoblox.storage.v1.model) are CANONICAL
 	# (github.com/infobloxopen/apis/proto/infoblox/storage/v1) — the Go binding comes
 	# from that module (see go.mod); proto/infoblox/storage/v1/storage.proto is only a
-	# buf import-resolution mirror, never generated here.
-	# WS-033 TEMPORARY: regenerate the workspace-local apis field OVERRIDE first, so
-	# the plugins below build against a field binding that has credential(10) +
-	# credential_prefix(11). infoblox.field.v1 is otherwise import-only (its Go
-	# binding comes from the published apis module); remove this step + hack/
-	# apisfield-override + the go.work/cmd replaces once the apis module ships them.
-	buf generate --template buf.gen.fieldoverride.yaml
+	# buf import-resolution mirror, never generated here. The same applies to
+	# infoblox.field.v1 (github.com/infobloxopen/apis/proto/infoblox/field): its Go
+	# binding comes from the published apis module (see go.mod), and
+	# proto/infoblox/field/v1/field.proto is only a buf import-resolution mirror.
 	go build -o bin/protoc-gen-devedge-authz ./cmd/protoc-gen-devedge-authz
 	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage

@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	entgo.io/ent v0.14.6
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4
 	github.com/infobloxopen/devedge-sdk v0.57.0
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2
@@ -14,7 +14,7 @@ require (
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	gorm.io/driver/postgres v1.6.0
-	gorm.io/gorm v1.31.1
+	gorm.io/gorm v1.31.2
 	modernc.org/sqlite v1.52.0
 )
 

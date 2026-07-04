@@ -1,8 +1,8 @@
 // go.work — the multi-module workspace (WS-011 / F039). It lists every module in
 // the repo so local dev/build/test resolves cross-module references (adapter →
-// root) to the WORKING TREE, with no version pins. CI uses it for the local
-// build/test matrix; published module go.mod files carry real `require`s,
-// validated by the GOWORK=off per-module build in CI.
+// root) to the WORKING TREE, with no `replace` directives or version pins. CI
+// uses it for the local build/test matrix; published module go.mod files carry
+// real `require`s, validated by the GOWORK=off per-module build in CI.
 //
 // As more adapters split out (config/koanf, events/kafkabus, persistence/*),
 // add each new module's directory to the `use` block below.
@@ -20,10 +20,3 @@ use (
 	./persistence/gormtx
 	./persistence/migrate
 )
-
-// WS-033 TEMPORARY: resolve the canonical apis field binding to a workspace-local
-// override that is ahead of the published module — it adds credential (10) +
-// credential_prefix (11), which the codegen's fopts.GetCredential() needs. Remove
-// this replace (and the matching one in cmd/go.mod) once the apis module ships the
-// fields; that is the only reason for a replace directive in this workspace.
-replace github.com/infobloxopen/apis/proto/infoblox/field => ./hack/apisfield-override
