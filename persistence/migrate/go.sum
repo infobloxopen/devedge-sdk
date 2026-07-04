@@ -59,8 +59,8 @@ github.com/hashicorp/errwrap v1.0.0 h1:hLrqtEDnRye3+sgx6z4qVLNuviH3MR5aQ0ykNJa/U
 github.com/hashicorp/errwrap v1.0.0/go.mod h1:YH+1FKiLXxHSkmPseP+kNlulaMuP3n2brvKWEqk/Jc4=
 github.com/hashicorp/go-multierror v1.1.1 h1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=
 github.com/hashicorp/go-multierror v1.1.1/go.mod h1:iw975J/qwKPdAO1clOe2L8331t/9/fmwbPZ6JB6eMoM=
-github.com/infobloxopen/devedge-sdk v0.52.0 h1:ws+GFLmcqzBPWHVc2CNT4xuP0ZyVS97aXjghukv0tao=
-github.com/infobloxopen/devedge-sdk v0.52.0/go.mod h1:S41/triSUI88lB6smQsU1F709oeZb4HSPuvNPcD1p2k=
+github.com/infobloxopen/devedge-sdk v0.53.0 h1:6nV0vNBJBbiwUxfRbxUD5R5v16LMO/v9XNmdVJxbA9Y=
+github.com/infobloxopen/devedge-sdk v0.53.0/go.mod h1:S41/triSUI88lB6smQsU1F709oeZb4HSPuvNPcD1p2k=
 github.com/infobloxopen/migrate/v4 v4.16.3-0.20260414025640-b28cb3bc8342 h1:czuTABMCAjNP+qnBL8R7dOqUzdiyue7jj4iTVEkw5So=
 github.com/infobloxopen/migrate/v4 v4.16.3-0.20260414025640-b28cb3bc8342/go.mod h1:ybK2XA/O71eAdygbPEtHeheBw5FdEMnqWyPL6f32heY=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
