@@ -13,11 +13,14 @@ import (
 //
 // Wildcards: Tenant and Resource may be "*"; Verbs may contain "*"; Subjects may
 // contain "*" or "group:<name>".
+// The struct tags define the on-the-wire and on-disk schema for a Grant (used by
+// authz/devsvc's grants file and its admin endpoint): lowercase snake_case keys,
+// identical in YAML and JSON.
 type Grant struct {
-	Tenant   string
-	Subjects []string
-	Verbs    []Verb
-	Resource string
+	Tenant   string   `json:"tenant" yaml:"tenant"`
+	Subjects []string `json:"subjects" yaml:"subjects"`
+	Verbs    []Verb   `json:"verbs" yaml:"verbs"`
+	Resource string   `json:"resource" yaml:"resource"`
 }
 
 // DevAuthorizer is an in-process, default-deny [Authorizer] driven by a static

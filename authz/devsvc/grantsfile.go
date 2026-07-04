@@ -2,30 +2,39 @@ package devsvc
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/infobloxopen/devedge-sdk/authz"
 )
 
-// LoadGrantsFile reads a JSON array of authz.Grant from path. It is the on-disk
-// form a developer edits to manipulate dev authorization.
+// LoadGrantsFile reads a YAML (or JSON — YAML is a superset) list of authz.Grant
+// from path. It is the on-disk form a developer edits to manipulate dev
+// authorization; YAML is the friendlier hand-edited default.
 //
-// Example grants.json:
+// Example grants.yaml:
 //
-//	[
-//	  {"Tenant":"tenant-a","Subjects":["group:admin"],"Verbs":["*"],"Resource":"*"},
-//	  {"Tenant":"*","Subjects":["group:viewer"],"Verbs":["get","list"],"Resource":"order"}
-//	]
+//	- tenant: tenant-a
+//	  subjects: [group:admin]
+//	  verbs: ["*"]
+//	  resource: "*"
+//	- tenant: "*"
+//	  subjects: [group:viewer]
+//	  verbs: [get, list]
+//	  resource: order
+//
+// The keys are lowercase snake_case (see authz.Grant's struct tags) and are
+// identical whether the file is written as YAML or JSON.
 func LoadGrantsFile(path string) ([]authz.Grant, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("devsvc: read grants file %q: %w", path, err)
 	}
 	var grants []authz.Grant
-	if err := json.Unmarshal(b, &grants); err != nil {
+	if err := yaml.Unmarshal(b, &grants); err != nil {
 		return nil, fmt.Errorf("devsvc: parse grants file %q: %w", path, err)
 	}
 	return grants, nil

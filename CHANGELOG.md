@@ -41,6 +41,13 @@ under [History](#history).
   seam `opaauthz` implements) and a `Handler` serving decisions from a grant `Store`
   with edit-on-disk hot-reload and an optional admin endpoint — the dev-manipulable
   authz reference. Production authz stays OPA/PARGS.
+- The dev-manipulable config files are **YAML** (friendlier to hand-edit and
+  hot-reload than JSON; a `.json` file with the same keys is still accepted since YAML
+  is a superset). `authz/devsvc.LoadGrantsFile`/`WatchGrantsFile` parse a YAML grant
+  list, and `authz.Grant` carries lowercase `json`+`yaml` tags
+  (`tenant`/`subjects`/`verbs`/`resource`) so the grants file, the `devsvc` admin
+  endpoint, and any serialization share one documented schema. (The IdP's
+  `idp-clients.yaml` and `de idp clients sync` move to YAML in the companion repos.)
 
 ### Security (tenant isolation on Create)
 

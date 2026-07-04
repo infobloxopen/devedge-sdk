@@ -72,8 +72,8 @@ func TestAdminEndpoint_FlipsLive(t *testing.T) {
 	if dec, _ := client.Authorize(context.Background(), adminReq); dec.Allow {
 		t.Fatal("want initial deny")
 	}
-	// PUT a granting rule set via the admin endpoint.
-	body := []byte(`[{"Tenant":"tenant-a","Subjects":["group:admin"],"Verbs":["*"],"Resource":"*"}]`)
+	// PUT a granting rule set via the admin endpoint (lowercase snake_case keys).
+	body := []byte(`[{"tenant":"tenant-a","subjects":["group:admin"],"verbs":["*"],"resource":"*"}]`)
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/v1/grants", bytes.NewReader(body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusNoContent {
@@ -108,8 +108,9 @@ func TestWatchGrantsFile_HotReload(t *testing.T) {
 		t.Fatal("empty grants file: want deny")
 	}
 
-	// Edit the file to grant access; force a later mtime so the poll detects it.
-	if err := os.WriteFile(path, []byte(`[{"Tenant":"tenant-a","Subjects":["group:admin"],"Verbs":["*"],"Resource":"*"}]`), 0o644); err != nil {
+	// Edit the file to grant access (YAML); force a later mtime so the poll detects it.
+	grantsYAML := "- tenant: tenant-a\n  subjects: [group:admin]\n  verbs: [\"*\"]\n  resource: \"*\"\n"
+	if err := os.WriteFile(path, []byte(grantsYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	future := time.Now().Add(time.Second)

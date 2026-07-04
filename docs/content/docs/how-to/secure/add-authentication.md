@@ -237,38 +237,47 @@ exercise the full verify-then-decide pipeline without standing up a real IdP or 
 
 **Prerequisites:** a service wired with `Authenticator` (above) and a checkout of `devedge-idp`.
 
-1. Register your app as an IdP client. The IdP reads its clients from an `idp-clients.json` file
+1. Register your app as an IdP client. The IdP reads its clients from an `idp-clients.yaml` file
    (the `IDP_CLIENTS` path in step 2). Produce that file one of two ways:
 
    - **With the daemon running** — run `de start` so the daemon discovers your registered app, then
-     `de idp clients sync` to write `idp-clients.json` (the client ID is your app name, with a dummy
+     `de idp clients sync` to write `idp-clients.yaml` (the client ID is your app name, with a dummy
      secret and redirect URI). Add optional `tile` metadata to your route in `devedge.yaml` first to
      set the launchpad tile. `de idp up` routes the IdP at `idp.dev.test`.
    - **By hand** — for a local-only service with no daemon or `devedge.yaml`, write the file
      yourself. `de idp clients sync` fails without a running daemon, so a hand-written file is the
      fallback. Each entry needs a `client_id`, `client_secret`, `redirect_uris`, and a `tile`:
 
-     ```json
-     [
-       {
-         "client_id": "my-app",
-         "client_secret": "dev-secret-my-app",
-         "redirect_uris": ["https://my-app.dev.test/callback"],
-         "tile": {"name": "My App", "description": "", "icon_url": "", "launch_url": "https://my-app.dev.test/"}
-       }
-     ]
+     ```yaml
+     - client_id: my-app
+       client_secret: dev-secret-my-app
+       redirect_uris: [https://my-app.dev.test/callback]
+       tile:
+         name: My App
+         description: ""
+         icon_url: ""
+         launch_url: https://my-app.dev.test/
      ```
 
-   The file augments the seeded client and hot-reloads on edit; its exact shape is in the
+   The file augments the seeded client and hot-reloads on edit. A `.json` file with the same keys is
+   also accepted (YAML is a superset of JSON); its exact shape is in the
    [devedge-idp README](https://github.com/infobloxopen/devedge-idp#hot-reloadable-clients-file).
-2. Run the IdP: `IDP_CLIENTS=./idp-clients.json go run ./cmd/idp` from the `devedge-idp` checkout.
+2. Run the IdP: `IDP_CLIENTS=./idp-clients.yaml go run ./cmd/idp` from the `devedge-idp` checkout.
    Its launchpad at `/` shows a tile per registered app; the identity picker logs you in
-   passwordlessly as `alice`, `bob`, or `carol`. Editing `idp-clients.json` hot-reloads the tiles —
+   passwordlessly as `alice`, `bob`, or `carol`. Editing `idp-clients.yaml` hot-reloads the tiles —
    no restart.
 3. Run the dev authz service: `go run ./cmd/devauthz`. Set your service's authorizer to
    `Authorizer: &devsvc.Client{BaseURL: devauthzURL}` (the `github.com/infobloxopen/devedge-sdk/authz/devsvc`
-   client). Change a decision live by editing the grants file (polled and reloaded) or with
-   `PUT /v1/grants` — no rebuild.
+   client). Its grants live in a `grants.yaml` file — a YAML list of grants
+   (`tenant`/`subjects`/`verbs`/`resource`, lowercase keys). Change a decision live by editing that
+   file (polled and reloaded) or with `PUT /v1/grants` — no rebuild:
+
+   ```yaml
+   - tenant: tenant-a
+     subjects: [group:admin]
+     verbs: ["*"]
+     resource: "*"
+   ```
 
 Moving to production swaps the upstream IdP at the app identity and swaps the authorizer to
 `opaauthz.New(...)`, both behind the seams above — the service code is unchanged.
