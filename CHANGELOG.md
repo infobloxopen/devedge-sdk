@@ -10,6 +10,38 @@ under [History](#history).
 
 ## History
 
+### Authentication (two-tier token model, WS-026)
+
+- A new `authn` package defines the pluggable authentication seams — the "verify"
+  and "mint" halves of a configurable two-tier token model — kept free of any
+  JOSE/JWKS types so the SDK root stays dependency-light:
+  - `authn.Authenticator` (Role 3, verify): `Authenticate(ctx, bearer) → authz.Principal`,
+    fail-closed.
+  - `authn.Issuer` (Role 2, mint): mints + signs the app bearer for an authored principal.
+  - `authn.ClaimsMapper` (Role 2, claim authoring): maps a COARSE upstream identity
+    (subject + app-access only) to the rich app-specific principal; `StaticClaimsMapper`
+    is the hot-reloadable dev default.
+  - `authn.UnaryServerInterceptor` runs before the authz interceptor, verifies the
+    bearer, and stashes the verified principal (read via `authn.VerifiedPrincipal`) —
+    the trusted-path replacement for `grpcauthz.DevPrincipalFunc`. `TokenTopology`
+    selects two-tier (default) or single-issuer; the verify seam is topology-agnostic.
+- `server.Config.Authenticator` and `servicekit.HostConfig.Authenticator` wire that
+  interceptor before authz. Nil preserves prior behavior.
+- The nested `authn/oidc` module holds the go-jose backend: `Issuer` (RS256 mint +
+  JWKS), `Authenticator` (verify against a static or remote JWKS, fail-closed), and
+  `RelyingParty` (the confidential auth-code + PKCE dance with an upstream IdP →
+  coarse identity). The JOSE/OIDC dependencies arrive only on opt-in (proven by the
+  graph-isolation check).
+- `server.Config.HTTPHandlers` (and the `servicekit` passthrough) mount arbitrary
+  net/http handlers on the server's HTTP endpoint — for an OIDC provider's
+  authorization/token/JWKS/discovery endpoints, webhooks, a login UI, or static
+  assets — alongside the gRPC gateway, through the same lifecycle/tracing/probes.
+- `authz/devsvc` is the out-of-process, hot-reloadable sibling of the in-process
+  `authz.DevAuthorizer`: a `Client` (implements `authz.Authorizer` over HTTP, the same
+  seam `opaauthz` implements) and a `Handler` serving decisions from a grant `Store`
+  with edit-on-disk hot-reload and an optional admin endpoint — the dev-manipulable
+  authz reference. Production authz stays OPA/PARGS.
+
 ### Security (tenant isolation on Create)
 
 - Generated `Create` stamps `account_id` from the caller's tenant context unconditionally, ignoring
