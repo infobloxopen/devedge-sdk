@@ -280,6 +280,7 @@ type fieldInfo struct {
 	IsTags        bool // map<string,string> field — persisted as a types.Tags JSONB column
 	IsSecret      bool // secret field — stored as hash+cipher columns; plaintext never persisted
 	IsOutputOnly  bool // OUTPUT_ONLY field (google.api.field_behavior) — computed, not persisted
+	IsInputOnly   bool // effective INPUT_ONLY — write-only, omitted from the response projection
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull    bool
 	Unique     bool
@@ -896,8 +897,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		}
 	}
 	for _, f := range msg.Fields {
-		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly {
-			continue // output-only and secret fields are never copied from model
+		if f.IsID || f.IsRepeated || f.IsMessage || f.IsSecret || f.IsOutputOnly || f.IsInputOnly {
+			// output-only, secret, and INPUT_ONLY (write-only) fields are never copied
+			// back into the response — INPUT_ONLY is omitted so the runtime matches the
+			// OpenAPI writeOnly contract (SEC-007). It is still persisted via toModel.
+			continue
 		}
 		gfn := goFieldName(f)
 		if f.IsTags {
@@ -1157,6 +1161,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 			}
 			gfn := goFieldName(f)
 			fmt.Fprintf(b, "\tif entity.%s != \"\" {\n", gfn)
+			// Fail LOUD, not with a nil-pointer panic, when a secret value is set but
+			// no encryptor was wired (SEC-006). Consistent with the ent paths.
+			fmt.Fprintf(b, "\t\tif r.enc == nil { return nil, fmt.Errorf(\"secret field %%q set but no encryptor configured: %%w\", %q, persistence.ErrNoEncryptor) }\n", f.Name)
 			fmt.Fprintf(b, "\t\th, err := r.enc.Hash(ctx, entity.%s)\n", gfn)
 			fmt.Fprintf(b, "\t\tif err != nil { return nil, fmt.Errorf(\"hash %s: %%w\", err) }\n", f.Name)
 			fmt.Fprintf(b, "\t\tc, err := r.enc.Encrypt(ctx, entity.%s)\n", gfn)
@@ -1193,6 +1200,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 			}
 			gfn := goFieldName(f)
 			fmt.Fprintf(b, "\tif entity.%s != \"\" {\n", gfn)
+			// Fail LOUD, not with a nil-pointer panic, when a secret value is set but
+			// no encryptor was wired (SEC-006). Consistent with the ent paths.
+			fmt.Fprintf(b, "\t\tif r.enc == nil { return nil, fmt.Errorf(\"secret field %%q set but no encryptor configured: %%w\", %q, persistence.ErrNoEncryptor) }\n", f.Name)
 			fmt.Fprintf(b, "\t\th, err := r.enc.Hash(ctx, entity.%s)\n", gfn)
 			fmt.Fprintf(b, "\t\tif err != nil { return nil, fmt.Errorf(\"hash %s: %%w\", err) }\n", f.Name)
 			fmt.Fprintf(b, "\t\tc, err := r.enc.Encrypt(ctx, entity.%s)\n", gfn)

@@ -75,7 +75,7 @@ Both implementations satisfy one interface (`Encrypt` / `Decrypt` / `Hash`):
 ### Development — `secret.NewDev`
 
 ```go
-enc := secret.NewDev(devKey) // devKey must be >= 32 bytes
+enc := secret.NewDev(devKey) // devKey must be exactly 32 bytes (panics otherwise)
 ```
 
 Uses **AES-256-GCM** for encrypt/decrypt and **HMAC-SHA256** for hash. Runs entirely in-process —

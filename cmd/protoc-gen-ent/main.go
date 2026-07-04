@@ -127,6 +127,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			var (
 				isSecret     bool
 				isOutputOnly bool
+				isInputOnly  bool
 				notNull      bool
 				unique       bool
 				uniqueWith   []string
@@ -179,6 +180,14 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					gen.Error(err)
 				}
 				isOutputOnly = oo
+				// SEC-007: an effective INPUT_ONLY field (explicit field_behavior or
+				// derived from secret) is write-only — it must be omitted from the
+				// generated response projection, matching the OpenAPI writeOnly stamp.
+				if bs, berr := aip.ResolveFieldBehavior(field.Desc); berr != nil {
+					gen.Error(berr)
+				} else {
+					isInputOnly = aip.HasBehavior(bs, aip.InputOnly)
+				}
 			}
 			// For message-kind fields (relationships), capture the related
 			// message's Go type name so the edge target references the actual
@@ -229,6 +238,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				IsTags:      isStringMap,
 				IsSecret:    isSecret,
 				OutputOnly:  isOutputOnly,
+				InputOnly:   isInputOnly,
 				NotNull:     notNull,
 				Unique:      unique,
 				UniqueWith:  uniqueWith,

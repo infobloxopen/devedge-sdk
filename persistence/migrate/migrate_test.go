@@ -130,3 +130,69 @@ func TestMigrationURL_SafeConnection(t *testing.T) {
 		t.Error("expected mysql scheme to be rejected (fail-loud unsupported), got nil")
 	}
 }
+
+// TestMigrateErrors_NeverLeakDSNPassword is the SEC-005 regression: no migrate
+// error string may contain a cleartext DB password. It exercises every raw-DSN
+// sink (migrationURL + stdlibDSN, the parse-fail and no-scheme branches) with the
+// exploit DSNs from the security assessment (a libpq keyword/value form and a
+// scheme-less URL), and asserts the returned error contains neither the password
+// nor a "password="/":<pw>@" carrier substring.
+func TestMigrateErrors_NeverLeakDSNPassword(t *testing.T) {
+	const (
+		pw1 = "SuperSecret123" // libpq keyword/value password
+		pw2 = "Hunter2Pw"      // scheme-less URL userinfo password
+	)
+	cases := []struct {
+		name string
+		dsn  string
+		pw   string
+	}{
+		{"libpq_keyword_value", "host=db.internal port=5432 user=admin password=" + pw1 + " dbname=prod sslmode=require", pw1},
+		{"schemeless_url", "//dbadmin:" + pw2 + "@10.0.0.5:5432/prod", pw2},
+		{"unparsable_url", "://://" + pw2, pw2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, call := range []struct {
+				fn   string
+				call func() (string, error)
+			}{
+				{"migrationURL", func() (string, error) { return migrationURL(tc.dsn, "", defaultLockTimeout, defaultStatementTimeout) }},
+				{"stdlibDSN", func() (string, error) { return stdlibDSN(tc.dsn) }},
+			} {
+				_, err := call.call()
+				if err == nil {
+					t.Fatalf("%s(%q): expected an error", call.fn, tc.name)
+				}
+				msg := err.Error()
+				if strings.Contains(msg, tc.pw) {
+					t.Errorf("%s leaked password %q in error: %q", call.fn, tc.pw, msg)
+				}
+				if strings.Contains(msg, "password=") {
+					t.Errorf("%s leaked a password= token in error: %q", call.fn, msg)
+				}
+				// The ":<pw>@" userinfo carrier must not survive either.
+				if strings.Contains(msg, ":"+tc.pw+"@") {
+					t.Errorf("%s leaked a userinfo password carrier in error: %q", call.fn, msg)
+				}
+			}
+		})
+	}
+}
+
+// TestRedactDSN masks the password across both DSN shapes and fails safe on an
+// unparsable input.
+func TestRedactDSN(t *testing.T) {
+	cases := []struct{ in, wantAbsent string }{
+		{"postgres://user:SuperSecret123@host:5432/db", "SuperSecret123"},
+		{"//dbadmin:Hunter2Pw@10.0.0.5:5432/prod", "Hunter2Pw"},
+		{"host=db user=admin password=SuperSecret123 dbname=prod", "SuperSecret123"},
+		{"host=db user=admin pgpassword=Hunter2Pw dbname=prod", "Hunter2Pw"},
+	}
+	for _, tc := range cases {
+		got := redactDSN(tc.in)
+		if strings.Contains(got, tc.wantAbsent) {
+			t.Errorf("redactDSN(%q) = %q; still contains secret %q", tc.in, got, tc.wantAbsent)
+		}
+	}
+}

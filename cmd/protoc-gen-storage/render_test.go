@@ -1220,3 +1220,39 @@ func mustNotContain(t *testing.T, s, substr string) {
 		t.Errorf("expected output NOT to contain %q\n--- output ---\n%s", substr, s)
 	}
 }
+
+// TestRenderStorageFile_SEC006_SEC007 covers two secrets-sweep fixes on the GORM
+// path: (SEC-006) a non-empty secret with a nil encryptor fails loud via
+// persistence.ErrNoEncryptor instead of a nil-pointer panic, and (SEC-007) a pure
+// INPUT_ONLY (write-only, non-secret) field is persisted but omitted from the
+// response projection so the runtime matches the OpenAPI writeOnly contract.
+func TestRenderStorageFile_SEC006_SEC007(t *testing.T) {
+	msg := messageInfo{
+		MessageName:  "Credential",
+		PbPkgName:    "credv1",
+		PbImportPath: "example/cred/v1",
+		Fields: []fieldInfo{
+			{Name: "id", GoType: "string", SnakeName: "id", IsID: true},
+			{Name: "display_name", GoFieldName: "DisplayName", GoType: "string", SnakeName: "display_name"},
+			{Name: "api_key", GoFieldName: "ApiKey", GoType: "string", SnakeName: "api_key", IsSecret: true},
+			{Name: "setup_token", GoFieldName: "SetupToken", GoType: "string", SnakeName: "setup_token", IsInputOnly: true},
+		},
+	}
+	out := renderStorageFile("credv1storage", []messageInfo{msg}, nil)
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n%s", err, out)
+	}
+
+	// SEC-006: fail-loud nil-encryptor guard on Create and Update.
+	mustContain(t, out, "if r.enc == nil")
+	mustContain(t, out, "persistence.ErrNoEncryptor")
+
+	// SEC-007: the INPUT_ONLY field is still PERSISTED (toModel writes it) ...
+	mustContain(t, out, "m.SetupToken = p.SetupToken")
+	// ... but NEVER returned (fromModel omits it, exactly like a secret field).
+	mustNotContain(t, out, "p.SetupToken = m.SetupToken")
+
+	// A plain non-secret, non-write-only field still round-trips both ways.
+	mustContain(t, out, "m.DisplayName = p.DisplayName")
+	mustContain(t, out, "p.DisplayName = m.DisplayName")
+}

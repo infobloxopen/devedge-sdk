@@ -144,7 +144,7 @@ func newRepo(db *gorm.DB) *apikeyv1.APIKeyRepository {
         // Production: Vault Transit. The key "apikey" must already exist.
         enc = secret.NewVaultTransit(addr, os.Getenv("VAULT_TOKEN"), "apikey")
     } else {
-        // Dev: AES-256-GCM. Key must be >= 32 bytes.
+        // Dev: AES-256-GCM. Key must be exactly 32 bytes.
         enc = secret.NewDev([]byte(os.Getenv("DEV_SECRET_KEY")))
     }
     return apikeyv1.NewAPIKeyRepository(db, enc)

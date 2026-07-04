@@ -28,6 +28,12 @@ var (
 	ErrNotFound          = errors.New("persistence: not found")
 	ErrConflict          = errors.New("persistence: conflict")
 	ErrPreconditionFailed = errors.New("persistence: precondition failed")
+	// ErrNoEncryptor signals that a Create/Update carried a non-empty secret field
+	// value but the repository was constructed with a nil secret.Encryptor, so the
+	// value cannot be hashed/encrypted. Generated repositories return this (wrapped
+	// with the field name) rather than silently dropping the secret (ent singular)
+	// or panicking (ent batch / GORM) — a uniform fail-loud contract (SEC-006).
+	ErrNoEncryptor = errors.New("persistence: secret field set but no encryptor configured")
 )
 
 // MaxPageSize is the AIP-158 upper bound the generated List paths clamp a

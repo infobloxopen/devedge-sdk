@@ -339,6 +339,65 @@ func runBounded(ctx context.Context, m *migratelib.Migrate, run func() error) er
 	}
 }
 
+// redactDSN returns a form of a Postgres DSN that is SAFE to place in an error
+// message or log line: the password is removed. It handles the two DSN forms
+// devedge accepts:
+//
+//   - URL form (postgres://user:pw@host/db, or the scheme-less //user:pw@host/db):
+//     the userinfo password is blanked to "xxxxx".
+//   - libpq keyword/value form (host=… user=… password=… dbname=…): the
+//     password / pgpassword token is dropped.
+//
+// If the input matches neither shape (or a URL fails to parse), it returns the
+// generic placeholder "[redacted]" rather than risk echoing a credential. This
+// exists because Go's *url.Error embeds the raw URL and a raw DSN carries the DB
+// password — neither may reach stderr / CI logs (SEC-005).
+func redactDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	// libpq keyword/value form has no "://" but does have "key=value" tokens.
+	if !strings.Contains(dsn, "://") && strings.Contains(dsn, "=") {
+		return redactKeywordDSN(dsn)
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "[redacted]"
+	}
+	if u.User != nil {
+		if _, hasPW := u.User.Password(); hasPW {
+			u.User = url.UserPassword(u.User.Username(), "xxxxx")
+		}
+	}
+	return u.String()
+}
+
+// redactKeywordDSN drops the password (and the pgpassword alias) token from a
+// libpq keyword/value connection string, preserving every other token.
+func redactKeywordDSN(dsn string) string {
+	fields := strings.Fields(dsn)
+	out := fields[:0]
+	for _, f := range fields {
+		lower := strings.ToLower(f)
+		if strings.HasPrefix(lower, "password=") || strings.HasPrefix(lower, "pgpassword=") {
+			continue
+		}
+		out = append(out, f)
+	}
+	return strings.Join(out, " ")
+}
+
+// urlErrReason extracts the underlying reason from a *url.Error WITHOUT its
+// embedded raw URL (which would carry the DSN password). Falls back to a generic
+// string for any other error.
+func urlErrReason(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err.Error()
+	}
+	return "invalid DSN"
+}
+
 // migrationURL normalizes dsn to the pgx/v5 scheme and appends the SAFE migration
 // connection options: lock_timeout + statement_timeout (so a contended DDL fails fast)
 // and, when a module schema is set, search_path (so schema_migrations + unqualified
@@ -346,13 +405,14 @@ func runBounded(ctx context.Context, m *migratelib.Migrate, run func() error) er
 func migrationURL(dsn, schema string, lockTimeout, stmtTimeout time.Duration) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "", fmt.Errorf("migrate: parse DSN: %w", err)
+		// Never %w the *url.Error — it embeds the raw DSN (password). SEC-005.
+		return "", fmt.Errorf("migrate: parse DSN %q: %s", redactDSN(dsn), urlErrReason(err))
 	}
 	switch u.Scheme {
 	case "postgres", "postgresql", "pgx", "pgx5":
 		u.Scheme = "pgx5"
 	case "":
-		return "", fmt.Errorf("migrate: DSN %q has no scheme (want postgres://…)", dsn)
+		return "", fmt.Errorf("migrate: DSN has no scheme (want postgres://…)")
 	default:
 		return "", fmt.Errorf("migrate: unsupported DSN scheme %q (want a postgres DSN; MySQL is fail-loud unsupported in P1)", u.Scheme)
 	}
@@ -382,13 +442,14 @@ func migrationURL(dsn, schema string, lockTimeout, stmtTimeout time.Duration) (s
 func stdlibDSN(dsn string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "", fmt.Errorf("migrate: parse DSN: %w", err)
+		// Never %w the *url.Error — it embeds the raw DSN (password). SEC-005.
+		return "", fmt.Errorf("migrate: parse DSN %q: %s", redactDSN(dsn), urlErrReason(err))
 	}
 	switch u.Scheme {
 	case "postgres", "postgresql", "pgx", "pgx5":
 		u.Scheme = "postgres"
 	case "":
-		return "", fmt.Errorf("migrate: DSN %q has no scheme (want postgres://…)", dsn)
+		return "", fmt.Errorf("migrate: DSN has no scheme (want postgres://…)")
 	default:
 		return "", fmt.Errorf("migrate: unsupported DSN scheme %q (want a postgres DSN)", u.Scheme)
 	}

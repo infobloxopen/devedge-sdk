@@ -1722,6 +1722,9 @@ func (r *ApiKeyRepository) Create(ctx context.Context, entity *ApiKey) (*ApiKey,
 		m.AccountId = tenantID
 	}
 	if entity.KeyValue != "" {
+		if r.enc == nil {
+			return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "key_value", persistence.ErrNoEncryptor)
+		}
 		h, err := r.enc.Hash(ctx, entity.KeyValue)
 		if err != nil {
 			return nil, fmt.Errorf("hash key_value: %w", err)
@@ -1753,6 +1756,9 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 	m.ID = key
 	m.ETag = etag.New() // AIP-154: bump the ETag on every update
 	if entity.KeyValue != "" {
+		if r.enc == nil {
+			return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "key_value", persistence.ErrNoEncryptor)
+		}
 		h, err := r.enc.Hash(ctx, entity.KeyValue)
 		if err != nil {
 			return nil, fmt.Errorf("hash key_value: %w", err)
