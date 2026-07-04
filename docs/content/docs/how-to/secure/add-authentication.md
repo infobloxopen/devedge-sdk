@@ -149,6 +149,86 @@ When the minter and verifier share a process (a test, or a single-binary app ide
 HTTP round-trip and verify against the issuer's in-process keys with
 `oidc.StaticKeySet{Keys: issuer.KeySet()}`.
 
+## Adapt the generated tests
+
+`devedge-sdk new service` generates `TestSmoke` and `TestSecurity` that authenticate by sending
+`account-id`, `subject`, and `groups` metadata headers, which `grpcauthz.DevPrincipalFunc()` turns
+into the principal. Once you set `Authenticator`, `PrincipalFunc` defaults to
+`authn.VerifiedPrincipal`, so those headers no longer confer identity — the principal comes only
+from a verified bearer. The authorized calls in those tests then fail: their caller carries no
+groups, so the `group:admin` grant no longer matches.
+
+Give the tests a bearer to present. Stand up an in-process issuer, point the host's `Authenticator`
+at its keys with `oidc.StaticKeySet`, and mint a bearer per call:
+
+```go
+import (
+    "github.com/infobloxopen/devedge-sdk/authn"
+    "github.com/infobloxopen/devedge-sdk/authn/oidc"
+    "github.com/infobloxopen/devedge-sdk/authz"
+    "google.golang.org/grpc/metadata"
+)
+
+const (
+    testIssuer   = "https://test.local"
+    testAudience = "my-service"
+)
+
+// testAuth returns an issuer the test mints with and an authenticator that trusts
+// it. Boot the host under test with authr as its Authenticator.
+func testAuth(t *testing.T) (*oidc.Issuer, authn.Authenticator) {
+    t.Helper()
+    iss, err := oidc.NewIssuer(testIssuer, []string{testAudience})
+    if err != nil {
+        t.Fatalf("NewIssuer: %v", err)
+    }
+    authr, err := oidc.NewAuthenticator(oidc.Config{
+        Keys:             oidc.StaticKeySet{Keys: iss.KeySet()},
+        ExpectedIssuer:   testIssuer,
+        ExpectedAudience: testAudience,
+    })
+    if err != nil {
+        t.Fatalf("NewAuthenticator: %v", err)
+    }
+    return iss, authr
+}
+
+// bearerCtx mints an app bearer for p and attaches it as `authorization: Bearer`,
+// the only identity the wired Authenticator now trusts.
+func bearerCtx(t *testing.T, ctx context.Context, iss *oidc.Issuer, p authz.Principal) context.Context {
+    t.Helper()
+    bearer, err := iss.Mint(ctx, p)
+    if err != nil {
+        t.Fatalf("Mint: %v", err)
+    }
+    return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearer)
+}
+```
+
+Then replace the header-based identity in the generated tests. In `TestSmoke`, the `account-id`
+header still scopes the tenant, but the caller's identity now rides in the bearer:
+
+```go
+// before: identity from headers
+mdCtx := metadata.NewOutgoingContext(context.Background(),
+    metadata.Pairs("account-id", "tenant1", "groups", "admin"))
+
+// after: account-id still scopes the tenant; the bearer carries the verified principal
+base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("account-id", "tenant1"))
+mdCtx := bearerCtx(t, base, iss, authz.Principal{Subject: "alice", Groups: []string{"admin"}})
+```
+
+In `TestSecurity`, change the `asAdmin` helper the same way — wrap the seccheck-supplied context
+with a bearer for an admin principal instead of appending a `groups` header. The seccheck helper
+still sets `account-id` for tenant scoping; the bearer supplies the group the grant matches.
+
+{{< callout type="info" >}}
+**The deny cases need no change.** `TestSmoke_DeniedForUnknownPrincipal` and the
+`AssertUnknownPrincipalDenied` helper present no bearer, so the principal is empty and the
+default-deny authorizer still denies every non-public method. The fail-closed path does not depend
+on headers.
+{{< /callout >}}
+
 ## Run it locally against the dev security suite
 
 The `github.com/infobloxopen/devedge-idp` project ships a development-only identity provider and a
@@ -157,9 +237,30 @@ exercise the full verify-then-decide pipeline without standing up a real IdP or 
 
 **Prerequisites:** a service wired with `Authenticator` (above) and a checkout of `devedge-idp`.
 
-1. Register your app as an IdP client. Add optional `tile` metadata to your route in
-   `devedge.yaml`, then run `de idp clients sync` to write `idp-clients.json` (the client ID is your
-   app name, with a dummy secret and redirect URI). `de idp up` routes the IdP at `idp.dev.test`.
+1. Register your app as an IdP client. The IdP reads its clients from an `idp-clients.json` file
+   (the `IDP_CLIENTS` path in step 2). Produce that file one of two ways:
+
+   - **With the daemon running** — run `de start` so the daemon discovers your registered app, then
+     `de idp clients sync` to write `idp-clients.json` (the client ID is your app name, with a dummy
+     secret and redirect URI). Add optional `tile` metadata to your route in `devedge.yaml` first to
+     set the launchpad tile. `de idp up` routes the IdP at `idp.dev.test`.
+   - **By hand** — for a local-only service with no daemon or `devedge.yaml`, write the file
+     yourself. `de idp clients sync` fails without a running daemon, so a hand-written file is the
+     fallback. Each entry needs a `client_id`, `client_secret`, `redirect_uris`, and a `tile`:
+
+     ```json
+     [
+       {
+         "client_id": "my-app",
+         "client_secret": "dev-secret-my-app",
+         "redirect_uris": ["https://my-app.dev.test/callback"],
+         "tile": {"name": "My App", "description": "", "icon_url": "", "launch_url": "https://my-app.dev.test/"}
+       }
+     ]
+     ```
+
+   The file augments the seeded client and hot-reloads on edit; its exact shape is in the
+   [devedge-idp README](https://github.com/infobloxopen/devedge-idp#hot-reloadable-clients-file).
 2. Run the IdP: `IDP_CLIENTS=./idp-clients.json go run ./cmd/idp` from the `devedge-idp` checkout.
    Its launchpad at `/` shows a tile per registered app; the identity picker logs you in
    passwordlessly as `alice`, `bob`, or `carol`. Editing `idp-clients.json` hot-reloads the tiles —
@@ -212,5 +313,6 @@ tests — `twotier_test.go`, `cli_devicegrant_test.go`, and `verifydecide_test.g
   fields.
 - [servicekit → HostConfig](../../../reference/servicekit/#hostconfig) — the same fields on a
   composed host.
+- [authn / authn/oidc](../../../reference/authn/) — the reference for every seam and type wired here.
 - [Security posture](../../../explanation/security-posture/) — the model behind the security surface.
 - The `add-authentication` skill walks an agent through wiring the seam step by step.

@@ -15,6 +15,7 @@ This section covers every public package and code-generation plugin in devedge-s
   {{< card link="persistence/" title="persistence" icon="database" subtitle="Repository, MemoryRepository, DSN, ListOptions." >}}
   {{< card link="lro/" title="lro" icon="clock" subtitle="AIP-151 long-running operations: Manager, Store, Operation." >}}
   {{< card link="seccheck/" title="seccheck" icon="shield-check" subtitle="All Assert* functions and RunT." >}}
+  {{< card link="authn/" title="authn" icon="finger-print" subtitle="The authentication seams: Authenticator, Issuer, ClaimsMapper, and the authn/oidc backend." >}}
   {{< card link="codegen/" title="codegen" icon="cog" subtitle="protoc-gen-devedge-authz, svc, storage, ent (+ gateway)." >}}
   {{< card link="graphql-federation/" title="graphql-federation" icon="share" subtitle="federationgql: the cross-service GraphQL federation gateway." >}}
   {{< card link="slo-kpis/" title="API KPIs" icon="chart-bar" subtitle="The Layer-0 signals a service emits: RED, golden signals, and USE, in OTel semconv terms." >}}
