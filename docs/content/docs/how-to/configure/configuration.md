@@ -105,6 +105,76 @@ type ServerOptions struct {
 database connection string; an empty value causes the scaffold to fall back to its built-in
 default (in-memory SQLite).
 
+## Combining custom settings with `ServerOptions`
+
+A service usually needs its own settings — an app JWKS URL, issuer, audience, or a dev-authz base
+URL — alongside the canonical ones. Load them through the same sources so they share one precedence
+chain. There are two ways to do it.
+
+### Embed `ServerOptions` in one struct
+
+`config.Load` flattens embedded structs, so embedding `config.ServerOptions` in your own struct
+populates both from a single `Load` call:
+
+```go
+type Options struct {
+    config.ServerOptions // GRPC_ADDR, HTTP_ADDR, LOG_LEVEL, OTLP_ENDPOINT, DSN
+
+    AppJWKSURL  string `config:"APP_JWKS_URL"  default:""`
+    AppIssuer   string `config:"APP_ISSUER"    default:""`
+    AppAudience string `config:"APP_AUDIENCE"  default:""`
+    DevAuthzURL string `config:"DEVAUTHZ_URL"  default:""`
+}
+
+var opts Options
+if err := config.Load(&opts,
+    config.Flags(fs),
+    config.Env("MYSVC_"),
+    config.DotEnv(".env"),
+); err != nil {
+    log.Fatal(err)
+}
+// opts.GRPCAddr and opts.AppJWKSURL are both populated, under the same
+// flags > env > file > default precedence.
+```
+
+The embedded keys keep their names, so the environment variables are `MYSVC_GRPC_ADDR`,
+`MYSVC_APP_JWKS_URL`, and so on.
+
+### Make two `Load` calls against the same sources
+
+When the custom settings live in their own struct or package, build the source list once and load
+each struct from it. Sources are read-only, so the same list drives both calls with identical
+precedence:
+
+```go
+sources := []config.Source{
+    config.Flags(fs),
+    config.Env("MYSVC_"),
+    config.DotEnv(".env"),
+}
+
+var srv config.ServerOptions
+if err := config.Load(&srv, sources...); err != nil {
+    log.Fatal(err)
+}
+
+var auth AuthOptions // your own config:"..."-tagged struct
+if err := config.Load(&auth, sources...); err != nil {
+    log.Fatal(err)
+}
+```
+
+Both approaches give the custom settings the same flag, environment, `.env`, and default precedence
+as `ServerOptions`. Prefer embedding for one config object; use two calls to keep a package's
+settings in its own struct.
+
+{{< callout type="info" >}}
+**Register a flag for each key you want settable from the command line.** `config.Flags(fs)` returns
+only the flags explicitly set on `fs`, so a custom key such as `APP_JWKS_URL` falls through to the
+environment and file sources until you define a corresponding flag on the same `FlagSet`.
+{{< /callout >}}
+
 ## YAML and TOML support
 
 To read YAML or TOML files, import the `config/koanf` adapter. This adapter is the only package

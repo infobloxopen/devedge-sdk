@@ -41,8 +41,20 @@ type Config struct {
     // call is denied. Use grpcauthz.DevPrincipalFunc() in dev; a verified-token
     // function in production.
     PrincipalFunc grpcauthz.PrincipalFunc
+    // Authenticator, when set, inserts the authentication interceptor BEFORE
+    // authz. It verifies the request bearer (signature + iss/aud/exp) and
+    // stashes the verified authz.Principal, which the authorizer reads via
+    // authn.VerifiedPrincipal. PrincipalFunc defaults to authn.VerifiedPrincipal
+    // when Authenticator is set. An invalid bearer is rejected with
+    // codes.Unauthenticated (fail closed). Nil keeps the prior behavior.
+    Authenticator authn.Authenticator
     // Interceptors are additional unary interceptors appended after the framework chain.
     Interceptors []grpc.UnaryServerInterceptor
+    // HTTPHandlers mount net/http handlers on the HTTP server at path patterns,
+    // alongside the gateway: OIDC provider endpoints, webhooks, a login UI, or
+    // static assets. The /healthz and /readyz probes always win; a "/" handler
+    // replaces the gateway catch-all. Requires HTTPAddr.
+    HTTPHandlers []HTTPHandler
     // DeduplicationStore backs the idempotency interceptor. Defaults to an
     // in-memory store (10-minute TTL) when nil.
     DeduplicationStore middleware.DeduplicationStore
@@ -71,7 +83,9 @@ type Config struct {
 | `Rules` | no | `nil` | **optional** additive override; the generated `Register<Service>` contributes each service's rules via `AddRules`, so you rarely set this. The accumulated set must cover every registered method or `Serve` fails closed. |
 | `Authorizer` | no | `authz.NewDevAuthorizer()` (no grants → deny all) | swap for OPA/Cedar/remote PDP |
 | `PrincipalFunc` | no* | `nil` → empty principal | how the caller's identity is derived; *without it **no grant can match**, so every non-public call is denied. Use `grpcauthz.DevPrincipalFunc()` in dev, a verified-token function in prod |
+| `Authenticator` | no | `nil` (no verify stage) | when set, inserts the authentication interceptor before authz; it verifies the bearer (signature + `iss`/`aud`/`exp`) and stashes the verified `authz.Principal`, which the authorizer reads via `authn.VerifiedPrincipal` (`PrincipalFunc` defaults to it). An invalid bearer → `codes.Unauthenticated`. See [Add authentication](../../how-to/secure/add-authentication/) |
 | `Interceptors` | no | `nil` | appended **after** the framework chain |
+| `HTTPHandlers` | no | `nil` | mount `net/http` handlers on the HTTP server (OIDC provider endpoints, webhooks, a login UI, static assets) alongside the gateway; probes always win; a `/` handler replaces the gateway catch-all; requires `HTTPAddr` |
 | `DeduplicationStore` | no | in-memory (10m TTL) | idempotency replay store for `DeduplicateUnary` |
 | `LROStore` | no | in-memory (1h TTL) | long-running operation store (AIP-151) |
 | `Logger` | no | `slog.Default()` | structured logger for `middleware.LoggingUnary`; one record per RPC, trace-correlated with secret-redacted payloads at Debug |
@@ -97,6 +111,20 @@ type ResilienceConfig struct {
 | `CircuitBreaker` | `nil` (off) | wraps handler invocations just inside the framework chain; plug in `sony/gobreaker`, `afex/hystrix-go`, or any `resilience.CircuitBreaker` implementation |
 
 `DefaultGRPCAddr` is `":9090"`.
+
+### HTTPHandler
+
+```go
+type HTTPHandler struct {
+    Pattern string       // net/http ServeMux pattern (e.g. "/oauth/", "/keys", "/")
+    Handler http.Handler
+}
+```
+
+| Field | Notes |
+|---|---|
+| `Pattern` | a `net/http` `ServeMux` pattern. A more specific pattern (e.g. `"/oauth/"`) wins over the gateway catch-all; `"/"` replaces the catch-all. `/healthz` and `/readyz` are reserved and cannot be claimed. |
+| `Handler` | serves requests matching `Pattern`. A handler runs inside the HTTP tracing span but does not traverse the gRPC interceptor chain, so its own authentication and authorization are the handler's responsibility. |
 
 ## New
 

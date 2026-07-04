@@ -225,8 +225,11 @@ type HostConfig struct {
     GRPCAddr string
     HTTPAddr string
 
+    HTTPHandlers []server.HTTPHandler
+
     Authorizer    authz.Authorizer
     PrincipalFunc grpcauthz.PrincipalFunc
+    Authenticator authn.Authenticator
     Logger        *slog.Logger
 
     ConfigSources []config.Source
@@ -249,8 +252,10 @@ binary (one module) and a composed suite (several modules).
 | `Modules` | **yes** | — | The modules to compose into this host. |
 | `GRPCAddr` | no | `server.DefaultGRPCAddr` (`":9090"`) | The shared gRPC listen address. |
 | `HTTPAddr` | no | `""` (disabled) | The shared HTTP gateway address. |
+| `HTTPHandlers` | no | `nil` | `net/http` handlers mounted on the one shared HTTP server (OIDC provider endpoints, webhooks, a login UI, static assets) alongside the module gateways. Probes always win; a `/` handler replaces the gateway catch-all; requires `HTTPAddr`. See [`server.HTTPHandler`](../server/#httphandler). |
 | `Authorizer` | no | default-deny dev authorizer | The shared decision point handed to the one server. |
 | `PrincipalFunc` | no | `nil` → empty principal | Derives the principal from each request. Without it every non-public method is denied. Use `grpcauthz.DevPrincipalFunc()` in dev, a verified-token function in production. |
+| `Authenticator` | no | `nil` (no verify stage) | Inserts the authentication interceptor before authz on the one shared server: it verifies the request bearer (signature + `iss`/`aud`/`exp`) and stashes the verified `authz.Principal`, which the authorizer reads via `authn.VerifiedPrincipal` (`PrincipalFunc` defaults to it). An invalid bearer → `codes.Unauthenticated`. See [`server.Config.Authenticator`](../server/#config) and [Add authentication](../../how-to/secure/add-authentication/). |
 | `Logger` | no | `slog.Default()` | The host logger; each module gets a child scoped to its ID. |
 | `ConfigSources` | no | `nil` | The configuration sources the host loads module config from, layered per module prefix. |
 | `Context` | no | `nil` → cancelled on SIGTERM/Interrupt | The host's root context; `Run` serves until it is cancelled. |
