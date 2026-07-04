@@ -19,11 +19,11 @@ import (
 	"go/format"
 	"strings"
 
+	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	"github.com/infobloxopen/devedge-sdk/internal/aip"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
-	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
-	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
@@ -117,25 +117,29 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 		}
 		for _, field := range m.Fields {
 			var (
-				isSecret     bool
-				isOutputOnly bool
-				isInputOnly  bool
-				notNull      bool
-				unique       bool
-				uniqueWith   []string
-				index        bool
-				columnName   string
-				columnType   string
-				hasOne       *fieldv1.HasOne
-				hasMany      *fieldv1.HasMany
-				belongsTo    *fieldv1.BelongsTo
-				manyToMany   *fieldv1.ManyToMany
-				references   *dddv1.References
+				isSecret         bool
+				isCredential     bool
+				credentialPrefix string
+				isOutputOnly     bool
+				isInputOnly      bool
+				notNull          bool
+				unique           bool
+				uniqueWith       []string
+				index            bool
+				columnName       string
+				columnType       string
+				hasOne           *fieldv1.HasOne
+				hasMany          *fieldv1.HasMany
+				belongsTo        *fieldv1.BelongsTo
+				manyToMany       *fieldv1.ManyToMany
+				references       *dddv1.References
 			)
 			if opts := field.Desc.Options(); opts != nil {
 				if proto.HasExtension(opts, fieldv1.E_Opts) {
 					if fopts, ok := proto.GetExtension(opts, fieldv1.E_Opts).(*fieldv1.FieldOptions); ok {
 						isSecret = fopts.GetSecret()
+						isCredential = fopts.GetCredential()
+						credentialPrefix = fopts.GetCredentialPrefix()
 						notNull = fopts.GetNotNull()
 						unique = fopts.GetUnique()
 						uniqueWith = fopts.GetUniqueWith()
@@ -226,30 +230,32 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				field.Desc.MapKey().Kind() == protoreflect.StringKind &&
 				field.Desc.MapValue().Kind() == protoreflect.StringKind
 			msg.Fields = append(msg.Fields, fieldInfo{
-				Name:          string(field.Desc.Name()),
-				GoFieldName:   string(field.GoName),
-				SnakeName:     toSnake(string(field.Desc.Name())),
-				IsRepeated:    field.Desc.IsList(),
-				IsMessage:     field.Desc.Kind() == protoreflect.MessageKind && !isStringMap,
-				IsEnum:        field.Desc.Kind() == protoreflect.EnumKind,
-				IsTags:        isStringMap,
-				IsID:          string(field.Desc.Name()) == "id",
-				GoType:        protoKindToGoType(field.Desc.Kind()),
-				RelatedGoType: relatedGoType,
-				IsSecret:      isSecret,
-				IsOutputOnly:  isOutputOnly,
-				IsInputOnly:   isInputOnly,
-				NotNull:       notNull,
-				Unique:        unique,
-				UniqueWith:    uniqueWith,
-				Index:         index,
-				ColumnName:    columnName,
-				ColumnType:    columnType,
-				HasOne:        hasOne,
-				HasMany:       hasMany,
-				BelongsTo:     belongsTo,
-				ManyToMany:    manyToMany,
-				References:    references,
+				Name:             string(field.Desc.Name()),
+				GoFieldName:      string(field.GoName),
+				SnakeName:        toSnake(string(field.Desc.Name())),
+				IsRepeated:       field.Desc.IsList(),
+				IsMessage:        field.Desc.Kind() == protoreflect.MessageKind && !isStringMap,
+				IsEnum:           field.Desc.Kind() == protoreflect.EnumKind,
+				IsTags:           isStringMap,
+				IsID:             string(field.Desc.Name()) == "id",
+				GoType:           protoKindToGoType(field.Desc.Kind()),
+				RelatedGoType:    relatedGoType,
+				IsSecret:         isSecret,
+				IsCredential:     isCredential,
+				CredentialPrefix: credentialPrefix,
+				IsOutputOnly:     isOutputOnly,
+				IsInputOnly:      isInputOnly,
+				NotNull:          notNull,
+				Unique:           unique,
+				UniqueWith:       uniqueWith,
+				Index:            index,
+				ColumnName:       columnName,
+				ColumnType:       columnType,
+				HasOne:           hasOne,
+				HasMany:          hasMany,
+				BelongsTo:        belongsTo,
+				ManyToMany:       manyToMany,
+				References:       references,
 			})
 		}
 		messages = append(messages, msg)
@@ -270,7 +276,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			if f.Name == "account_id" || f.SnakeName == "account_id" {
 				hasTenant = true
 			}
-			if !f.IsID && !f.IsRepeated && !f.IsMessage && !f.IsSecret {
+			if !f.IsID && !f.IsRepeated && !f.IsMessage && !f.IsSecret && !f.IsCredential {
 				scalar[f.Name] = true
 				scalar[f.SnakeName] = true
 			}
@@ -293,6 +299,29 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				}
 			}
 		}
+	}
+
+	// WS-033 credential guards (fail-loud in codegen): a verify-only credential
+	// field is mutually exclusive with secret and its type must be string. Fail
+	// generation with an actionable error rather than emitting wrong storage.
+	credOK := true
+	for _, msg := range messages {
+		for _, f := range msg.Fields {
+			if !f.IsCredential {
+				continue
+			}
+			if f.IsSecret {
+				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s: credential and secret are mutually exclusive on a field", msg.MessageName, f.Name))
+				credOK = false
+			}
+			if f.GoType != "string" {
+				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s: credential requires a string field", msg.MessageName, f.Name))
+				credOK = false
+			}
+		}
+	}
+	if !credOK {
+		return
 	}
 
 	// F027 fail-closed (G-002): every resource field must be deterministically
@@ -390,8 +419,8 @@ func validateSurfaces(gen *protogen.Plugin, messages []messageInfo, ownerByName 
 				ok = false
 				continue
 			}
-			if f.GoType != of.GoType || f.IsSecret != of.IsSecret || f.IsOutputOnly != of.IsOutputOnly {
-				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s conflicts with model %s.%s: a surface field must match the model column's type and secret/output classification", msg.MessageName, f.Name, msg.Model, of.Name))
+			if f.GoType != of.GoType || f.IsSecret != of.IsSecret || f.IsCredential != of.IsCredential || f.IsOutputOnly != of.IsOutputOnly {
+				gen.Error(fmt.Errorf("protoc-gen-storage: %s.%s conflicts with model %s.%s: a surface field must match the model column's type and secret/credential/output classification", msg.MessageName, f.Name, msg.Model, of.Name))
 				ok = false
 			}
 		}

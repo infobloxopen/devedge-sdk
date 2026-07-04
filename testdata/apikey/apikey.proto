@@ -76,6 +76,22 @@ message Token {
   string label = 2;
 }
 
+// ServiceToken exercises the WS-033 verify-only credential primitive.
+// secret_value is credential: true, so the framework MINTS a
+// "<prefix>_<public_id>_<secret>" token on Create, returns it ONCE (in the
+// response's secret_value), stores only secret_value_public_id (UNIQUE) +
+// secret_value_salt + secret_value_hash + secret_value_hashspec — never a
+// reversible copy — and generates VerifySecretValue for constant-time
+// verification. It is a standalone storable resource (it has an id) with no
+// service; the storage/ent plugins emit a repository for any message with an id.
+message ServiceToken {
+  string id           = 1;
+  string label        = 2;
+  // secret_value is a verify-only credential. credential_prefix stamps the minted
+  // token's scanner-recognizable prefix ("st_...").
+  string secret_value = 3 [(infoblox.field.v1.opts) = {credential: true, credential_prefix: "st"}];
+}
+
 service APIKeyService {
   rpc CreateAPIKey(CreateAPIKeyRequest) returns (APIKey) {
     option (google.api.http) = {post: "/v1/apikeys", body: "api_key"};

@@ -50,6 +50,25 @@ message FieldOptions {
   // unset and is not checked (use not_null to require a value).
   repeated string allowed_values = 9;
 
+  // credential marks a string field as a verify-only credential (an API key or
+  // token). Unlike secret (which keeps a reversible cipher for retrieval), a
+  // credential is HASHED, never encrypted — the framework:
+  //   - MINTS the value on Create as a prefixed split token
+  //     "<prefix>_<public_id>_<secret>" and returns it to the caller exactly ONCE,
+  //   - stores only the plaintext public_id (unique, indexed for lookup), a
+  //     per-secret salt, and a one-way hash of the secret (SHA-512/256 by default;
+  //     no reversible copy is ever stored),
+  //   - never returns the value on Get/List,
+  //   - generates a Verify<Field> that looks up by public_id and compares in
+  //     constant time.
+  // Mutually exclusive with secret. The field must be a string.
+  bool credential = 10;
+
+  // credential_prefix overrides the default token prefix (e.g. "ib") for a
+  // credential field. The prefix is a shared, well-known, non-secret tag that
+  // makes leaked tokens easy to spot (secret-scanning); it is not the lookup key.
+  string credential_prefix = 11;
+
   // Relationships. Declare on the proto field that holds the related resource.
   // The codegen plugins generate the appropriate ORM association or graph edge.
   HasOne     has_one      = 20;

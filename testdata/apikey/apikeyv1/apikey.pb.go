@@ -295,6 +295,76 @@ func (x *Token) GetLabel() string {
 	return ""
 }
 
+// ServiceToken exercises the WS-033 verify-only credential primitive.
+// secret_value is credential: true, so the framework MINTS a
+// "<prefix>_<public_id>_<secret>" token on Create, returns it ONCE (in the
+// response's secret_value), stores only secret_value_public_id (UNIQUE) +
+// secret_value_salt + secret_value_hash + secret_value_hashspec — never a
+// reversible copy — and generates VerifySecretValue for constant-time
+// verification. It is a standalone storable resource (it has an id) with no
+// service; the storage/ent plugins emit a repository for any message with an id.
+type ServiceToken struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Label string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	// secret_value is a verify-only credential. credential_prefix stamps the minted
+	// token's scanner-recognizable prefix ("st_...").
+	SecretValue   string `protobuf:"bytes,3,opt,name=secret_value,json=secretValue,proto3" json:"secret_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServiceToken) Reset() {
+	*x = ServiceToken{}
+	mi := &file_apikey_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceToken) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceToken) ProtoMessage() {}
+
+func (x *ServiceToken) ProtoReflect() protoreflect.Message {
+	mi := &file_apikey_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServiceToken.ProtoReflect.Descriptor instead.
+func (*ServiceToken) Descriptor() ([]byte, []int) {
+	return file_apikey_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ServiceToken) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ServiceToken) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *ServiceToken) GetSecretValue() string {
+	if x != nil {
+		return x.SecretValue
+	}
+	return ""
+}
+
 type CreateAPIKeyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ApiKey        *APIKey                `protobuf:"bytes,1,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
@@ -304,7 +374,7 @@ type CreateAPIKeyRequest struct {
 
 func (x *CreateAPIKeyRequest) Reset() {
 	*x = CreateAPIKeyRequest{}
-	mi := &file_apikey_proto_msgTypes[3]
+	mi := &file_apikey_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +386,7 @@ func (x *CreateAPIKeyRequest) String() string {
 func (*CreateAPIKeyRequest) ProtoMessage() {}
 
 func (x *CreateAPIKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_apikey_proto_msgTypes[3]
+	mi := &file_apikey_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +399,7 @@ func (x *CreateAPIKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAPIKeyRequest.ProtoReflect.Descriptor instead.
 func (*CreateAPIKeyRequest) Descriptor() ([]byte, []int) {
-	return file_apikey_proto_rawDescGZIP(), []int{3}
+	return file_apikey_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CreateAPIKeyRequest) GetApiKey() *APIKey {
@@ -350,7 +420,7 @@ type GetAPIKeyRequest struct {
 
 func (x *GetAPIKeyRequest) Reset() {
 	*x = GetAPIKeyRequest{}
-	mi := &file_apikey_proto_msgTypes[4]
+	mi := &file_apikey_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -362,7 +432,7 @@ func (x *GetAPIKeyRequest) String() string {
 func (*GetAPIKeyRequest) ProtoMessage() {}
 
 func (x *GetAPIKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_apikey_proto_msgTypes[4]
+	mi := &file_apikey_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -375,7 +445,7 @@ func (x *GetAPIKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAPIKeyRequest.ProtoReflect.Descriptor instead.
 func (*GetAPIKeyRequest) Descriptor() ([]byte, []int) {
-	return file_apikey_proto_rawDescGZIP(), []int{4}
+	return file_apikey_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetAPIKeyRequest) GetId() string {
@@ -405,7 +475,7 @@ type ListAPIKeysRequest struct {
 
 func (x *ListAPIKeysRequest) Reset() {
 	*x = ListAPIKeysRequest{}
-	mi := &file_apikey_proto_msgTypes[5]
+	mi := &file_apikey_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -417,7 +487,7 @@ func (x *ListAPIKeysRequest) String() string {
 func (*ListAPIKeysRequest) ProtoMessage() {}
 
 func (x *ListAPIKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_apikey_proto_msgTypes[5]
+	mi := &file_apikey_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -430,7 +500,7 @@ func (x *ListAPIKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAPIKeysRequest.ProtoReflect.Descriptor instead.
 func (*ListAPIKeysRequest) Descriptor() ([]byte, []int) {
-	return file_apikey_proto_rawDescGZIP(), []int{5}
+	return file_apikey_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListAPIKeysRequest) GetPageSize() int32 {
@@ -471,7 +541,7 @@ type ListAPIKeysResponse struct {
 
 func (x *ListAPIKeysResponse) Reset() {
 	*x = ListAPIKeysResponse{}
-	mi := &file_apikey_proto_msgTypes[6]
+	mi := &file_apikey_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -483,7 +553,7 @@ func (x *ListAPIKeysResponse) String() string {
 func (*ListAPIKeysResponse) ProtoMessage() {}
 
 func (x *ListAPIKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_apikey_proto_msgTypes[6]
+	mi := &file_apikey_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -496,7 +566,7 @@ func (x *ListAPIKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAPIKeysResponse.ProtoReflect.Descriptor instead.
 func (*ListAPIKeysResponse) Descriptor() ([]byte, []int) {
-	return file_apikey_proto_rawDescGZIP(), []int{6}
+	return file_apikey_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListAPIKeysResponse) GetApiKeys() []*APIKey {
@@ -522,7 +592,7 @@ type DeleteAPIKeyRequest struct {
 
 func (x *DeleteAPIKeyRequest) Reset() {
 	*x = DeleteAPIKeyRequest{}
-	mi := &file_apikey_proto_msgTypes[7]
+	mi := &file_apikey_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -534,7 +604,7 @@ func (x *DeleteAPIKeyRequest) String() string {
 func (*DeleteAPIKeyRequest) ProtoMessage() {}
 
 func (x *DeleteAPIKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_apikey_proto_msgTypes[7]
+	mi := &file_apikey_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -547,7 +617,7 @@ func (x *DeleteAPIKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAPIKeyRequest.ProtoReflect.Descriptor instead.
 func (*DeleteAPIKeyRequest) Descriptor() ([]byte, []int) {
-	return file_apikey_proto_rawDescGZIP(), []int{7}
+	return file_apikey_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DeleteAPIKeyRequest) GetId() string {
@@ -565,7 +635,7 @@ type DeleteAPIKeyResponse struct {
 
 func (x *DeleteAPIKeyResponse) Reset() {
 	*x = DeleteAPIKeyResponse{}
-	mi := &file_apikey_proto_msgTypes[8]
+	mi := &file_apikey_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -577,7 +647,7 @@ func (x *DeleteAPIKeyResponse) String() string {
 func (*DeleteAPIKeyResponse) ProtoMessage() {}
 
 func (x *DeleteAPIKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_apikey_proto_msgTypes[8]
+	mi := &file_apikey_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -590,7 +660,7 @@ func (x *DeleteAPIKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAPIKeyResponse.ProtoReflect.Descriptor instead.
 func (*DeleteAPIKeyResponse) Descriptor() ([]byte, []int) {
-	return file_apikey_proto_rawDescGZIP(), []int{8}
+	return file_apikey_proto_rawDescGZIP(), []int{9}
 }
 
 var File_apikey_proto protoreflect.FileDescriptor
@@ -628,7 +698,12 @@ const file_apikey_proto_rawDesc = "" +
 	"\x92\xb8\x18\x06APIKey\"7\n" +
 	"\x05Token\x12\x18\n" +
 	"\x02id\x18\x01 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12\x14\n" +
-	"\x05label\x18\x02 \x01(\tR\x05label\"A\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\"c\n" +
+	"\fServiceToken\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\x12-\n" +
+	"\fsecret_value\x18\x03 \x01(\tB\n" +
+	"\x9a\xb5\x18\x06P\x01Z\x02stR\vsecretValue\"A\n" +
 	"\x13CreateAPIKeyRequest\x12*\n" +
 	"\aapi_key\x18\x01 \x01(\v2\x11.apikey.v1.APIKeyR\x06apiKey\"[\n" +
 	"\x10GetAPIKeyRequest\x12\x0e\n" +
@@ -668,37 +743,38 @@ func file_apikey_proto_rawDescGZIP() []byte {
 	return file_apikey_proto_rawDescData
 }
 
-var file_apikey_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_apikey_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_apikey_proto_goTypes = []any{
 	(*APIKey)(nil),                // 0: apikey.v1.APIKey
 	(*APIKeySummary)(nil),         // 1: apikey.v1.APIKeySummary
 	(*Token)(nil),                 // 2: apikey.v1.Token
-	(*CreateAPIKeyRequest)(nil),   // 3: apikey.v1.CreateAPIKeyRequest
-	(*GetAPIKeyRequest)(nil),      // 4: apikey.v1.GetAPIKeyRequest
-	(*ListAPIKeysRequest)(nil),    // 5: apikey.v1.ListAPIKeysRequest
-	(*ListAPIKeysResponse)(nil),   // 6: apikey.v1.ListAPIKeysResponse
-	(*DeleteAPIKeyRequest)(nil),   // 7: apikey.v1.DeleteAPIKeyRequest
-	(*DeleteAPIKeyResponse)(nil),  // 8: apikey.v1.DeleteAPIKeyResponse
-	nil,                           // 9: apikey.v1.APIKey.TagsEntry
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil), // 11: google.protobuf.FieldMask
+	(*ServiceToken)(nil),          // 3: apikey.v1.ServiceToken
+	(*CreateAPIKeyRequest)(nil),   // 4: apikey.v1.CreateAPIKeyRequest
+	(*GetAPIKeyRequest)(nil),      // 5: apikey.v1.GetAPIKeyRequest
+	(*ListAPIKeysRequest)(nil),    // 6: apikey.v1.ListAPIKeysRequest
+	(*ListAPIKeysResponse)(nil),   // 7: apikey.v1.ListAPIKeysResponse
+	(*DeleteAPIKeyRequest)(nil),   // 8: apikey.v1.DeleteAPIKeyRequest
+	(*DeleteAPIKeyResponse)(nil),  // 9: apikey.v1.DeleteAPIKeyResponse
+	nil,                           // 10: apikey.v1.APIKey.TagsEntry
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil), // 12: google.protobuf.FieldMask
 }
 var file_apikey_proto_depIdxs = []int32{
-	10, // 0: apikey.v1.APIKey.delete_time:type_name -> google.protobuf.Timestamp
-	10, // 1: apikey.v1.APIKey.expire_time:type_name -> google.protobuf.Timestamp
-	9,  // 2: apikey.v1.APIKey.tags:type_name -> apikey.v1.APIKey.TagsEntry
+	11, // 0: apikey.v1.APIKey.delete_time:type_name -> google.protobuf.Timestamp
+	11, // 1: apikey.v1.APIKey.expire_time:type_name -> google.protobuf.Timestamp
+	10, // 2: apikey.v1.APIKey.tags:type_name -> apikey.v1.APIKey.TagsEntry
 	0,  // 3: apikey.v1.CreateAPIKeyRequest.api_key:type_name -> apikey.v1.APIKey
-	11, // 4: apikey.v1.GetAPIKeyRequest.read_mask:type_name -> google.protobuf.FieldMask
-	11, // 5: apikey.v1.ListAPIKeysRequest.read_mask:type_name -> google.protobuf.FieldMask
+	12, // 4: apikey.v1.GetAPIKeyRequest.read_mask:type_name -> google.protobuf.FieldMask
+	12, // 5: apikey.v1.ListAPIKeysRequest.read_mask:type_name -> google.protobuf.FieldMask
 	0,  // 6: apikey.v1.ListAPIKeysResponse.api_keys:type_name -> apikey.v1.APIKey
-	3,  // 7: apikey.v1.APIKeyService.CreateAPIKey:input_type -> apikey.v1.CreateAPIKeyRequest
-	4,  // 8: apikey.v1.APIKeyService.GetAPIKey:input_type -> apikey.v1.GetAPIKeyRequest
-	5,  // 9: apikey.v1.APIKeyService.ListAPIKeys:input_type -> apikey.v1.ListAPIKeysRequest
-	7,  // 10: apikey.v1.APIKeyService.DeleteAPIKey:input_type -> apikey.v1.DeleteAPIKeyRequest
+	4,  // 7: apikey.v1.APIKeyService.CreateAPIKey:input_type -> apikey.v1.CreateAPIKeyRequest
+	5,  // 8: apikey.v1.APIKeyService.GetAPIKey:input_type -> apikey.v1.GetAPIKeyRequest
+	6,  // 9: apikey.v1.APIKeyService.ListAPIKeys:input_type -> apikey.v1.ListAPIKeysRequest
+	8,  // 10: apikey.v1.APIKeyService.DeleteAPIKey:input_type -> apikey.v1.DeleteAPIKeyRequest
 	0,  // 11: apikey.v1.APIKeyService.CreateAPIKey:output_type -> apikey.v1.APIKey
 	0,  // 12: apikey.v1.APIKeyService.GetAPIKey:output_type -> apikey.v1.APIKey
-	6,  // 13: apikey.v1.APIKeyService.ListAPIKeys:output_type -> apikey.v1.ListAPIKeysResponse
-	8,  // 14: apikey.v1.APIKeyService.DeleteAPIKey:output_type -> apikey.v1.DeleteAPIKeyResponse
+	7,  // 13: apikey.v1.APIKeyService.ListAPIKeys:output_type -> apikey.v1.ListAPIKeysResponse
+	9,  // 14: apikey.v1.APIKeyService.DeleteAPIKey:output_type -> apikey.v1.DeleteAPIKeyResponse
 	11, // [11:15] is the sub-list for method output_type
 	7,  // [7:11] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
@@ -717,7 +793,7 @@ func file_apikey_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_apikey_proto_rawDesc), len(file_apikey_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

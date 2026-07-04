@@ -10,6 +10,41 @@ under [History](#history).
 
 ## History
 
+### v0.58.0 — Verify-only credential field mode (WS-033)
+
+A new field mode for API keys and tokens: **`credential`**, the gold-standard "hash, never encrypt"
+storage. Unlike `secret` (which keeps a reversible cipher so the value can be read back), a
+credential is **minted by the server, returned to the client once, and only ever verified** — there
+is no reversible copy at rest.
+
+- **`secret.CredentialMinter` (new).** `Mint()` produces a prefixed split token
+  `<prefix>_<public_id>_<secret>` (the client's copy) and a `StoredCredential` (public id + salt +
+  salted one-way hash + hash spec) to persist. `Parse` splits a presented token; `Verify` recomputes
+  the stored hash of `(salt‖secret)` and constant-time-compares. The default hash is **SHA-512/256**
+  over a 256-bit CSPRNG secret (fast, FIPS-approved, length-extension-safe); **SHA-384** and
+  **PBKDF2-SHA256** are selectable via a self-describing `HashSpec` for verify-time agility. Stdlib
+  crypto only (`sha512`, `pbkdf2`, `rand`, `subtle`) — FIPS-clean, no new dependencies, **no HMAC**.
+- **`credential: true` annotation (new).** `infoblox.field.v1.FieldOptions.credential` (with an
+  optional `credential_prefix`). Both storage generators (`protoc-gen-ent`, `protoc-gen-storage`)
+  emit `<field>_public_id` (UNIQUE), `<field>_salt`, `<field>_hash`, `<field>_hashspec` — and **no**
+  plaintext column, cipher, or `secret`-style `_hash` — for the field. `Create` mints via a
+  `*secret.CredentialMinter` and returns the token once; `Verify<Field>` parses a token, looks the
+  record up by `public_id` (a global unique, so verification needs no tenant), and verifies in
+  constant time. The field is omitted from every read response. Codegen fails loud when `credential`
+  and `secret` collide on one field, or when a credential field is not a string.
+- **`persistence.ErrNoMinter` (new).** A `Create` that would mint a credential with a nil
+  `*secret.CredentialMinter` returns this (wrapped with the field name) rather than storing an
+  unusable credential — the verify-only analogue of `ErrNoEncryptor`.
+
+The `credential` / `credential_prefix` options ship in the canonical
+`github.com/infobloxopen/apis/proto/infoblox/field` **v1.0.0-alpha.4**, which the SDK now consumes
+directly (no workspace override).
+
+Additive: `credential` is a new annotation, so existing services are unaffected until they adopt it.
+However, switching a field from `secret` to `credential` **changes its schema** (the plaintext/cipher
+and `secret` hash columns are replaced by the four credential columns), and old values cannot be
+migrated — the framework never held a safe copy — so re-issue those credentials.
+
 ### Security: secrets-handling hardening (SEC-005..008)
 
 A secrets-sweep white-box pass fixed four confirmed findings. SEC-006 and SEC-007

@@ -4,23 +4,84 @@ weight: 1
 ---
 
 This tutorial walks you through building an **API Key Manager** service: a multi-tenant store of
-customer API keys where raw key material is encrypted at rest, never returned after creation, and
-invisible across accounts.
+customer API keys that are never stored as plaintext, never returned after creation, and invisible
+across accounts.
 
-Follow this tutorial to learn how the proto annotation contract, storage codegen, the `Encryptor`
-seam, and the `seccheck` security suite fit together. Every snippet comes from the
+Follow this tutorial to learn how the proto annotation contract, storage codegen, and the `seccheck`
+security suite fit together. Every snippet comes from the
 [`testdata/apikey`](https://github.com/infobloxopen/devedge-sdk/tree/main/testdata/apikey)
 fixture that ships with the SDK.
 
 {{< callout type="info" >}}
-**What you learn:** the proto annotation contract, codegen for three shapes at once, the
-`Encryptor` seam, the full `seccheck` suite, and booting against Postgres with `de project up`.
+**What you learn:** the verify-only `credential` mode (the right way to store an API key), the
+retrievable `secret` mode for values you must read back, codegen for two storage shapes at once, the
+full `seccheck` suite, and booting against Postgres with `de project up`.
+{{< /callout >}}
+
+## Two ways to protect key material
+
+Before writing the proto, choose how the value is protected — by whether the service ever needs it
+*back*:
+
+- **`credential: true` — the right default for an API key.** The server **mints** the key, returns it
+  to the client **once**, and thereafter only *verifies* a presented token. Storage keeps a public
+  lookup id plus a salted one-way **hash** — there is **no reversible copy**, so nothing decryptable
+  can leak. This tutorial features it below.
+- **`secret: true` — for retrievable secrets.** For a value the service must read back and replay
+  (an upstream password, say), the field is hashed for lookup and **encrypted** (a reversible cipher)
+  for recovery. The rest of this tutorial (the `Encryptor`, Vault) covers that mode; use it only when
+  the plaintext genuinely has to come back.
+
+### A verify-only credential field
+
+Annotate the minted value `credential`. The `testdata/apikey` fixture's `ServiceToken` resource
+exercises this end to end on both storage backends:
+
+```proto {filename="apikey.proto"}
+message ServiceToken {
+  string id           = 1;
+  string label        = 2;
+  // The server mints this; the client never supplies it. credential_prefix sets
+  // the scanner-recognizable token prefix ("st_..."); it defaults to "ib".
+  string secret_value = 3 [(infoblox.field.v1.opts) = {credential: true, credential_prefix: "st"}];
+}
+```
+
+Codegen emits **four** columns — `secret_value_public_id` (UNIQUE), `secret_value_salt`,
+`secret_value_hash`, `secret_value_hashspec` — and **no** plaintext or cipher column. The constructor
+takes a `*secret.CredentialMinter`, `Create` mints and returns the token once, and a `Verify<Field>`
+helper verifies a presented token in constant time:
+
+```go
+minter := &secret.CredentialMinter{Prefix: "st"} // default: SHA-512/256 over a 256-bit secret
+repo := apikeyv1.NewServiceTokenEntRepository(client, minter)
+
+// Create MINTS the value and returns the full token exactly once.
+created, _ := repo.Create(ctx, &apikeyv1.ServiceToken{Id: "st-1", Label: "ci deploy"})
+token := created.SecretValue // "st_9f3k…_Xq7…" — hand to the client now; never retrievable again
+
+// Verify: parse → look up by public_id (tenant-independent) → constant-time compare.
+rec, ok, err := apikeyv1.VerifySecretValue(ctx, client, token) // ok=true; wrong/tampered → ok=false
+```
+
+`Get` and `List` never return `secret_value`, and a nil minter fails loud
+(`persistence.ErrNoMinter`) instead of storing an unusable credential. That is the whole credential
+lifecycle. The rest of the tutorial builds the fuller service — authz, tenancy, an HTTP surface, and
+the `seccheck` suite — using the **retrievable `secret`** mode for contrast.
+
+{{< callout type="info" >}}
+See [Secret fields](../../how-to/secure/secret-fields/#verify-only-credentials-credential-true) and
+the [secret reference](../../reference/secret/#verify-only-credentials) for the credential API,
+hash choices (SHA-512/256 default; SHA-384 and PBKDF2 available), and token format.
 {{< /callout >}}
 
 ## Step 1 — Define `apikey.proto`
 
-The `key_value` field holds the raw key material and is annotated `secret`. The `account_id` field
-makes the resource tenant-scoped. Each RPC declares its authz rule and HTTP mapping.
+For the fuller service below, `key_value` uses the **retrievable `secret`** mode (a value the service
+could read back) so the tutorial can also cover the `Encryptor` seam and Vault. For a pure API key,
+prefer the [verify-only `credential`](#a-verify-only-credential-field) mode shown above. The
+`account_id` field makes the resource tenant-scoped. Each RPC declares its authz rule and HTTP
+mapping.
 
 ```proto {filename="apikey.proto"}
 syntax = "proto3";
@@ -310,16 +371,19 @@ de project down
 
 ## What you built
 
-- **Contract-first service** — authz and secret semantics are declared in proto and enforced by the
-  framework.
-- **Secret at rest** — `key_value` is hashed and encrypted; it is never stored or returned as
-  plaintext after creation.
+- **Contract-first service** — authz and field-protection semantics are declared in proto and
+  enforced by the framework.
+- **The right protection per value** — a verify-only `credential` (minted, returned once, salted
+  hash, no reversible copy, `Verify<Field>`) for API keys; a retrievable `secret` (hash + encrypted
+  cipher) only for values that must be read back.
+- **Nothing in plaintext at rest** — neither mode stores or returns the raw value after creation.
 - **Two storage shapes from one proto** — GORM and ent, both tenant-isolated.
 - **Security suite** — asserts authz completeness, fail-closed denial, cross-account isolation,
   clean errors, and no-leak responses in CI.
 
 ## See also
 
-- [Secret fields](../../how-to/secure/secret-fields/) — production secret handling with Vault Transit.
+- [Secret fields](../../how-to/secure/secret-fields/) — verify-only credentials and retrievable
+  secrets (Vault Transit).
 - [Storage shapes](../../how-to/model-and-persist/storage-shapes/) — when to use ent's privacy layer.
 - [Server reference](../../reference/server.md) — every `Config` option.

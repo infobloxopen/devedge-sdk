@@ -1289,3 +1289,347 @@ func (r *TokenRepository) BatchDelete(ctx context.Context, keys []string) error 
 
 // compile-time check.
 var _ persistence.BatchRepository[*Token, string] = (*TokenRepository)(nil)
+
+// ServiceTokenModel is the GORM model for ServiceToken.
+type ServiceTokenModel struct {
+	ID                  string `gorm:"primaryKey;type:varchar(36)"`
+	Label               string `gorm:"column:label"`
+	SecretValuePublicID string `gorm:"column:secret_value_public_id;uniqueIndex"`
+	SecretValueSalt     string `gorm:"column:secret_value_salt"`
+	SecretValueHash     string `gorm:"column:secret_value_hash"`
+	SecretValueHashspec string `gorm:"column:secret_value_hashspec"`
+	ETag                string `gorm:"column:etag"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+func toModel_ServiceToken(p *ServiceToken) *ServiceTokenModel {
+	if p == nil {
+		return nil
+	}
+	m := &ServiceTokenModel{ID: p.Id}
+	m.Label = p.Label
+	return m
+}
+
+func fromModel_ServiceToken(m *ServiceTokenModel) *ServiceToken {
+	if m == nil {
+		return nil
+	}
+	p := &ServiceToken{Id: m.ID}
+	p.Label = m.Label
+	if FromModelServiceTokenCustom != nil {
+		FromModelServiceTokenCustom(m, p)
+	}
+	return p
+}
+
+// FromModelServiceTokenCustom, if set, runs at the end of fromModel_ServiceToken to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelServiceTokenCustom func(m *ServiceTokenModel, p *ServiceToken)
+
+// ToModelServiceTokenOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelServiceTokenOnCreate func(p *ServiceToken, m *ServiceTokenModel)
+
+// ToModelServiceTokenOnUpdate, if set, runs in Update just before the database write.
+var ToModelServiceTokenOnUpdate func(p *ServiceToken, m *ServiceTokenModel)
+
+// ServiceTokenColumns maps proto field names to DB column names for safe filter/order_by parsing.
+var ServiceTokenColumns = map[string]string{
+	"id":    "id",
+	"label": "label",
+}
+
+// ServiceTokenRepository is a GORM-backed persistence.Repository for *ServiceToken.
+type ServiceTokenRepository struct {
+	db     *gorm.DB
+	minter *secret.CredentialMinter
+	idGen  persistence.IDGenerator
+}
+
+// NewServiceTokenRepository creates a repository backed by db and minter.
+func NewServiceTokenRepository(db *gorm.DB, minter *secret.CredentialMinter, opts ...persistence.RepoOption) *ServiceTokenRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &ServiceTokenRepository{db: db, minter: minter, idGen: cfg.IDGenerator}
+}
+
+func (r *ServiceTokenRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
+func (r *ServiceTokenRepository) Get(ctx context.Context, key string) (*ServiceToken, error) {
+	var m ServiceTokenModel
+	if err := r.conn(ctx).Where("id = ?", key).First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get ServiceToken: %w", err)
+	}
+	return fromModel_ServiceToken(&m), nil
+}
+
+func (r *ServiceTokenRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*ServiceToken, string, error) {
+	var models []ServiceTokenModel
+	q := r.conn(ctx)
+	if opts.Filter != "" {
+		cond, err := filter.Parse(opts.Filter, ServiceTokenColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
+		}
+		sql, args := cond.SQL()
+		q = q.Where(sql, args...)
+	}
+	if opts.OrderBy != "" {
+		clauses, err := filter.ParseOrderBy(opts.OrderBy, ServiceTokenColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid order_by: %v", err)
+		}
+		for _, c := range clauses {
+			q = q.Order(c.GORMExpr())
+		}
+	}
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
+	}
+	offset := 0
+	if opts.PageToken != "" {
+		if dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {
+			offset, _ = strconv.Atoi(string(dec))
+		}
+	}
+	if err := q.Limit(pageSize).Offset(offset).Find(&models).Error; err != nil {
+		return nil, "", fmt.Errorf("list ServiceToken: %w", err)
+	}
+	out := make([]*ServiceToken, len(models))
+	for i := range models {
+		out[i] = fromModel_ServiceToken(&models[i])
+	}
+	nextToken := ""
+	if len(models) == pageSize {
+		nextToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(offset + pageSize)))
+	}
+	return out, nextToken, nil
+}
+
+func (r *ServiceTokenRepository) Create(ctx context.Context, entity *ServiceToken) (*ServiceToken, error) {
+	if entity.GetId() == "" {
+		entity.Id = r.idGen.NewID()
+	}
+	m := toModel_ServiceToken(entity)
+	if r.minter == nil {
+		return nil, fmt.Errorf("credential field %q set but no minter configured: %w", "secret_value", persistence.ErrNoMinter)
+	}
+	mSecretValue := *r.minter
+	mSecretValue.Prefix = "st"
+	tokSecretValue, credSecretValue, err := mSecretValue.Mint()
+	if err != nil {
+		return nil, fmt.Errorf("mint secret_value: %w", err)
+	}
+	m.SecretValuePublicID = credSecretValue.PublicID
+	m.SecretValueSalt = credSecretValue.Salt
+	m.SecretValueHash = credSecretValue.Hash
+	m.SecretValueHashspec = credSecretValue.Spec.Algo
+	if ToModelServiceTokenOnCreate != nil {
+		ToModelServiceTokenOnCreate(entity, m)
+	}
+	if err := r.conn(ctx).Create(m).Error; err != nil {
+		// Map driver constraint violations to clean sentinels so callers see
+		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
+		if ce := persistence.ConstraintError(err); ce != nil {
+			return nil, ce
+		}
+		return nil, fmt.Errorf("create ServiceToken: %w", err)
+	}
+	p := fromModel_ServiceToken(m)
+	p.SecretValue = tokSecretValue // WS-033: return the minted token ONCE
+	return p, nil
+}
+
+func (r *ServiceTokenRepository) Update(ctx context.Context, key string, entity *ServiceToken, fieldMask ...string) (*ServiceToken, error) {
+	m := toModel_ServiceToken(entity)
+	m.ID = key
+	if ToModelServiceTokenOnUpdate != nil {
+		ToModelServiceTokenOnUpdate(entity, m)
+	}
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
+	if len(fieldMask) > 0 {
+		dbCols := make([]string, 0, len(fieldMask))
+		for _, f := range fieldMask {
+			col, ok := ServiceTokenColumns[f]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
+			}
+			dbCols = append(dbCols, col)
+		}
+		// Select makes GORM write the named columns even when their value is
+		// the zero value (false, 0, ""); a bare struct Updates would skip them.
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update ServiceToken: %w", err)
+		}
+	} else {
+		// No field mask: full update of every writable column via a map, so
+		// zero values (false, 0, "") persist — a struct Updates skips zero fields
+		// and would silently drop "disable this" / "clear that" updates.
+		updates := map[string]interface{}{
+			"label": m.Label,
+		}
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update ServiceToken: %w", err)
+		}
+	}
+	return r.Get(ctx, key)
+}
+
+func (r *ServiceTokenRepository) Delete(ctx context.Context, key string) error {
+	res := r.conn(ctx).Where("id = ?", key).Unscoped().Delete(&ServiceTokenModel{})
+	if res.Error != nil {
+		return fmt.Errorf("delete ServiceToken: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return persistence.ErrNotFound
+	}
+	return nil
+}
+
+func (r *ServiceTokenRepository) Undelete(_ context.Context, _ string) (*ServiceToken, error) {
+	return nil, persistence.ErrNotFound
+}
+
+// VerifySecretValue verifies a presented secret_value credential token: it parses the token,
+// looks up the record by its public_id (a GLOBAL unique — no tenant needed), and
+// constant-time-compares the salted hash. Returns (record, true, nil) on a valid
+// token, (nil, false, nil) when the token is malformed / unknown / wrong, and a
+// non-nil error only on a storage or verify fault.
+func (r *ServiceTokenRepository) VerifySecretValue(ctx context.Context, token string) (*ServiceToken, bool, error) {
+	_, publicID, presented, perr := secret.Parse(token)
+	if perr != nil {
+		return nil, false, nil
+	}
+	var m ServiceTokenModel
+	if err := r.conn(ctx).Where("secret_value_public_id = ?", publicID).First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("verify secret_value: %w", err)
+	}
+	ok, verr := secret.Verify(presented, secret.StoredCredential{PublicID: m.SecretValuePublicID, Salt: m.SecretValueSalt, Hash: m.SecretValueHash, Spec: secret.HashSpec{Algo: m.SecretValueHashspec}})
+	if verr != nil {
+		return nil, false, verr
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	return fromModel_ServiceToken(&m), true, nil
+}
+
+func (r *ServiceTokenRepository) BatchGet(ctx context.Context, keys []string) ([]*ServiceToken, error) {
+	if len(keys) == 0 {
+		return []*ServiceToken{}, nil
+	}
+	var models []ServiceTokenModel
+	q := r.conn(ctx).Where("id IN ?", keys)
+	if err := q.Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("batch get ServiceToken: %w", err)
+	}
+	byID := make(map[string]*ServiceToken, len(models))
+	for i := range models {
+		byID[models[i].ID] = fromModel_ServiceToken(&models[i])
+	}
+	out := make([]*ServiceToken, 0, len(keys))
+	for _, k := range keys {
+		p, ok := byID[k]
+		if !ok {
+			return nil, persistence.ErrNotFound
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *ServiceTokenRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*ServiceToken, string]) ([]*ServiceToken, error) {
+	if len(items) == 0 {
+		return []*ServiceToken{}, nil
+	}
+	out := make([]*ServiceToken, 0, len(items))
+	run := func(txRepo *ServiceTokenRepository) error {
+		for _, it := range items {
+			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
+			if err != nil {
+				return err
+			}
+			out = append(out, updated)
+		}
+		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&ServiceTokenRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&ServiceTokenRepository{db: tx})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *ServiceTokenRepository) BatchDelete(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	uniq := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
+		res := q.Unscoped().Delete(&ServiceTokenModel{})
+		if res.Error != nil {
+			return fmt.Errorf("batch delete ServiceToken: %w", res.Error)
+		}
+		if res.RowsAffected != int64(len(uniq)) {
+			return persistence.ErrNotFound
+		}
+		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
+	})
+}
+
+// compile-time check.
+var _ persistence.BatchRepository[*ServiceToken, string] = (*ServiceTokenRepository)(nil)

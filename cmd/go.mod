@@ -18,7 +18,7 @@ go 1.25.5
 require (
 	github.com/getkin/kin-openapi v0.140.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
 	github.com/infobloxopen/devedge-sdk v0.57.0
 	github.com/spf13/cobra v1.10.2

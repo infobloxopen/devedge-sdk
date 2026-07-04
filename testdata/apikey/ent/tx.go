@@ -14,6 +14,8 @@ type Tx struct {
 	config
 	// APIKey is the client for interacting with the APIKey builders.
 	APIKey *APIKeyClient
+	// ServiceToken is the client for interacting with the ServiceToken builders.
+	ServiceToken *ServiceTokenClient
 	// Token is the client for interacting with the Token builders.
 	Token *TokenClient
 
@@ -148,6 +150,7 @@ func (tx *Tx) Client() *Client {
 
 func (tx *Tx) init() {
 	tx.APIKey = NewAPIKeyClient(tx.config)
+	tx.ServiceToken = NewServiceTokenClient(tx.config)
 	tx.Token = NewTokenClient(tx.config)
 }
 

@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/apikey"
+	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/servicetoken"
 	"github.com/infobloxopen/devedge-sdk/testdata/apikey/ent/token"
 )
 
@@ -74,8 +75,9 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			apikey.Table: apikey.ValidColumn,
-			token.Table:  token.ValidColumn,
+			apikey.Table:       apikey.ValidColumn,
+			servicetoken.Table: servicetoken.ValidColumn,
+			token.Table:        token.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

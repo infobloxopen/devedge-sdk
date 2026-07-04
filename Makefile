@@ -15,7 +15,10 @@ generate:
 	# Engine-neutral storage options (infoblox.storage.v1.model) are CANONICAL
 	# (github.com/infobloxopen/apis/proto/infoblox/storage/v1) — the Go binding comes
 	# from that module (see go.mod); proto/infoblox/storage/v1/storage.proto is only a
-	# buf import-resolution mirror, never generated here.
+	# buf import-resolution mirror, never generated here. The same applies to
+	# infoblox.field.v1 (github.com/infobloxopen/apis/proto/infoblox/field): its Go
+	# binding comes from the published apis module (see go.mod), and
+	# proto/infoblox/field/v1/field.proto is only a buf import-resolution mirror.
 	go build -o bin/protoc-gen-devedge-authz ./cmd/protoc-gen-devedge-authz
 	go build -o bin/protoc-gen-svc           ./cmd/protoc-gen-svc
 	go build -o bin/protoc-gen-storage       ./cmd/protoc-gen-storage
