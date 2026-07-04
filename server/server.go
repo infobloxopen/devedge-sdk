@@ -94,6 +94,19 @@ type Config struct {
 	// as Interceptors is — e.g. an audit/identity HTTP middleware shipped in
 	// devedge-sdk-internal.
 	HTTPMiddleware []func(http.Handler) http.Handler
+	// HTTPHandlers mount custom net/http handlers on the HTTP server at path
+	// patterns, for endpoints that are NOT REST-gateway routes — an OIDC
+	// provider's authorization/token/JWKS/discovery endpoints, webhooks, a login
+	// UI, or static assets. Each handler is mounted on the outer mux by its
+	// net/http ServeMux Pattern, so a more specific pattern (e.g. "/oauth/") wins
+	// over the gateway catch-all ("/"); the /healthz and /readyz probes always take
+	// precedence and cannot be shadowed. A handler MAY claim the "/" pattern to
+	// replace the gateway catch-all entirely (e.g. an OP library that serves all
+	// its own subpaths). Handlers run inside the SDK's HTTP tracing span but do NOT
+	// traverse the gRPC interceptor chain — they are not gateway routes, so
+	// authentication/authorization for them is the handler's own responsibility.
+	// Requires HTTPAddr to be set.
+	HTTPHandlers []HTTPHandler
 	// DeduplicationStore is the idempotency store for DeduplicateUnary. Defaults to MemoryDeduplicationStore (10-minute TTL) when nil.
 	DeduplicationStore middleware.DeduplicationStore
 	// LROStore is the operation store for long-running operations (AIP-151).
@@ -141,6 +154,22 @@ type ResilienceConfig struct {
 	// afex/hystrix-go, or any resilience.CircuitBreaker implementation.
 	CircuitBreaker resilience.CircuitBreaker
 }
+
+// HTTPHandler mounts a custom net/http handler on the server's HTTP endpoint at
+// a path pattern, alongside the REST gateway. It is the seam for serving HTTP
+// endpoints that are not gRPC-gateway routes (see Config.HTTPHandlers).
+type HTTPHandler struct {
+	// Pattern is a net/http ServeMux pattern (e.g. "/oauth/", "/keys",
+	// "/.well-known/openid-configuration", or "/" to replace the gateway
+	// catch-all). Must be non-empty and must not be a reserved probe path.
+	Pattern string
+	// Handler serves requests matching Pattern. Must be non-nil.
+	Handler http.Handler
+}
+
+// reservedHTTPPatterns are the probe paths the server owns; a custom
+// HTTPHandler may not claim them.
+var reservedHTTPPatterns = map[string]struct{}{"/healthz": {}, "/readyz": {}}
 
 // Server is the assembled gRPC server (plus optional HTTP gateway).
 type Server struct {
@@ -193,6 +222,27 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.GRPCAddr == "" {
 		return nil, fmt.Errorf("server: GRPCAddr is required")
+	}
+	if len(cfg.HTTPHandlers) > 0 {
+		if cfg.HTTPAddr == "" {
+			return nil, fmt.Errorf("server: HTTPHandlers requires HTTPAddr to be set")
+		}
+		seen := make(map[string]struct{}, len(cfg.HTTPHandlers))
+		for i, h := range cfg.HTTPHandlers {
+			if h.Pattern == "" {
+				return nil, fmt.Errorf("server: HTTPHandlers[%d]: Pattern is required", i)
+			}
+			if h.Handler == nil {
+				return nil, fmt.Errorf("server: HTTPHandlers[%d] (%q): Handler is nil", i, h.Pattern)
+			}
+			if _, reserved := reservedHTTPPatterns[h.Pattern]; reserved {
+				return nil, fmt.Errorf("server: HTTPHandlers[%d]: pattern %q is reserved for probes", i, h.Pattern)
+			}
+			if _, dup := seen[h.Pattern]; dup {
+				return nil, fmt.Errorf("server: HTTPHandlers: duplicate pattern %q", h.Pattern)
+			}
+			seen[h.Pattern] = struct{}{}
+		}
 	}
 	if cfg.Authorizer == nil {
 		// Default to a default-deny dev authorizer (no grants).
@@ -504,7 +554,22 @@ func (s *Server) Serve(ctx context.Context) error {
 				gw = mw(gw)
 			}
 		}
-		outerMux.Handle("/", otelhttp.NewHandler(gw, "gateway"))
+		// Mount custom HTTP handlers (OIDC endpoints, webhooks, static UI, ...)
+		// before the gateway catch-all. Each is traced with its own span; net/http
+		// ServeMux precedence (most-specific pattern wins) keeps the probes and any
+		// specific prefixes ahead of "/". A handler may claim "/" to replace the
+		// gateway entirely — in that case we do NOT also mount the gateway at "/"
+		// (ServeMux would panic on the duplicate pattern).
+		gatewayRootClaimed := false
+		for _, h := range s.cfg.HTTPHandlers {
+			outerMux.Handle(h.Pattern, otelhttp.NewHandler(h.Handler, "http:"+h.Pattern))
+			if h.Pattern == "/" {
+				gatewayRootClaimed = true
+			}
+		}
+		if !gatewayRootClaimed {
+			outerMux.Handle("/", otelhttp.NewHandler(gw, "gateway"))
+		}
 
 		httpSrv = &http.Server{Handler: outerMux}
 		go func() {

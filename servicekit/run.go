@@ -33,6 +33,13 @@ type HostConfig struct {
 	// the gateway.
 	HTTPAddr string
 
+	// HTTPHandlers mount custom net/http handlers on the shared HTTP server at
+	// path patterns, for endpoints that are NOT gRPC-gateway routes — an OIDC
+	// provider's authorization/token/JWKS/discovery endpoints, webhooks, a login
+	// UI, static assets. They compose with the module gateways on the one HTTP
+	// server (see server.Config.HTTPHandlers). Requires HTTPAddr to be set.
+	HTTPHandlers []server.HTTPHandler
+
 	// Authorizer is the shared decision point handed to the one server. Defaults
 	// to a default-deny dev authorizer (server.New's default) when nil.
 	Authorizer authz.Authorizer
@@ -210,6 +217,7 @@ func Run(hc HostConfig) error {
 	srv, err := server.New(server.Config{
 		GRPCAddr:      grpcAddr,
 		HTTPAddr:      hc.HTTPAddr,
+		HTTPHandlers:  hc.HTTPHandlers,
 		Authorizer:    hc.Authorizer,
 		PrincipalFunc: hc.PrincipalFunc,
 		Logger:        logger,
