@@ -96,6 +96,29 @@ first paragraph of a section should get its headline.
 - **Link related concepts** with a relative Hugo link (`../aggregates/`), and keep a **See also**
   section at the foot of concept pages.
 
+## Configuration key naming: camelCase for manifests, snake_case elsewhere
+
+devedge uses two config-key conventions, chosen by **document type**, not author preference. When
+you add a struct tag or write a config example in a doc, match the convention of the surface it
+belongs to:
+
+- **camelCase** in Kubernetes-style manifest documents — anything shaped with
+  `apiVersion`/`kind`/`metadata`/`spec` (`devedge.yaml`, `kind:Shell`). These mirror Kubernetes,
+  where `apiVersion` and `kind` are fixed keys; the rest of the document follows suit —
+  `stripPrefix`, `backendTLS`, `shellUpstream`, and a route tile's `displayName`/`launchURL`/`iconURL`.
+- **snake_case** everywhere else — the daemon's JSON API (`/v1/routes`: `strip_prefix`,
+  `backend_tls`) and the flat, hand-edited data files (`idp-clients.yaml`: `client_id`,
+  `redirect_uris`, `launch_url`; `grants.yaml`: `tenant`, `subjects`, `verbs`, `resource`). This
+  matches the Go `json` struct tags and the OAuth2/OIDC spec, where `client_id` and `redirect_uris`
+  are snake_case by definition.
+
+A struct that serializes to both surfaces carries both tags — for example
+`json:"display_name,omitempty" yaml:"displayName,omitempty"`. As a result the same concept can
+appear in two cases in two files: a launchpad tile is `displayName` in `devedge.yaml` but `name` /
+`launch_url` in `idp-clients.yaml`. That is intended — each file stays internally consistent with
+its own convention, and the tool that bridges them (`de idp clients sync`) translates. Do not
+"fix" one file to match the other; pick the case from the file type.
+
 ## Plain language
 
 - **No insider jargon without a definition.** If a phrase would only land for someone who already
