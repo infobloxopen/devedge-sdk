@@ -67,12 +67,47 @@ rec, ok, err := apikeyv1.VerifySecretValue(ctx, client, presentedToken)
 // ok == false for a wrong, tampered, or unknown token; err != nil only on a real fault.
 ```
 
+The call shape differs by backend: on **ent** `Verify<Field>` is a package-level function taking the
+ent client (above); on **gorm** it is a method on the concrete repository, which already holds the
+connection — `rec, ok, err := repo.VerifySecretValue(ctx, presentedToken)`.
+
 `Verify<Field>` looks the record up by `public_id`, which is a **global** unique — so a gateway can
 resolve a token without knowing the caller's tenant. `Get` and `List` never return the credential.
 
 The default hash is a fast FIPS hash (`SHA-512/256`), not a slow KDF: the minted secret already
 carries ≥256 bits of entropy, so a password-style KDF would only add per-verify CPU cost. See the
 [secret reference](../../../reference/secret/#verify-only-credentials) for `SHA-384` and PBKDF2.
+
+> **Retrofit note.** Adding `credential` (or `secret`) to an existing resource changes the generated
+> repository constructor — it gains a required `*secret.CredentialMinter` (or `secret.Encryptor`)
+> argument. Regenerate, then update every hand-written construction call site the compiler flags
+> (`cmd/<svc>/main.go`, and `module/compose.go` if you compose modules).
+
+### Serving verification over an RPC
+
+`Verify<Field>` is generated on the **concrete** repository (gorm) or as a package function over the
+ent client — never on the generic `persistence.Repository[T, K]` interface. So to verify a presented
+token from a [custom method](../../model-and-persist/custom-methods/), hold the concrete repository in
+your handler, not the interface:
+
+```go
+type deviceHandler struct {
+    *enrolldv1.DeviceServiceCRUDHandler // embeds the generated CRUD methods
+    repo *enrolldv1.DeviceRepository    // CONCRETE type — exposes VerifyEnrollmentSecret
+}
+
+func (h *deviceHandler) CheckInDevice(ctx context.Context, req *enrolldv1.CheckInDeviceRequest) (*enrolldv1.CheckInDeviceResponse, error) {
+    dev, ok, err := h.repo.VerifyEnrollmentSecret(ctx, req.GetToken())
+    if err != nil {
+        return nil, err
+    }
+    return &enrolldv1.CheckInDeviceResponse{Ok: ok}, nil
+}
+```
+
+Construct it through the module's `Handler` seam — `Module(repo *enrolldv1.DeviceRepository, …)` sets
+`Handler: &deviceHandler{enrolldv1.NewDeviceServiceHandler(repo), repo}`. A check-in RPC that any
+device may call to present its token typically carries `(infoblox.authz.v1.rule) = {public: true}`.
 
 ## Retrievable secrets (`secret: true`)
 
