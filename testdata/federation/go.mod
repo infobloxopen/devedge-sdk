@@ -6,7 +6,7 @@ require (
 	entgo.io/ent v0.14.6
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
-	github.com/infobloxopen/devedge-sdk v0.54.0
+	github.com/infobloxopen/devedge-sdk v0.55.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
