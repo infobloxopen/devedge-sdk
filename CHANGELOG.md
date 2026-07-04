@@ -10,6 +10,46 @@ under [History](#history).
 
 ## History
 
+### Security: secrets-handling hardening (SEC-005..008)
+
+A secrets-sweep white-box pass fixed four confirmed findings. SEC-006 and SEC-007
+change generated-code behavior and take effect **on regeneration** (`make generate`
+/ `de generate`). SEC-008 is a **breaking** change for the dev encryptor when given
+an over-length key.
+
+- **SEC-005 (DSN password leak in migrate errors).** `persistence/migrate` no longer
+  formats a raw DSN into an error string. A new `redactDSN` helper blanks the URL
+  userinfo password (and strips the `password=`/`pgpassword=` token from a libpq
+  keyword/value DSN); the `url.Parse` branches wrap the redacted DSN and the parse
+  reason (never the `*url.Error`, which embeds the raw URL), and the no-scheme
+  branches emit a scheme-only message. A production DB password no longer reaches
+  stderr / CI logs. Non-breaking (error-text only).
+- **SEC-006 (silent secret drop / cross-backend panic on nil encryptor).**
+  **Behavior change on regen.** The generated ent singular repository no longer
+  *silently drops* a non-empty secret value when constructed with a nil
+  `secret.Encryptor`; the ent-batch and GORM repositories no longer *panic*. All
+  paths now fail loud with the new sentinel `persistence.ErrNoEncryptor` (wrapped
+  with the field name). A service currently relying on the buggy nil-encryptor state
+  will now get a hard error at Create/Update — wire a real encryptor.
+- **SEC-007 (INPUT_ONLY field returned in responses).** **Behavior change on regen.**
+  The ent and GORM generators now OMIT effective-`INPUT_ONLY` (write-only) fields
+  from the generated response projection (`fromEnt<R>` / `fromModel_<R>`), exactly as
+  they already omit `secret:true` fields — reusing `internal/aip.ResolveFieldBehavior`.
+  The field is still persisted (write-only means "not echoed", not "not stored"), so
+  the runtime now matches the emitted OpenAPI `writeOnly` contract. A consumer that
+  (against the field's own contract) read back an `INPUT_ONLY` value will no longer
+  receive it. The scaffold's proto comment was corrected to describe this mechanism.
+- **SEC-008 (dev encryptor key handling + Vault error body).** **BREAKING (dev
+  encryptor).** `secret.NewDev` now requires an **exactly 32-byte** key and panics on
+  any other length; an over-length key is rejected rather than silently truncated to
+  its first 32 bytes (which made two keys sharing a 32-byte prefix interchangeable and
+  a partial rotation a no-op). This is breaking only for a caller that passed a key
+  longer than 32 bytes — trim it to the intended 32-byte key. `secret/vault.go` no
+  longer embeds the raw Vault HTTP response body in the returned error (status code
+  only). Known limitation (out of scope): the dev encryptor's AES-GCM ciphertext still
+  carries no key-version tag, so the dev encryptor has no safe key rotation — use the
+  Vault Transit backend (which supports `Rewrap`) where rotation matters.
+
 ### Security: principal-authoritative, fail-closed tenant fence (SEC-001..004)
 
 **BREAKING (tenant fence).** The multi-tenant storage fence now anchors on the

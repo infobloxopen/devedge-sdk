@@ -171,6 +171,7 @@ type entFieldInfo struct {
 	IsEnum     bool   // enum field — not deterministically wirable (F027 fail-closed)
 	IsSecret   bool   // secret field — emitted as _hash + _cipher, never plaintext
 	OutputOnly bool   // AIP-203 OUTPUT_ONLY — never written by Create/Update/batch
+	InputOnly  bool   // AIP-203 effective INPUT_ONLY — write-only, omitted from responses
 	// Storage constraints (from field.v1.FieldOptions).
 	NotNull bool
 	Unique  bool
@@ -998,6 +999,9 @@ func renderEntRepository(msg entMessageInfo, owner entMessageInfo, pkgName, goIm
 		getName := entGoName(f.SnakeName)
 		setName := entSetterGoName(f.SnakeName)
 		fmt.Fprintf(&b, "\t\tif %sInMask(it.FieldMask, %q) && it.Entity.Get%s() != \"\" {\n", maskLower, f.SnakeName, getName)
+		// Fail LOUD, not with a nil-pointer panic, when a secret value is set but no
+		// encryptor was wired (SEC-006). Consistent with the ent singular + GORM paths.
+		fmt.Fprintf(&b, "\t\t\tif r.enc == nil {\n\t\t\t\trollback()\n\t\t\t\treturn nil, fmt.Errorf(\"secret field %%q set but no encryptor configured: %%w\", %q, persistence.ErrNoEncryptor)\n\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\th, herr := r.enc.Hash(ctx, it.Entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\tif herr != nil {\n\t\t\t\trollback()\n\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\tc, cerr := r.enc.Encrypt(ctx, it.Entity.Get%s())\n", getName)
@@ -1351,7 +1355,10 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	for _, f := range secrets {
 		getName := entGoName(f.SnakeName)
 		setName := entSetterGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\t\tif enc != nil && entity.Get%s() != \"\" {\n", getName)
+		// Fail LOUD, not silent: a non-empty secret value with a nil encryptor must
+		// error rather than be discarded (SEC-006). Mirrors the ent batch + GORM paths.
+		fmt.Fprintf(&b, "\t\t\tif entity.Get%s() != \"\" {\n", getName)
+		fmt.Fprintf(&b, "\t\t\t\tif enc == nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"secret field %%q set but no encryptor configured: %%w\", %q, persistence.ErrNoEncryptor)\n\t\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\t\th, herr := enc.Hash(ctx, entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\t\tif herr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\t\tc, cerr := enc.Encrypt(ctx, entity.Get%s())\n", getName)
@@ -1448,7 +1455,10 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	for _, f := range secrets {
 		getName := entGoName(f.SnakeName)
 		setName := entSetterGoName(f.SnakeName)
-		fmt.Fprintf(&b, "\t\t\tif %sInMask(fieldMask, %q) && enc != nil && entity.Get%s() != \"\" {\n", maskHelper, f.SnakeName, getName)
+		// Fail LOUD, not silent: a masked, non-empty secret value with a nil
+		// encryptor must error rather than be discarded (SEC-006).
+		fmt.Fprintf(&b, "\t\t\tif %sInMask(fieldMask, %q) && entity.Get%s() != \"\" {\n", maskHelper, f.SnakeName, getName)
+		fmt.Fprintf(&b, "\t\t\t\tif enc == nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"secret field %%q set but no encryptor configured: %%w\", %q, persistence.ErrNoEncryptor)\n\t\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\t\th, herr := enc.Hash(ctx, entity.Get%s())\n", getName)
 		fmt.Fprintf(&b, "\t\t\t\tif herr != nil {\n\t\t\t\t\treturn nil, fmt.Errorf(\"hash %s: %%w\", herr)\n\t\t\t\t}\n", f.SnakeName)
 		fmt.Fprintf(&b, "\t\t\t\tc, cerr := enc.Encrypt(ctx, entity.Get%s())\n", getName)
@@ -1572,6 +1582,11 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		switch {
 		case f.IsSecret:
 			fmt.Fprintf(&b, "\t\t// %s omitted — secret, never returned\n", f.SnakeName)
+		case f.InputOnly:
+			// INPUT_ONLY (write-only): accepted on write, never returned — omitted
+			// from the response so the runtime matches the OpenAPI writeOnly contract
+			// (SEC-007). The column is still persisted (toEnt writes it).
+			fmt.Fprintf(&b, "\t\t// %s omitted — INPUT_ONLY (write-only), never returned\n", f.SnakeName)
 		case f.IsRepeated || f.IsMessage:
 			// Relationships / repeated are ent edges, not scalar columns.
 			continue

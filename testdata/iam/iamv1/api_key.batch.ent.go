@@ -112,6 +112,10 @@ func (r *ApiKeyEntRepository) BatchUpdate(ctx context.Context, items []persisten
 			u = u.SetKeyPrefix(it.Entity.GetKeyPrefix())
 		}
 		if apikeyInMask(it.FieldMask, "key_value") && it.Entity.GetKeyValue() != "" {
+			if r.enc == nil {
+				rollback()
+				return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "key_value", persistence.ErrNoEncryptor)
+			}
 			h, herr := r.enc.Hash(ctx, it.Entity.GetKeyValue())
 			if herr != nil {
 				rollback()

@@ -189,8 +189,11 @@ func TestRenderEntRepoAdapter_updateHonorsFieldMask(t *testing.T) {
 		`u = u.SetDiscountBps(entity.GetDiscountBps())`,
 		// Foreign key: mask AND non-empty value.
 		`if couponInMask(fieldMask, "fleet_id") && entity.GetFleetId() != "" {`,
-		// Secret: mask AND enc != nil AND non-empty value.
-		`if couponInMask(fieldMask, "signing_key") && enc != nil && entity.GetSigningKey() != "" {`,
+		// Secret: mask AND non-empty value; the nil-encryptor check is now INSIDE the
+		// block so a set secret with no encryptor fails loud (SEC-006) rather than
+		// being silently skipped by an `enc != nil` gate.
+		`if couponInMask(fieldMask, "signing_key") && entity.GetSigningKey() != "" {`,
+		`return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "signing_key", persistence.ErrNoEncryptor)`,
 	}
 	for _, w := range wantGates {
 		if !strings.Contains(upd, w) {
@@ -549,5 +552,47 @@ func TestRenderEntFilterers_surfaceSkipped(t *testing.T) {
 	}
 	if out := renderEntFilterers(surface, "github.com/example/coupond/couponv1"); out != "" {
 		t.Errorf("expected no filterers for a surface, got:\n%s", out)
+	}
+}
+
+// TestRenderEntRepoAdapter_SEC006_SEC007 covers two secrets-sweep fixes on the ent
+// singular path: (SEC-006) a non-empty secret with a nil encryptor fails loud via
+// persistence.ErrNoEncryptor instead of silently dropping the value, and (SEC-007)
+// a pure INPUT_ONLY (write-only, non-secret) field is written but omitted from the
+// fromEnt response projection, exactly as a secret field is.
+func TestRenderEntRepoAdapter_SEC006_SEC007(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Credential",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "display_name", SnakeName: "display_name", EntType: "String"},
+			{Name: "api_key", SnakeName: "api_key", EntType: "String", IsSecret: true},
+			{Name: "setup_token", SnakeName: "setup_token", EntType: "String", InputOnly: true},
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "credv1", "github.com/example/credd/credv1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n%s", err, out)
+	}
+
+	// SEC-006: fail-loud nil-encryptor guard (Create + Update) instead of silent drop.
+	if !strings.Contains(out, "if enc == nil") {
+		t.Errorf("expected a nil-encryptor guard; not found in:\n%s", out)
+	}
+	if !strings.Contains(out, "persistence.ErrNoEncryptor") {
+		t.Errorf("expected persistence.ErrNoEncryptor; not found")
+	}
+
+	// SEC-007: the INPUT_ONLY field is written by Create (plain writable) ...
+	if !strings.Contains(out, "SetSetupToken(entity.GetSetupToken())") {
+		t.Errorf("expected the INPUT_ONLY field to be persisted on Create; not found")
+	}
+	// ... but NEVER copied into the fromEnt response projection.
+	if strings.Contains(out, "SetupToken: e.SetupToken") {
+		t.Errorf("SEC-007 regression: fromEnt returns the INPUT_ONLY field:\n%s", out)
+	}
+	// A plain field is still returned.
+	if !strings.Contains(out, "DisplayName: e.DisplayName") {
+		t.Errorf("expected a plain field to still be returned; not found")
 	}
 }

@@ -54,7 +54,10 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 				SetKeyPrefix(entity.GetKeyPrefix()).
 				SetLabel(entity.GetLabel()).
 				SetTags(entity.GetTags())
-			if enc != nil && entity.GetKeyValue() != "" {
+			if entity.GetKeyValue() != "" {
+				if enc == nil {
+					return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "key_value", persistence.ErrNoEncryptor)
+				}
 				h, herr := enc.Hash(ctx, entity.GetKeyValue())
 				if herr != nil {
 					return nil, fmt.Errorf("hash key_value: %w", herr)
@@ -152,7 +155,10 @@ func NewAPIKeyEntRepository(client *ent.Client, enc secret.Encryptor, opts ...pe
 				}
 				u = u.Where(entapikey.AccountID(tenantID))
 			}
-			if apikeyInMask(fieldMask, "key_value") && enc != nil && entity.GetKeyValue() != "" {
+			if apikeyInMask(fieldMask, "key_value") && entity.GetKeyValue() != "" {
+				if enc == nil {
+					return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "key_value", persistence.ErrNoEncryptor)
+				}
 				h, herr := enc.Hash(ctx, entity.GetKeyValue())
 				if herr != nil {
 					return nil, fmt.Errorf("hash key_value: %w", herr)

@@ -213,6 +213,9 @@ func (r *WidgetRepository) Create(ctx context.Context, entity *Widget) (*Widget,
 	}
 	m := toModel_Widget(entity)
 	if entity.SecretToken != "" {
+		if r.enc == nil {
+			return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "secret_token", persistence.ErrNoEncryptor)
+		}
 		h, err := r.enc.Hash(ctx, entity.SecretToken)
 		if err != nil {
 			return nil, fmt.Errorf("hash secret_token: %w", err)
@@ -244,6 +247,9 @@ func (r *WidgetRepository) Update(ctx context.Context, key string, entity *Widge
 	m.ID = key
 	m.ETag = etag.New() // AIP-154: bump the ETag on every update
 	if entity.SecretToken != "" {
+		if r.enc == nil {
+			return nil, fmt.Errorf("secret field %q set but no encryptor configured: %w", "secret_token", persistence.ErrNoEncryptor)
+		}
 		h, err := r.enc.Hash(ctx, entity.SecretToken)
 		if err != nil {
 			return nil, fmt.Errorf("hash secret_token: %w", err)

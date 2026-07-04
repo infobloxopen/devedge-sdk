@@ -119,6 +119,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			var (
 				isSecret     bool
 				isOutputOnly bool
+				isInputOnly  bool
 				notNull      bool
 				unique       bool
 				uniqueWith   []string
@@ -176,6 +177,14 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					gen.Error(err)
 				}
 				isOutputOnly = oo
+				// SEC-007: an effective INPUT_ONLY field (explicit field_behavior or
+				// derived from secret) is write-only — omitted from the response
+				// projection, matching the OpenAPI writeOnly stamp.
+				if bs, berr := aip.ResolveFieldBehavior(field.Desc); berr != nil {
+					gen.Error(berr)
+				} else {
+					isInputOnly = aip.HasBehavior(bs, aip.InputOnly)
+				}
 			}
 			// AIP-148: detect soft-delete and TTL markers. These are handled specially
 			// by the renderer and must NOT be added to msg.Fields as ordinary columns.
@@ -229,6 +238,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				RelatedGoType: relatedGoType,
 				IsSecret:      isSecret,
 				IsOutputOnly:  isOutputOnly,
+				IsInputOnly:   isInputOnly,
 				NotNull:       notNull,
 				Unique:        unique,
 				UniqueWith:    uniqueWith,

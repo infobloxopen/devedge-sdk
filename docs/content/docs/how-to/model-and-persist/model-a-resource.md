@@ -302,7 +302,7 @@ key, err := repo.LookupByKeyValueHash(ctx, h)
 Both implementations satisfy one interface (`Encrypt` / `Decrypt` / `Hash`):
 
 - **Dev** — `secret.NewDev(key)` uses AES-256-GCM + HMAC-SHA256, all in-process (the key must be
-  ≥ 32 bytes). Use this for local development and tests.
+  exactly 32 bytes — `NewDev` panics otherwise). Use this for local development and tests.
 - **Production** — `secret.NewVaultTransit(addr, token, keyName)` calls HashiCorp Vault's Transit
   engine over plain HTTP (no Vault SDK dependency). See [Secret Fields → Vault Transit backend](../../secure/secret-fields/#vault-transit-backend-production).
 

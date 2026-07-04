@@ -20,10 +20,14 @@ type Encryptor interface {
 }
 
 // NewDev returns a dev-suitable Encryptor using AES-256-GCM (encrypt/decrypt)
-// and HMAC-SHA256 (hash). Panics if len(key) < 32.
+// and HMAC-SHA256 (hash). The key must be EXACTLY 32 bytes (a 256-bit key);
+// NewDev panics otherwise. An over-length key is rejected rather than silently
+// truncated to its first 32 bytes — silently discarding the tail made two keys
+// sharing a 32-byte prefix interchangeable and made a partial rotation a no-op
+// (SEC-008).
 func NewDev(key []byte) Encryptor {
-	if len(key) < 32 {
-		panic(fmt.Sprintf("secret.NewDev: key must be at least 32 bytes, got %d", len(key)))
+	if len(key) != 32 {
+		panic(fmt.Sprintf("secret.NewDev: key must be exactly 32 bytes (AES-256), got %d", len(key)))
 	}
 	k := make([]byte, 32)
 	copy(k, key)

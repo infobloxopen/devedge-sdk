@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -106,8 +105,9 @@ func (v *VaultTransitEncryptor) post(ctx context.Context, path string, body, res
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("vault: status %d: %s", resp.StatusCode, string(body))
+		// Do NOT embed the raw Vault response body in the error: it can surface to a
+		// client via the errormapper default branch. Status only (SEC-008).
+		return fmt.Errorf("vault: status %d", resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(result)
 }

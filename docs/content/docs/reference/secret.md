@@ -42,16 +42,17 @@ func NewDev(key []byte) Encryptor
 ```
 
 Returns an `Encryptor` that uses AES-256-GCM for encrypt/decrypt and HMAC-SHA256 for hash. The key
-is held in process memory and is copied to exactly 32 bytes: if you pass a longer key, only the
-first 32 bytes are used.
+is held in process memory and must be **exactly 32 bytes** (a 256-bit key).
 
 {{< callout type="warning" >}}
 **Do not use `NewDev` in production.** Use `NewVaultTransit` instead. `NewDev` panics if
-`len(key) < 32`.
+`len(key) != 32`: both a short key and an over-length key are rejected. An over-length key is
+**not** truncated to its first 32 bytes — silently discarding the tail would make two keys that
+share a 32-byte prefix interchangeable and make a partial rotation a no-op.
 {{< /callout >}}
 
 ```go
-enc := secret.NewDev(devKey) // devKey must be >= 32 bytes
+enc := secret.NewDev(devKey) // devKey must be exactly 32 bytes
 ```
 
 **How it works:** `Encrypt` generates a fresh random GCM nonce on each call and prepends it to the
