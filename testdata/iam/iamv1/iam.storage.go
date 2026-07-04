@@ -135,6 +135,9 @@ func (r *AccountRepository) List(ctx context.Context, opts persistence.ListOptio
 	if pageSize <= 0 {
 		pageSize = 50
 	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
+	}
 	offset := 0
 	if opts.PageToken != "" {
 		if dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {
@@ -438,8 +441,11 @@ func (r *UserRepository) conn(ctx context.Context) *gorm.DB {
 func (r *UserRepository) Get(ctx context.Context, key string) (*User, error) {
 	var m UserModel
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped get")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -455,7 +461,10 @@ func (r *UserRepository) List(ctx context.Context, opts persistence.ListOptions)
 	var models []UserModel
 	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, "", status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped list")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
@@ -478,6 +487,9 @@ func (r *UserRepository) List(ctx context.Context, opts persistence.ListOptions)
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
 	}
 	offset := 0
 	if opts.PageToken != "" {
@@ -504,7 +516,11 @@ func (r *UserRepository) Create(ctx context.Context, entity *User) (*User, error
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_User(entity)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped create")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
@@ -530,8 +546,11 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 		ToModelUserOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped update")
+	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	ifMatch := etag.IfMatchFromContext(ctx)
@@ -562,7 +581,7 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&UserModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -593,7 +612,7 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&UserModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -612,8 +631,11 @@ func (r *UserRepository) Update(ctx context.Context, key string, entity *User, f
 
 func (r *UserRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped delete")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	res := q.Unscoped().Delete(&UserModel{})
@@ -637,7 +659,10 @@ func (r *UserRepository) BatchGet(ctx context.Context, keys []string) ([]*User, 
 	var models []UserModel
 	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped batch get")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.Find(&models).Error; err != nil {
@@ -704,9 +729,12 @@ func (r *UserRepository) BatchDelete(ctx context.Context, keys []string) error {
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped batch delete")
+	}
 	run := func(db *gorm.DB) error {
 		q := db.WithContext(ctx).Where("id IN ?", uniq)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			q = q.Where("account_id = ?", tenantID)
 		}
 		res := q.Unscoped().Delete(&UserModel{})
@@ -809,8 +837,11 @@ func (r *GroupRepository) conn(ctx context.Context) *gorm.DB {
 func (r *GroupRepository) Get(ctx context.Context, key string) (*Group, error) {
 	var m GroupModel
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped get")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -826,7 +857,10 @@ func (r *GroupRepository) List(ctx context.Context, opts persistence.ListOptions
 	var models []GroupModel
 	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, "", status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped list")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
@@ -849,6 +883,9 @@ func (r *GroupRepository) List(ctx context.Context, opts persistence.ListOptions
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
 	}
 	offset := 0
 	if opts.PageToken != "" {
@@ -875,7 +912,11 @@ func (r *GroupRepository) Create(ctx context.Context, entity *Group) (*Group, er
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Group(entity)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped create")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		m.AccountId = tenantID
 	}
 	m.ETag = etag.New() // AIP-154: fresh ETag on create
@@ -901,8 +942,11 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 		ToModelGroupOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped update")
+	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	ifMatch := etag.IfMatchFromContext(ctx)
@@ -933,7 +977,7 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&GroupModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -963,7 +1007,7 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&GroupModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -982,8 +1026,11 @@ func (r *GroupRepository) Update(ctx context.Context, key string, entity *Group,
 
 func (r *GroupRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped delete")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	res := q.Unscoped().Delete(&GroupModel{})
@@ -1007,7 +1054,10 @@ func (r *GroupRepository) BatchGet(ctx context.Context, keys []string) ([]*Group
 	var models []GroupModel
 	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped batch get")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.Find(&models).Error; err != nil {
@@ -1074,9 +1124,12 @@ func (r *GroupRepository) BatchDelete(ctx context.Context, keys []string) error 
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped batch delete")
+	}
 	run := func(db *gorm.DB) error {
 		q := db.WithContext(ctx).Where("id IN ?", uniq)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			q = q.Where("account_id = ?", tenantID)
 		}
 		res := q.Unscoped().Delete(&GroupModel{})
@@ -1115,7 +1168,11 @@ func LoadGroupAggregateGorm(ctx context.Context, db *gorm.DB, id string) (*Group
 	q = q.Preload("Memberships")
 	var m GroupModel
 	q = q.Where("id = ?", id)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped load aggregate")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -1216,8 +1273,11 @@ func (r *MembershipRepository) conn(ctx context.Context) *gorm.DB {
 func (r *MembershipRepository) Get(ctx context.Context, key string) (*Membership, error) {
 	var m MembershipModel
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped get")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -1233,7 +1293,10 @@ func (r *MembershipRepository) List(ctx context.Context, opts persistence.ListOp
 	var models []MembershipModel
 	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, "", status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped list")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
@@ -1256,6 +1319,9 @@ func (r *MembershipRepository) List(ctx context.Context, opts persistence.ListOp
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
 	}
 	offset := 0
 	if opts.PageToken != "" {
@@ -1282,7 +1348,11 @@ func (r *MembershipRepository) Create(ctx context.Context, entity *Membership) (
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_Membership(entity)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped create")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		m.AccountId = tenantID
 	}
 	if ToModelMembershipOnCreate != nil {
@@ -1306,8 +1376,11 @@ func (r *MembershipRepository) Update(ctx context.Context, key string, entity *M
 		ToModelMembershipOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped update")
+	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if len(fieldMask) > 0 {
@@ -1353,8 +1426,11 @@ func (r *MembershipRepository) Update(ctx context.Context, key string, entity *M
 
 func (r *MembershipRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped delete")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	res := q.Unscoped().Delete(&MembershipModel{})
@@ -1378,7 +1454,10 @@ func (r *MembershipRepository) BatchGet(ctx context.Context, keys []string) ([]*
 	var models []MembershipModel
 	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped batch get")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.Find(&models).Error; err != nil {
@@ -1445,9 +1524,12 @@ func (r *MembershipRepository) BatchDelete(ctx context.Context, keys []string) e
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "Membership: no tenant on a tenant-scoped batch delete")
+	}
 	run := func(db *gorm.DB) error {
 		q := db.WithContext(ctx).Where("id IN ?", uniq)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			q = q.Where("account_id = ?", tenantID)
 		}
 		res := q.Unscoped().Delete(&MembershipModel{})
@@ -1557,8 +1639,11 @@ func (r *ApiKeyRepository) conn(ctx context.Context) *gorm.DB {
 func (r *ApiKeyRepository) Get(ctx context.Context, key string) (*ApiKey, error) {
 	var m ApiKeyModel
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped get")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.First(&m).Error; err != nil {
@@ -1574,7 +1659,10 @@ func (r *ApiKeyRepository) List(ctx context.Context, opts persistence.ListOption
 	var models []ApiKeyModel
 	q := r.conn(ctx)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, "", status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped list")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if opts.Filter != "" {
@@ -1597,6 +1685,9 @@ func (r *ApiKeyRepository) List(ctx context.Context, opts persistence.ListOption
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
 	}
 	offset := 0
 	if opts.PageToken != "" {
@@ -1623,7 +1714,11 @@ func (r *ApiKeyRepository) Create(ctx context.Context, entity *ApiKey) (*ApiKey,
 		entity.Id = r.idGen.NewID()
 	}
 	m := toModel_ApiKey(entity)
-	if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped create")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		m.AccountId = tenantID
 	}
 	if entity.KeyValue != "" {
@@ -1673,8 +1768,11 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 		ToModelApiKeyOnUpdate(entity, m)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped update")
+	}
 	q := r.conn(ctx).Model(m).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	ifMatch := etag.IfMatchFromContext(ctx)
@@ -1705,7 +1803,7 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&ApiKeyModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -1740,7 +1838,7 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 		}
 		if ifMatch != "" && res.RowsAffected == 0 {
 			check := r.conn(ctx).Model(&ApiKeyModel{}).Where("id = ?", key)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
 				check = check.Where("account_id = ?", tenantID)
 			}
 			var n int64
@@ -1759,8 +1857,11 @@ func (r *ApiKeyRepository) Update(ctx context.Context, key string, entity *ApiKe
 
 func (r *ApiKeyRepository) Delete(ctx context.Context, key string) error {
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped delete")
+	}
 	q := r.conn(ctx).Where("id = ?", key)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	res := q.Unscoped().Delete(&ApiKeyModel{})
@@ -1784,8 +1885,11 @@ func (r *ApiKeyRepository) LookupByKeyValueHash(ctx context.Context, hash string
 		return nil, persistence.ErrNotFound
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped lookup by hash")
+	}
 	q := r.conn(ctx).Where("key_value_hash = ?", hash)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	var m ApiKeyModel
@@ -1805,7 +1909,10 @@ func (r *ApiKeyRepository) BatchGet(ctx context.Context, keys []string) ([]*ApiK
 	var models []ApiKeyModel
 	q := r.conn(ctx).Where("id IN ?", keys)
 	tenantID := middleware.TenantIDFromContext(ctx)
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped batch get")
+	}
+	if !middleware.IsSystemContext(ctx) {
 		q = q.Where("account_id = ?", tenantID)
 	}
 	if err := q.Find(&models).Error; err != nil {
@@ -1872,9 +1979,12 @@ func (r *ApiKeyRepository) BatchDelete(ctx context.Context, keys []string) error
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "ApiKey: no tenant on a tenant-scoped batch delete")
+	}
 	run := func(db *gorm.DB) error {
 		q := db.WithContext(ctx).Where("id IN ?", uniq)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			q = q.Where("account_id = ?", tenantID)
 		}
 		res := q.Unscoped().Delete(&ApiKeyModel{})

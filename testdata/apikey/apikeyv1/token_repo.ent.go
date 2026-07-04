@@ -72,6 +72,9 @@ func NewTokenEntRepository(client *ent.Client, opts ...persistence.RepoOption) p
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
 			}
+			if opts.PageSize > persistence.MaxPageSize {
+				opts.PageSize = persistence.MaxPageSize
+			}
 			offset := 0
 			if opts.PageToken != "" {
 				fmt.Sscanf(opts.PageToken, "%d", &offset) //nolint:errcheck

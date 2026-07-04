@@ -8,6 +8,8 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/mixin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -59,8 +61,18 @@ func (TenantMixin) Interceptors() []ent.Interceptor {
 	return []ent.Interceptor{
 		ent.InterceptFunc(func(next ent.Querier) ent.Querier {
 			return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) {
+				// Fail closed: a tenant-scoped read with no established tenant is
+				// rejected unless the caller explicitly opted into a system/admin
+				// operation via middleware.WithSystemContext. The verified principal
+				// is the tenant authority (TenantIDFromContext); the account-id header
+				// is only a fallback and can never widen scope.
 				tenantID := middleware.TenantIDFromContext(ctx)
-				SetTenantFilter(q, tenantID)
+				if !middleware.IsSystemContext(ctx) {
+					if tenantID == "" {
+						return nil, status.Error(codes.PermissionDenied, "entrepo: no tenant on a tenant-scoped query")
+					}
+					SetTenantFilter(q, tenantID)
+				}
 				return next.Query(ctx, q)
 			})
 		}),
@@ -191,20 +203,27 @@ type tenantGuardMutation interface {
 
 // checkTenantWrite is the rule behind TenantWriteGuardMixin: on a row-scoped update
 // or delete, read the affected row's OLD account_id and reject when it differs from
-// ctxTenant (the tenant on the request context). It returns:
-//   - nil to ALLOW (no ctx tenant — not tenant-scoped; or the old value matches; or
-//     the old value cannot be read for a batch op — see the limitation below);
-//   - ErrCrossTenantWrite to REJECT a confirmed cross-tenant single-row write.
+// ctxTenant (the tenant on the request context). It fails closed:
+//   - a system/admin operation (middleware.WithSystemContext) is ALLOWED to cross
+//     tenants (the sanctioned cross-tenant opt-out);
+//   - an ABSENT tenant on a tenant-scoped write is REJECTED (ErrCrossTenantWrite) —
+//     it is NOT treated as "not tenant-scoped" (that was the fail-open defect);
+//   - otherwise ALLOW when the old value matches ctxTenant (or cannot be read for a
+//     batch op — see the limitation below), and REJECT a confirmed cross-tenant
+//     single-row write.
 //
 // Limitation: ent's OldField is only defined for the *One operations (UpdateOne /
 // DeleteOne), which is exactly the row-scoped path this guard closes. For batch
 // Update / Delete, OldField returns an error (no single old row); the guard then
-// ALLOWS, relying on the TenantMixin query interceptor to scope the predicate. This
-// closes the common cross-tenant single-row write gap without changing batch
-// semantics.
+// ALLOWS, relying on the TenantMixin query interceptor (which itself fails closed
+// on an absent tenant) to scope the predicate. This closes the common cross-tenant
+// single-row write gap without changing batch semantics.
 func checkTenantWrite(ctx context.Context, m tenantGuardMutation, ctxTenant string) error {
+	if middleware.IsSystemContext(ctx) {
+		return nil // trusted system/admin/background path → allow (explicit opt-out)
+	}
 	if ctxTenant == "" {
-		return nil // not a tenant-scoped request → allow
+		return ErrCrossTenantWrite // fail closed: no established tenant on a tenant-scoped write
 	}
 	if !m.Op().Is(ent.OpUpdate | ent.OpUpdateOne | ent.OpDelete | ent.OpDeleteOne) {
 		return nil // creates stamp account_id from ctx; queries are not mutations

@@ -9,6 +9,10 @@ import (
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	ent "github.com/infobloxopen/devedge-sdk/testdata/federation/ent"
 	entregion "github.com/infobloxopen/devedge-sdk/testdata/federation/ent/region"
 	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/federation/ent/predicate"
@@ -32,7 +36,10 @@ func NewRegionEntRepository(client *ent.Client, opts ...persistence.RepoOption) 
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "region: no tenant on a tenant-scoped create")
+				}
 				entity.AccountId = tenantID
 			}
 			b := regionClient(ctx).Create().
@@ -52,7 +59,15 @@ func NewRegionEntRepository(client *ent.Client, opts ...persistence.RepoOption) 
 			return fromEntRegion(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*Region, error) {
-			e, err := regionClient(ctx).Get(ctx, key)
+			q := regionClient(ctx).Query().Where(entregion.ID(key))
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "region: no tenant on a tenant-scoped get")
+				}
+				q = q.Where(entregion.AccountID(tenantID))
+			}
+			e, err := q.Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -74,6 +89,9 @@ func NewRegionEntRepository(client *ent.Client, opts ...persistence.RepoOption) 
 			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
+			}
+			if opts.PageSize > persistence.MaxPageSize {
+				opts.PageSize = persistence.MaxPageSize
 			}
 			offset := 0
 			if opts.PageToken != "" {
@@ -98,7 +116,11 @@ func NewRegionEntRepository(client *ent.Client, opts ...persistence.RepoOption) 
 			if regionInMask(fieldMask, "display_name") {
 				u = u.SetDisplayName(entity.GetDisplayName())
 			}
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "region: no tenant on a tenant-scoped update")
+				}
 				u = u.Where(entregion.AccountID(tenantID))
 			}
 			ifMatch := etag.IfMatchFromContext(ctx)
@@ -112,7 +134,7 @@ func NewRegionEntRepository(client *ent.Client, opts ...persistence.RepoOption) 
 			if err != nil {
 				if ent.IsNotFound(err) && ifMatch != "" {
 					check := regionClient(ctx).Query().Where(entregion.ID(key))
-					if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+					if !middleware.IsSystemContext(ctx) {
 						check = check.Where(entregion.AccountID(tenantID))
 					}
 					exists, cerr := check.Exist(ctx)
@@ -137,7 +159,11 @@ func NewRegionEntRepository(client *ent.Client, opts ...persistence.RepoOption) 
 		},
 		Delete_: func(ctx context.Context, key string) error {
 			del := regionClient(ctx).Delete().Where(entregion.ID(key))
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return status.Error(codes.PermissionDenied, "region: no tenant on a tenant-scoped delete")
+				}
 				del = del.Where(entregion.AccountID(tenantID))
 			}
 			n, err := del.Exec(ctx)

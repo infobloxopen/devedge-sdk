@@ -7,6 +7,8 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/federation/ent"
 	entasset "github.com/infobloxopen/devedge-sdk/testdata/federation/ent/asset"
 )
@@ -83,6 +85,9 @@ func (r *AssetEntRepository) BatchUpdate(ctx context.Context, items []persistenc
 		return []*Asset{}, nil
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "asset: no tenant on a tenant-scoped batch update")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -95,7 +100,7 @@ func (r *AssetEntRepository) BatchUpdate(ctx context.Context, items []persistenc
 	out := make([]*Asset, 0, len(items))
 	for _, it := range items {
 		u := tx.Asset.UpdateOneID(it.Key)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			u = u.Where(entasset.AccountID(tenantID))
 		}
 		if assetInMask(it.FieldMask, "display_name") {
@@ -136,6 +141,9 @@ func (r *AssetEntRepository) BatchDelete(ctx context.Context, keys []string) err
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "asset: no tenant on a tenant-scoped batch delete")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -146,7 +154,7 @@ func (r *AssetEntRepository) BatchDelete(ctx context.Context, keys []string) err
 		}
 	}
 	del := tx.Asset.Delete().Where(entasset.IDIn(uniq...))
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		del = del.Where(entasset.AccountID(tenantID))
 	}
 	n, derr := del.Exec(ctx)

@@ -10,6 +10,41 @@ under [History](#history).
 
 ## History
 
+### Security: principal-authoritative, fail-closed tenant fence (SEC-001..004)
+
+**BREAKING (tenant fence).** The multi-tenant storage fence now anchors on the
+**verified principal** and **fails closed** on an absent tenant, closing four
+confirmed vulnerabilities:
+
+- **SEC-002 (wrong tenant source) + SEC-001 (fail-open policy).** `middleware.TenantIDFromContext`
+  now returns the **verified principal's** `Tenant` (stashed by the authn/authz stage
+  via `WithPrincipal`) as the authority; the `account-id` metadata header is only a
+  routing/cells hint used as a fallback on principal-less paths (e.g. the event
+  consumer) and can never widen a request's tenant scope. The `entrepo.TenantMixin`
+  query interceptor, `checkTenantWrite`, and every generated ent/GORM read/write/batch
+  fence now reject a tenant-scoped operation that has no established tenant with
+  `codes.PermissionDenied` instead of silently running it unscoped. The generated ent
+  `Get` applies an explicit `AccountID` clause rather than trusting the interceptor.
+- **SEC-004 (missing audience).** `oidc.NewAuthenticator` now returns an error when
+  `Config.ExpectedAudience` is empty, mirroring the existing `ExpectedIssuer` guard.
+  Set the new `Config.AllowAnyAudience` to opt out explicitly (single-issuer bootstrap
+  only).
+- **SEC-003 (unbounded page size).** Generated `List` clamps a caller-requested
+  `page_size` to `persistence.MaxPageSize` (1000, AIP-158); the response still
+  paginates via `next_page_token`.
+
+**Migration.**
+
+- Ensure your `Authenticator`/`ClaimsMapper` populates `Principal.Tenant` (in dev,
+  wire `grpcauthz.DevPrincipalFunc()`, which promotes the `account-id` header to the
+  principal's tenant at the identity stage). A tenant-scoped request that reaches the
+  repository without an established tenant now gets `PermissionDenied`.
+- Run legitimate cross-tenant/system work (admin, migrations, background jobs) under
+  `middleware.WithSystemContext(ctx)` — the sanctioned, auditable opt-out that bypasses
+  the fence. Never derive it from client input.
+- If you construct `oidc.Authenticator` directly with an empty audience, set
+  `AllowAnyAudience: true`.
+
 ### Authentication (two-tier token model, WS-026)
 
 - A new `authn` package defines the pluggable authentication seams — the "verify"

@@ -180,3 +180,31 @@ func TestNewAuthenticator_FailClosedConfig(t *testing.T) {
 		t.Error("missing ExpectedIssuer should error")
 	}
 }
+
+// SEC-004 regression: an empty ExpectedAudience must FAIL CLOSED (a verifier that
+// accepts any audience would honor a token minted for a different service), unless
+// the caller explicitly opts out with AllowAnyAudience. Fails on the old code,
+// which silently skipped the audience check on an empty ExpectedAudience.
+func TestNewAuthenticator_RequiresAudience(t *testing.T) {
+	if _, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:           oidc.StaticKeySet{},
+		ExpectedIssuer: appIssuer,
+		// ExpectedAudience intentionally empty, AllowAnyAudience not set.
+	}); err == nil {
+		t.Error("empty ExpectedAudience without AllowAnyAudience must error (fail closed)")
+	}
+	if _, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:             oidc.StaticKeySet{},
+		ExpectedIssuer:   appIssuer,
+		AllowAnyAudience: true,
+	}); err != nil {
+		t.Errorf("empty ExpectedAudience WITH AllowAnyAudience must succeed, got %v", err)
+	}
+	if _, err := oidc.NewAuthenticator(oidc.Config{
+		Keys:             oidc.StaticKeySet{},
+		ExpectedIssuer:   appIssuer,
+		ExpectedAudience: "svc-a",
+	}); err != nil {
+		t.Errorf("non-empty ExpectedAudience must succeed, got %v", err)
+	}
+}

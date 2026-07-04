@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/infobloxopen/devedge-sdk/authz"
+	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
 	"github.com/infobloxopen/devedge-sdk/server"
 	"github.com/infobloxopen/devedge-sdk/testdata/federation/ent/enttest"
 	_ "github.com/infobloxopen/devedge-sdk/testdata/federation/ent/runtime" // installs mixin validators + tenant interceptors
@@ -39,6 +40,9 @@ func TestServer_BatchGetRegions_OverWire(t *testing.T) {
 	s, err := server.New(server.Config{
 		GRPCAddr:   ":0",
 		Authorizer: permissive,
+		// The verified principal is the tenant authority (SEC-002); in dev the
+		// account-id header is promoted to Principal.Tenant at the identity stage.
+		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 	})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
@@ -126,7 +130,7 @@ func TestServer_GetRegion_ReadMask(t *testing.T) {
 	permissive := authz.NewDevAuthorizer(authz.Grant{
 		Tenant: "*", Subjects: []string{"*"}, Verbs: []authz.Verb{"*"}, Resource: "*",
 	})
-	s, err := server.New(server.Config{GRPCAddr: ":0", Authorizer: permissive})
+	s, err := server.New(server.Config{GRPCAddr: ":0", Authorizer: permissive, PrincipalFunc: grpcauthz.DevPrincipalFunc()})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}

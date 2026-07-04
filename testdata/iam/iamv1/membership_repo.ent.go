@@ -8,6 +8,10 @@ import (
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	ent "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
 	entmembership "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
 	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/predicate"
@@ -31,7 +35,10 @@ func NewMembershipEntRepository(client *ent.Client, opts ...persistence.RepoOpti
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "membership: no tenant on a tenant-scoped create")
+				}
 				entity.AccountId = tenantID
 			}
 			b := membershipClient(ctx).Create().
@@ -55,7 +62,15 @@ func NewMembershipEntRepository(client *ent.Client, opts ...persistence.RepoOpti
 			return fromEntMembership(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*Membership, error) {
-			e, err := membershipClient(ctx).Get(ctx, key)
+			q := membershipClient(ctx).Query().Where(entmembership.ID(key))
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "membership: no tenant on a tenant-scoped get")
+				}
+				q = q.Where(entmembership.AccountID(tenantID))
+			}
+			e, err := q.Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -77,6 +92,9 @@ func NewMembershipEntRepository(client *ent.Client, opts ...persistence.RepoOpti
 			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
+			}
+			if opts.PageSize > persistence.MaxPageSize {
+				opts.PageSize = persistence.MaxPageSize
 			}
 			offset := 0
 			if opts.PageToken != "" {
@@ -107,7 +125,11 @@ func NewMembershipEntRepository(client *ent.Client, opts ...persistence.RepoOpti
 			if membershipInMask(fieldMask, "group_id") && entity.GetGroupId() != "" {
 				u = u.SetGroupID(entity.GetGroupId())
 			}
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "membership: no tenant on a tenant-scoped update")
+				}
 				u = u.Where(entmembership.AccountID(tenantID))
 			}
 			if ToEntMembershipOnUpdate != nil {
@@ -127,7 +149,11 @@ func NewMembershipEntRepository(client *ent.Client, opts ...persistence.RepoOpti
 		},
 		Delete_: func(ctx context.Context, key string) error {
 			del := membershipClient(ctx).Delete().Where(entmembership.ID(key))
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return status.Error(codes.PermissionDenied, "membership: no tenant on a tenant-scoped delete")
+				}
 				del = del.Where(entmembership.AccountID(tenantID))
 			}
 			n, err := del.Exec(ctx)

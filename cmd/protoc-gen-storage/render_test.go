@@ -1194,7 +1194,11 @@ func TestRenderStorageFile_loadAggregateEmitted(t *testing.T) {
 	out := renderStorageFile("fleetv1", fleetAggregateMessages(), nil)
 	mustContain(t, out, "func LoadFleetAggregateGorm(ctx context.Context, db *gorm.DB, id string) (*Fleet, error) {")
 	mustContain(t, out, `q = q.Preload("Vehicles")`)
-	mustContain(t, out, "if tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {")
+	// SEC-001/SEC-002: the tenant fence fails closed on an absent tenant and scopes
+	// off the verified principal via a system-context-gated clause.
+	mustContain(t, out, "tenantID := middleware.TenantIDFromContext(ctx)")
+	mustContain(t, out, `return nil, status.Error(codes.PermissionDenied, "Fleet: no tenant on a tenant-scoped load aggregate")`)
+	mustContain(t, out, "if !middleware.IsSystemContext(ctx) {")
 	mustContain(t, out, "return nil, persistence.ErrNotFound")
 	// Explicit member projection (the load primitive must append members, since
 	// fromModel_Fleet does not).

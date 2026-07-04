@@ -8,6 +8,10 @@ import (
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/persistence/entrepo"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	ent "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent"
 	entvehicle "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent/vehicle"
 	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent/predicate"
@@ -31,7 +35,10 @@ func NewVehicleEntRepository(client *ent.Client, opts ...persistence.RepoOption)
 				entity.Id = idGen.NewID()
 			}
 			tenantID := middleware.TenantIDFromContext(ctx)
-			if tenantID != "" {
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "vehicle: no tenant on a tenant-scoped create")
+				}
 				entity.AccountId = tenantID
 			}
 			b := vehicleClient(ctx).Create().
@@ -54,7 +61,15 @@ func NewVehicleEntRepository(client *ent.Client, opts ...persistence.RepoOption)
 			return fromEntVehicle(created), nil
 		},
 		Get_: func(ctx context.Context, key string) (*Vehicle, error) {
-			e, err := vehicleClient(ctx).Get(ctx, key)
+			q := vehicleClient(ctx).Query().Where(entvehicle.ID(key))
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "vehicle: no tenant on a tenant-scoped get")
+				}
+				q = q.Where(entvehicle.AccountID(tenantID))
+			}
+			e, err := q.Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
 					return nil, persistence.ErrNotFound
@@ -76,6 +91,9 @@ func NewVehicleEntRepository(client *ent.Client, opts ...persistence.RepoOption)
 			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50
+			}
+			if opts.PageSize > persistence.MaxPageSize {
+				opts.PageSize = persistence.MaxPageSize
 			}
 			offset := 0
 			if opts.PageToken != "" {
@@ -103,7 +121,11 @@ func NewVehicleEntRepository(client *ent.Client, opts ...persistence.RepoOption)
 			if vehicleInMask(fieldMask, "fleet_id") && entity.GetFleetId() != "" {
 				u = u.SetFleetID(entity.GetFleetId())
 			}
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return nil, status.Error(codes.PermissionDenied, "vehicle: no tenant on a tenant-scoped update")
+				}
 				u = u.Where(entvehicle.AccountID(tenantID))
 			}
 			if ToEntVehicleOnUpdate != nil {
@@ -123,7 +145,11 @@ func NewVehicleEntRepository(client *ent.Client, opts ...persistence.RepoOption)
 		},
 		Delete_: func(ctx context.Context, key string) error {
 			del := vehicleClient(ctx).Delete().Where(entvehicle.ID(key))
-			if tenantID := middleware.TenantIDFromContext(ctx); tenantID != "" {
+			tenantID := middleware.TenantIDFromContext(ctx)
+			if !middleware.IsSystemContext(ctx) {
+				if tenantID == "" {
+					return status.Error(codes.PermissionDenied, "vehicle: no tenant on a tenant-scoped delete")
+				}
 				del = del.Where(entvehicle.AccountID(tenantID))
 			}
 			n, err := del.Exec(ctx)

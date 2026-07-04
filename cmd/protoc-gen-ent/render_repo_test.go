@@ -465,7 +465,10 @@ func TestRenderEntRepoAdapter_multiSurface(t *testing.T) {
 		"return tx.Coupon",
 		"return client.Coupon",
 		"couponClient(ctx).Create()",
-		"couponClient(ctx).Get(ctx, key)",
+		// SEC-001/SEC-002: a tenant-scoped Get fails closed with an EXPLICIT tenant
+		// clause (was couponClient(ctx).Get(ctx, key), which trusted the interceptor).
+		"couponClient(ctx).Query().Where(entcoupon.ID(key))",
+		`return nil, status.Error(codes.PermissionDenied, "coupon: no tenant on a tenant-scoped get")`,
 		"couponClient(ctx).Query()",
 		`entcoupon "github.com/example/coupond/ent/coupon"`,
 		// Projection input is the owner ent struct; output is the surface proto.

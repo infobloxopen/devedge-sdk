@@ -131,11 +131,25 @@ func hasETagMsg(messages []messageInfo) bool {
 // behaviour is identical to the pre-CAS generator. The caller guards this with
 // owner.HasETag, so the helper assumes an etag column exists. It is emitted inside
 // an update branch (the fieldMask / full / struct arm), hence the "\t\t" indent.
+// gormTenantDeny emits the fail-closed guard for a tenant-scoped GORM method: on
+// the non-system path an absent tenant is rejected with codes.PermissionDenied
+// (the account-id header is only a routing hint; the verified principal is the
+// authority — see middleware.TenantIDFromContext). A trusted system/admin path
+// (middleware.WithSystemContext) bypasses the fence. `tenantID` must already be
+// declared in scope. `indent` is the leading tabs; `zeroRet` is the value list
+// that precedes the error in the return (e.g. "nil, ", "nil, \"\", ", "0, ", or
+// "" for an error-only method); `op` names the operation for the message.
+func gormTenantDeny(b *strings.Builder, indent, zeroRet, msgName, op string) {
+	fmt.Fprintf(b, "%sif !middleware.IsSystemContext(ctx) && tenantID == \"\" {\n", indent)
+	fmt.Fprintf(b, "%s\treturn %sstatus.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped %s\")\n", indent, zeroRet, msgName, op)
+	fmt.Fprintf(b, "%s}\n", indent)
+}
+
 func emitGormCASCheck(b *strings.Builder, model string, hasTenant bool) {
 	b.WriteString("\t\tif ifMatch != \"\" && res.RowsAffected == 0 {\n")
 	if hasTenant {
 		fmt.Fprintf(b, "\t\t\tcheck := r.conn(ctx).Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
-		b.WriteString("\t\t\tif tenantID != \"\" {\n\t\t\t\tcheck = check.Where(\"account_id = ?\", tenantID)\n\t\t\t}\n")
+		b.WriteString("\t\t\tif !middleware.IsSystemContext(ctx) {\n\t\t\t\tcheck = check.Where(\"account_id = ?\", tenantID)\n\t\t\t}\n")
 	} else {
 		fmt.Fprintf(b, "\t\t\tcheck := r.conn(ctx).Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
 	}
@@ -1036,8 +1050,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	fmt.Fprintf(b, "\tvar m %sModel\n", model)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "get")
 		b.WriteString("\tq := r.conn(ctx).Where(\"id = ?\", key)\n")
-		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
 	} else {
 		b.WriteString("\tif err := r.conn(ctx).Where(\"id = ?\", key).First(&m).Error; err != nil {\n")
@@ -1060,7 +1075,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	}
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		gormTenantDeny(b, "\t", "nil, \"\", ", msg.MessageName, "list")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	}
 	fmt.Fprintf(b, "\tif opts.Filter != \"\" {\n")
 	if msgHasTags(msg) {
@@ -1087,6 +1103,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	fmt.Fprintf(b, "\t}\n")
 	b.WriteString("\tpageSize := opts.PageSize\n")
 	b.WriteString("\tif pageSize <= 0 {\n\t\tpageSize = 50\n\t}\n")
+	b.WriteString("\tif pageSize > persistence.MaxPageSize {\n\t\tpageSize = persistence.MaxPageSize\n\t}\n")
 	b.WriteString("\toffset := 0\n")
 	b.WriteString("\tif opts.PageToken != \"\" {\n")
 	b.WriteString("\t\tif dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {\n")
@@ -1124,10 +1141,12 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		// is the IMMUTABLE tenant key: a caller must not be able to plant a row under
 		// another tenant's account_id on Create (the mirror of Update, which rejects any
 		// attempt to change it). The handler does not duplicate this (F029 D-4: tenant
-		// stamping is the repository's job). When the context carries no tenant
-		// (unscoped/dev, matching the tenantID == "" query guards), the caller-supplied
-		// value is left as-is.
-		b.WriteString("\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n")
+		// stamping is the repository's job). Fail closed: a create with no established
+		// tenant is rejected unless the caller opted into a system/admin operation via
+		// middleware.WithSystemContext (in which case the caller-supplied value is kept).
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "create")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n")
 		b.WriteString("\t\tm.AccountId = tenantID\n")
 		b.WriteString("\t}\n")
 	}
@@ -1187,8 +1206,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	fmt.Fprintf(b, "\tif ToModel%sOnUpdate != nil {\n\t\tToModel%sOnUpdate(entity, m)\n\t}\n", msg.MessageName, msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "update")
 		b.WriteString("\tq := r.conn(ctx).Model(m).Where(\"id = ?\", key)\n")
-		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	} else {
 		b.WriteString("\tq := r.conn(ctx).Model(m).Where(\"id = ?\", key)\n")
 	}
@@ -1303,8 +1323,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	fmt.Fprintf(b, "func (r *%sRepository) Delete(ctx context.Context, key string) error {\n", msg.MessageName)
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		gormTenantDeny(b, "\t", "", msg.MessageName, "delete")
 		b.WriteString("\tq := r.conn(ctx).Where(\"id = ?\", key)\n")
-		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		switch {
 		case useSentinel:
 			// Soft-delete AND stamp the row id into soft_delete_key in one update so
@@ -1335,8 +1356,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		fmt.Fprintf(b, "func (r *%sRepository) Undelete(ctx context.Context, key string) (%s, error) {\n", msg.MessageName, pbType)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "undelete")
 			fmt.Fprintf(b, "\tq := r.conn(ctx).Unscoped().Model(&%sModel{}).Where(\"id = ?\", key)\n", model)
-			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 			b.WriteString("\tq = q.Where(\"deleted_at IS NOT NULL\")\n")
 		} else {
 			fmt.Fprintf(b, "\tq := r.conn(ctx).Unscoped().Model(&%sModel{}).\n", model)
@@ -1370,8 +1392,9 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		fmt.Fprintf(b, "func (r *%sRepository) PurgeExpired(ctx context.Context, before time.Time) (int64, error) {\n", msg.MessageName)
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			gormTenantDeny(b, "\t", "0, ", msg.MessageName, "purge expired")
 			b.WriteString("\tq := r.conn(ctx).Unscoped().Where(\"expire_time IS NOT NULL AND expire_time <= ?\", before.UTC())\n")
-			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 			fmt.Fprintf(b, "\tres := q.Delete(&%sModel{})\n", model)
 		} else {
 			fmt.Fprintf(b, "\tres := r.conn(ctx).Unscoped().\n")
@@ -1398,10 +1421,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		b.WriteString("\tif hash == \"\" {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
 		if hasTenant {
 			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "lookup by hash")
 		}
 		fmt.Fprintf(b, "\tq := r.conn(ctx).Where(\"%s_hash = ?\", hash)\n", f.SnakeName)
 		if hasTenant {
-			b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 		}
 		fmt.Fprintf(b, "\tvar m %sModel\n", model)
 		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
@@ -1422,7 +1446,8 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	b.WriteString("\tq := r.conn(ctx).Where(\"id IN ?\", keys)\n")
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
-		b.WriteString("\tif tenantID != \"\" {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "batch get")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	}
 	b.WriteString("\tif err := q.Find(&models).Error; err != nil {\n")
 	fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"batch get %s: %%w\", err)\n", msg.MessageName)
@@ -1493,6 +1518,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	b.WriteString("\t}\n")
 	if hasTenant {
 		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		gormTenantDeny(b, "\t", "", msg.MessageName, "batch delete")
 	}
 	// run performs the bulk delete against db (a tx-scoped *gorm.DB). F030 batch
 	// reconciliation: when ctx already carries a *gorm.DB the delete JOINS it (no
@@ -1501,7 +1527,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	b.WriteString("\trun := func(db *gorm.DB) error {\n")
 	b.WriteString("\t\tq := db.WithContext(ctx).Where(\"id IN ?\", uniq)\n")
 	if hasTenant {
-		b.WriteString("\t\tif tenantID != \"\" {\n\t\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t\t}\n")
+		b.WriteString("\t\tif !middleware.IsSystemContext(ctx) {\n\t\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t\t}\n")
 	}
 	if owner.SoftDelete {
 		fmt.Fprintf(b, "\t\tres := q.Delete(&%sModel{})\n", model)
@@ -1569,9 +1595,11 @@ func renderLoadAggregate(b *strings.Builder, msg messageInfo, model string, hasT
 	fmt.Fprintf(b, "\tvar m %sModel\n", model)
 	b.WriteString("\tq = q.Where(\"id = ?\", id)\n")
 	if hasTenant {
-		// Tenant scoping mirrors Get: only the calling tenant's root is loadable.
-		b.WriteString("\tif tenantID := middleware.TenantIDFromContext(ctx); tenantID != \"\" {\n")
-		b.WriteString("\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		// Tenant scoping mirrors Get and fails closed: only the calling tenant's root
+		// is loadable; an absent tenant is rejected unless it is a system operation.
+		b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+		gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "load aggregate")
+		b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
 	}
 	b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
 	b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n")

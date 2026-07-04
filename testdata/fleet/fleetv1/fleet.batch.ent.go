@@ -8,6 +8,8 @@ import (
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/persistence"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent"
 	entfleet "github.com/infobloxopen/devedge-sdk/testdata/fleet/ent/fleet"
 )
@@ -84,6 +86,9 @@ func (r *FleetEntRepository) BatchUpdate(ctx context.Context, items []persistenc
 		return []*Fleet{}, nil
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "fleet: no tenant on a tenant-scoped batch update")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -96,7 +101,7 @@ func (r *FleetEntRepository) BatchUpdate(ctx context.Context, items []persistenc
 	out := make([]*Fleet, 0, len(items))
 	for _, it := range items {
 		u := tx.Fleet.UpdateOneID(it.Key)
-		if tenantID != "" {
+		if !middleware.IsSystemContext(ctx) {
 			u = u.Where(entfleet.AccountID(tenantID))
 		}
 		u = u.Where(entfleet.DeleteTimeIsNil())
@@ -135,6 +140,9 @@ func (r *FleetEntRepository) BatchDelete(ctx context.Context, keys []string) err
 		uniq = append(uniq, k)
 	}
 	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return status.Error(codes.PermissionDenied, "fleet: no tenant on a tenant-scoped batch delete")
+	}
 	tx, ownTx, err := r.batchTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -145,7 +153,7 @@ func (r *FleetEntRepository) BatchDelete(ctx context.Context, keys []string) err
 		}
 	}
 	upd := tx.Fleet.Update().Where(entfleet.IDIn(uniq...))
-	if tenantID != "" {
+	if !middleware.IsSystemContext(ctx) {
 		upd = upd.Where(entfleet.AccountID(tenantID))
 	}
 	upd = upd.Where(entfleet.DeleteTimeIsNil())

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"entgo.io/ent"
+
+	"github.com/infobloxopen/devedge-sdk/middleware"
 )
 
 // fakeTenantGuardMut implements the narrow tenantGuardMutation interface so the
@@ -27,10 +29,21 @@ func (f *fakeTenantGuardMut) OldField(_ context.Context, name string) (ent.Value
 func TestCheckTenantWrite(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("no ctx tenant → allow", func(t *testing.T) {
+	// SEC-001 regression: an absent tenant on a tenant-scoped write must FAIL CLOSED
+	// (was fail-open "allow"). It fails on the old code, which returned nil here.
+	t.Run("no ctx tenant, not system → reject (fail closed)", func(t *testing.T) {
 		m := &fakeTenantGuardMut{op: ent.OpUpdateOne, oldVal: "other"}
-		if err := checkTenantWrite(ctx, m, ""); err != nil {
-			t.Fatalf("no-tenant request must be allowed, got %v", err)
+		if err := checkTenantWrite(ctx, m, ""); !errors.Is(err, ErrCrossTenantWrite) {
+			t.Fatalf("no-tenant write must fail closed with ErrCrossTenantWrite, got %v", err)
+		}
+	})
+
+	// The sanctioned cross-tenant opt-out: a system context bypasses the fence.
+	t.Run("no ctx tenant BUT system context → allow", func(t *testing.T) {
+		sysCtx := middleware.WithSystemContext(ctx)
+		m := &fakeTenantGuardMut{op: ent.OpUpdateOne, oldVal: "other"}
+		if err := checkTenantWrite(sysCtx, m, ""); err != nil {
+			t.Fatalf("system context must bypass the fence, got %v", err)
 		}
 	})
 
