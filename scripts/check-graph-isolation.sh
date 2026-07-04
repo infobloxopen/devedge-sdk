@@ -48,6 +48,7 @@ KAFKABUS_MOD="${SDK_PATH}/events/kafkabus"
 GORMTX_MOD="${SDK_PATH}/persistence/gormtx"
 ENTREPO_MOD="${SDK_PATH}/persistence/entrepo"
 MIGRATE_MOD="${SDK_PATH}/persistence/migrate"
+AUTHN_OIDC_MOD="${SDK_PATH}/authn/oidc"
 # The infobloxopen/migrate fork pin (mirrors devedge). A consumer that requires
 # persistence/migrate must carry this replace too, since a required module's replace
 # directives are ignored — the applier is compiled against the fork's WithDirtyStateConfig.
@@ -65,6 +66,8 @@ GOMOD_GUARDS=(
   "entgo.io/ent"
   "github.com/golang-migrate/migrate"
   "github.com/jackc/pgx/v5"
+  "github.com/go-jose/go-jose"
+  "github.com/coreos/go-oidc"
 )
 # Fragments that must ALSO be absent from go.sum (no retained core dep
 # back-references them). otel/sdk is intentionally NOT here — see nuance note.
@@ -80,6 +83,8 @@ GOSUM_GUARDS=(
   "entgo.io/ent"
   "github.com/golang-migrate/migrate"
   "github.com/jackc/pgx/v5"
+  "github.com/go-jose/go-jose"
+  "github.com/coreos/go-oidc"
 )
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -259,6 +264,23 @@ else
   fail=1
 fi
 assert_present "migrate-consumer go.sum" "$c7/go.sum" "github.com/golang-migrate/migrate" "github.com/jackc/pgx/v5" || fail=1
+
+echo ""
+# ---------------------------------------------------------------------------
+echo "== AC-2g (WS-026): adding the authn/oidc adapter pulls go-jose in (opt-in) =="
+c8="$work/authn-oidc-consumer"
+scaffold_consumer "$c8" \
+  "	_ \"${AUTHN_OIDC_MOD}\"" \
+  "require ${AUTHN_OIDC_MOD} v0.0.0" \
+  "replace ${AUTHN_OIDC_MOD} => ${REPO_ROOT}/authn/oidc"
+closure8="$(cd "$c8" && GOWORK=off go list -deps ./p 2>/dev/null || true)"
+if printf '%s\n' "$closure8" | grep -q "go-jose/go-jose"; then
+  green "  OK: authn/oidc-importing consumer COMPILES go-jose (JOSE/JWKS arrived on opt-in)"
+else
+  red "  MISSING: authn/oidc-importing consumer does not compile go-jose — adapter wiring broken"
+  fail=1
+fi
+assert_present "authn-oidc-consumer go.sum" "$c8/go.sum" "github.com/go-jose/go-jose" "github.com/coreos/go-oidc" || fail=1
 
 echo ""
 # ---------------------------------------------------------------------------
