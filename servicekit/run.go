@@ -9,6 +9,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/infobloxopen/devedge-sdk/authn"
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
 	"github.com/infobloxopen/devedge-sdk/config"
@@ -46,6 +47,12 @@ type HostConfig struct {
 	// PrincipalFunc derives the authz.Principal from each request. When nil the
 	// principal is empty, so every non-public method is denied (fail closed).
 	PrincipalFunc grpcauthz.PrincipalFunc
+
+	// Authenticator, when set, inserts the WS-026 authentication interceptor
+	// before authz on the shared server: it verifies the request bearer and
+	// stashes the verified principal for the authorizer to read (see
+	// server.Config.Authenticator). Nil preserves today's behavior.
+	Authenticator authn.Authenticator
 
 	// Logger is the host's structured logger; each module gets a child scoped to
 	// its ID. Defaults to slog.Default() when nil.
@@ -220,6 +227,7 @@ func Run(hc HostConfig) error {
 		HTTPHandlers:  hc.HTTPHandlers,
 		Authorizer:    hc.Authorizer,
 		PrincipalFunc: hc.PrincipalFunc,
+		Authenticator: hc.Authenticator,
 		Logger:        logger,
 	})
 	if err != nil {

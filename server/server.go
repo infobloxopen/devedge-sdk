@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
+	"github.com/infobloxopen/devedge-sdk/authn"
 	"github.com/infobloxopen/devedge-sdk/authz"
 	"github.com/infobloxopen/devedge-sdk/authz/grpcauthz"
 	sdkhealth "github.com/infobloxopen/devedge-sdk/health"
@@ -61,7 +62,23 @@ type Config struct {
 	// Authorizer — every non-public method is denied (fail closed). For local
 	// development set grpcauthz.DevPrincipalFunc() to derive the principal from
 	// request metadata; in production supply one backed by a verified token.
+	//
+	// When Authenticator is set and PrincipalFunc is nil, PrincipalFunc defaults
+	// to authn.VerifiedPrincipal so the authorizer reads the token-verified
+	// principal the authentication interceptor stashed (the trusted path).
 	PrincipalFunc grpcauthz.PrincipalFunc
+	// Authenticator, when set, inserts the WS-026 authentication interceptor
+	// BEFORE the authz interceptor: it verifies the bearer from request metadata
+	// (signature + iss/aud/exp against the configured issuer/JWKS) and stashes the
+	// resulting authz.Principal via middleware.WithPrincipal, which the authorizer
+	// then reads through authn.VerifiedPrincipal. An invalid bearer is rejected
+	// with codes.Unauthenticated (fail closed); a request with no bearer passes to
+	// the authorizer with an empty principal (public methods still work).
+	//
+	// Nil preserves today's behavior (no verification stage; the principal comes
+	// from PrincipalFunc alone). The concrete verifier is authn/oidc.Authenticator
+	// (JOSE/JWKS), kept in a nested module so the SDK root stays dependency-light.
+	Authenticator authn.Authenticator
 	// FeatureSource, when set, makes the gate entitlement-aware (P12): server.New
 	// wraps Authorizer with authz.WithEntitlement so the SAME decision enforces
 	// both a method's permission AND its declared entitlement Features
@@ -286,8 +303,15 @@ func New(cfg Config) (*Server, error) {
 		grpcauthz.WithAuthorizer(authorizer),
 		grpcauthz.WithAlertSink(alertSink),
 	}
-	if cfg.PrincipalFunc != nil {
-		authzOpts = append(authzOpts, grpcauthz.WithPrincipalFunc(cfg.PrincipalFunc))
+	principalFn := cfg.PrincipalFunc
+	// When an Authenticator is configured, the token-verified principal it stashes
+	// is authoritative: default the authz PrincipalFunc to read it (unless the
+	// caller supplied their own PrincipalFunc explicitly).
+	if cfg.Authenticator != nil && principalFn == nil {
+		principalFn = authn.VerifiedPrincipal
+	}
+	if principalFn != nil {
+		authzOpts = append(authzOpts, grpcauthz.WithPrincipalFunc(principalFn))
 	}
 
 	// Interceptor chain — outermost first. FieldMaskUnary reads the live verb map
@@ -322,6 +346,15 @@ func New(cfg Config) (*Server, error) {
 		// handler chain so every persistence sentinel is still mapped before the
 		// client (incl. the etag/field-mask interceptors below).
 		middleware.ErrorMapperUnary(),
+	)
+	// WS-026: the authentication interceptor runs BEFORE authz — it verifies the
+	// bearer and stashes the verified principal (via middleware.WithPrincipal),
+	// which grpcauthz then reads through authn.VerifiedPrincipal. Inert when no
+	// Authenticator is configured.
+	if cfg.Authenticator != nil {
+		chain = append(chain, authn.UnaryServerInterceptor(cfg.Authenticator))
+	}
+	chain = append(chain,
 		grpcauthz.UnaryServerInterceptor("sdk", authzOpts...),
 	)
 	// P13: enforce declared per-method quotas immediately after authz (so the
