@@ -14,7 +14,7 @@ module github.com/infobloxopen/devedge-sdk/examples/graphql-federation
 go 1.25.5
 
 require (
-	github.com/infobloxopen/devedge-sdk v0.53.0
+	github.com/infobloxopen/devedge-sdk v0.54.0
 	github.com/infobloxopen/devedge-sdk/federationgql v0.45.0
 	github.com/infobloxopen/devedge-sdk/testdata/federation v0.0.0
 	google.golang.org/grpc v1.81.1
