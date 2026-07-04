@@ -102,15 +102,21 @@ type Config struct {
 	// ExpectedIssuer is the required `iss` — the app's identity in two-tier, the
 	// IdP's in single-issuer. Required (fail closed).
 	ExpectedIssuer string
-	// ExpectedAudience is the required `aud` member — this microservice's audience.
-	// Required (fail closed): NewAuthenticator errors when it is empty unless
-	// AllowAnyAudience is set. A verifier that accepts any audience will honor a
-	// token minted for a DIFFERENT service, so the default must not skip the check.
+	// ExpectedAudiences is the set of audiences this verifier accepts. A token
+	// validates when ANY of its `aud` values matches ANY audience in this set — so
+	// ONE audience can cover a whole app's services (the trust boundary IS the
+	// audience, WS-028), and a service that spans trust domains can accept several.
+	// At least one audience is required (fail closed) unless AllowAnyAudience is set.
+	ExpectedAudiences []string
+	// ExpectedAudience is a convenience alias for a single accepted audience: it is
+	// APPENDED to ExpectedAudiences. Prefer ExpectedAudiences for a multi-audience
+	// verifier; use this when there is exactly one.
 	ExpectedAudience string
-	// AllowAnyAudience opts OUT of the audience check — the ONLY way to leave
-	// ExpectedAudience empty. Reserve it for a single-issuer bootstrap where the
-	// issuer alone scopes the token; never set it on a service that shares an
-	// issuer with other audiences.
+	// AllowAnyAudience opts OUT of the audience check — the ONLY way to leave the
+	// audience set empty. Reserve it for a single-issuer bootstrap where the issuer
+	// alone scopes the token; never set it on a service that shares an issuer with
+	// other audiences. A verifier that accepts any audience will honor a token
+	// minted for a DIFFERENT audience, so the default must not skip the check.
 	AllowAnyAudience bool
 	// Leeway tolerates clock skew when validating exp/nbf. <=0 defaults to 30s.
 	Leeway time.Duration
@@ -120,15 +126,16 @@ type Config struct {
 // to an [authz.Principal]. It implements authn.Authenticator and is fail-closed:
 // a bad signature, wrong issuer/audience, or expired token returns an error.
 type Authenticator struct {
-	keys     KeySource
-	issuer   string
-	audience string
-	leeway   time.Duration
+	keys      KeySource
+	issuer    string
+	audiences []string
+	leeway    time.Duration
 }
 
 // NewAuthenticator constructs a verifier from cfg. It errors if the key source
-// or expected issuer is missing, or if the expected audience is empty without
-// AllowAnyAudience (fail-closed configuration).
+// or expected issuer is missing, or if the accepted-audience set is empty without
+// AllowAnyAudience (fail-closed configuration). ExpectedAudience is appended to
+// ExpectedAudiences, and duplicates are collapsed.
 func NewAuthenticator(cfg Config) (*Authenticator, error) {
 	if cfg.Keys == nil {
 		return nil, fmt.Errorf("oidc: Keys (KeySource) is required")
@@ -136,14 +143,33 @@ func NewAuthenticator(cfg Config) (*Authenticator, error) {
 	if cfg.ExpectedIssuer == "" {
 		return nil, fmt.Errorf("oidc: ExpectedIssuer is required (fail closed)")
 	}
-	if cfg.ExpectedAudience == "" && !cfg.AllowAnyAudience {
-		return nil, fmt.Errorf("oidc: ExpectedAudience is required (fail closed); set AllowAnyAudience to accept any audience (single-issuer bootstrap only)")
+	auds := dedupeNonEmpty(append(append([]string(nil), cfg.ExpectedAudiences...), cfg.ExpectedAudience))
+	if len(auds) == 0 && !cfg.AllowAnyAudience {
+		return nil, fmt.Errorf("oidc: at least one expected audience is required (fail closed); set ExpectedAudiences/ExpectedAudience, or AllowAnyAudience to accept any audience (single-issuer bootstrap only)")
 	}
 	lw := cfg.Leeway
 	if lw <= 0 {
 		lw = defaultLeeway
 	}
-	return &Authenticator{keys: cfg.Keys, issuer: cfg.ExpectedIssuer, audience: cfg.ExpectedAudience, leeway: lw}, nil
+	return &Authenticator{keys: cfg.Keys, issuer: cfg.ExpectedIssuer, audiences: auds, leeway: lw}, nil
+}
+
+// dedupeNonEmpty returns in's non-empty values with duplicates removed, order
+// preserved.
+func dedupeNonEmpty(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // Authenticate implements authn.Authenticator.
@@ -168,8 +194,10 @@ func (a *Authenticator) Authenticate(ctx context.Context, bearer string) (authz.
 	}
 
 	expected := jwt.Expected{Issuer: a.issuer, Time: time.Now()}
-	if a.audience != "" {
-		expected.AnyAudience = jwt.Audience{a.audience}
+	if len(a.audiences) > 0 {
+		// A non-empty intersection between the configured set and the token's `aud`
+		// validates: ANY of the token's audiences matches ANY configured audience.
+		expected.AnyAudience = jwt.Audience(a.audiences)
 	}
 	if err := std.ValidateWithLeeway(expected, a.leeway); err != nil {
 		return authz.Principal{}, fmt.Errorf("oidc: claim validation: %w", err)
