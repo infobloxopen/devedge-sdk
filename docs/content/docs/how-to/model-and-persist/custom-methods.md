@@ -242,6 +242,11 @@ takes the plain `Register<Service>` path, which serves any `<Service>Server`. Th
 at registration if neither is set. See [codegen → protoc-gen-svc](../../../reference/codegen/#protoc-gen-svc).
 {{< /callout >}}
 
+If your custom method calls a generated helper that lives on the **concrete** repository — for
+example `Verify<Field>` for a [verify-only credential](../../secure/secret-fields/#serving-verification-over-an-rpc) —
+hold that concrete `*<Resource>Repository` in your handler struct, not the
+`persistence.Repository[T, K]` interface, which does not expose it.
+
 ## 6. Point the host at the module
 
 The host in `cmd/cartd/main.go` builds what `Module` now needs. Open the ent client once, keep a
