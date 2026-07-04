@@ -10,5 +10,5 @@ go 1.25.5
 
 require (
 	github.com/graphql-go/graphql v0.8.1
-	github.com/infobloxopen/devedge-sdk v0.57.0
+	github.com/infobloxopen/devedge-sdk v0.58.0
 )
