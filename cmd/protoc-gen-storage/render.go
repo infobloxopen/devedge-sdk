@@ -1094,7 +1094,16 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		structInit += ", minter: minter"
 	}
 	ctorParams += ", opts ...persistence.RepoOption"
-	fmt.Fprintf(b, "// New%sRepository creates a repository backed by db.\n", msg.MessageName)
+	switch {
+	case msgHasSecrets && msgHasCredentials:
+		fmt.Fprintf(b, "// New%sRepository creates a repository backed by db, enc, and minter.\n", msg.MessageName)
+	case msgHasSecrets:
+		fmt.Fprintf(b, "// New%sRepository creates a repository backed by db and enc.\n", msg.MessageName)
+	case msgHasCredentials:
+		fmt.Fprintf(b, "// New%sRepository creates a repository backed by db and minter.\n", msg.MessageName)
+	default:
+		fmt.Fprintf(b, "// New%sRepository creates a repository backed by db.\n", msg.MessageName)
+	}
 	fmt.Fprintf(b, "func New%sRepository(%s) *%sRepository {\n", msg.MessageName, ctorParams, msg.MessageName)
 	fmt.Fprintf(b, "\tcfg := persistence.NewRepoConfig(%s, opts...)\n", idGenDefault)
 	fmt.Fprintf(b, "\treturn &%sRepository{%s, idGen: cfg.IDGenerator}\n}\n\n", msg.MessageName, structInit)

@@ -139,7 +139,7 @@ type APIKeyRepository struct {
 	idGen persistence.IDGenerator
 }
 
-// NewAPIKeyRepository creates a repository backed by db.
+// NewAPIKeyRepository creates a repository backed by db and enc.
 func NewAPIKeyRepository(db *gorm.DB, enc secret.Encryptor, opts ...persistence.RepoOption) *APIKeyRepository {
 	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
 	return &APIKeyRepository{db: db, enc: enc, idGen: cfg.IDGenerator}
@@ -1349,7 +1349,7 @@ type ServiceTokenRepository struct {
 	idGen  persistence.IDGenerator
 }
 
-// NewServiceTokenRepository creates a repository backed by db.
+// NewServiceTokenRepository creates a repository backed by db and minter.
 func NewServiceTokenRepository(db *gorm.DB, minter *secret.CredentialMinter, opts ...persistence.RepoOption) *ServiceTokenRepository {
 	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
 	return &ServiceTokenRepository{db: db, minter: minter, idGen: cfg.IDGenerator}
