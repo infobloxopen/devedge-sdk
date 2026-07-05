@@ -206,6 +206,94 @@ func TestCredential_GORM_NilMinterFailsLoud(t *testing.T) {
 	}
 }
 
+// ---- Remint (#187): rotate a credential in place ----
+
+// TestRemint_GORM_RotatesToken proves #187 on the GORM backend: RemintSecretValue
+// mints a fresh token, the OLD token stops verifying, the NEW one verifies to the
+// same record, and an unknown id returns ErrNotFound.
+func TestRemint_GORM_RotatesToken(t *testing.T) {
+	db, err := gorm.Open(openTestSQLite("file:remint_gorm?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Discard})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&apikeyv1.ServiceTokenModel{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+	ctx := context.Background()
+	repo := apikeyv1.NewServiceTokenRepository(db, &secret.CredentialMinter{Prefix: "st"})
+
+	created, err := repo.Create(ctx, &apikeyv1.ServiceToken{Id: "st-1", Label: "ci"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	old := created.SecretValue
+	if _, ok, _ := repo.VerifySecretValue(ctx, old); !ok {
+		t.Fatal("freshly created token should verify")
+	}
+
+	newTok, err := repo.RemintSecretValue(ctx, "st-1")
+	if err != nil {
+		t.Fatalf("remint: %v", err)
+	}
+	if newTok == "" || newTok == old {
+		t.Fatalf("remint returned an empty or unchanged token: %q (old %q)", newTok, old)
+	}
+	if !strings.HasPrefix(newTok, "st_") {
+		t.Errorf("reminted token %q lacks the configured prefix st_", newTok)
+	}
+	// The OLD token no longer verifies; the NEW token verifies to the same record —
+	// the id/label/relationships are preserved (rotation, not delete+recreate).
+	if _, ok, _ := repo.VerifySecretValue(ctx, old); ok {
+		t.Error("the OLD token still verifies after remint — rotation must invalidate it")
+	}
+	rec, ok, err := repo.VerifySecretValue(ctx, newTok)
+	if err != nil || !ok {
+		t.Fatalf("verify (reminted): ok=%v err=%v", ok, err)
+	}
+	if rec.GetId() != "st-1" || rec.GetLabel() != "ci" {
+		t.Errorf("reminted record changed identity: %+v", rec)
+	}
+	// Unknown id → ErrNotFound (no row rotated).
+	if _, err := repo.RemintSecretValue(ctx, "nope"); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint unknown id = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRemint_Ent_RotatesToken proves #187 on the ent backend via the generated
+// RemintSecretValue package helper.
+func TestRemint_Ent_RotatesToken(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:remint_ent?mode=memory&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+
+	ctx := context.Background()
+	minter := &secret.CredentialMinter{Prefix: "st"}
+	repo := apikeyv1.NewServiceTokenEntRepository(client, minter)
+
+	created, err := repo.Create(ctx, &apikeyv1.ServiceToken{Id: "st-1", Label: "ci"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	old := created.SecretValue
+
+	newTok, err := apikeyv1.RemintSecretValue(ctx, client, minter, "st-1")
+	if err != nil {
+		t.Fatalf("remint: %v", err)
+	}
+	if newTok == "" || newTok == old {
+		t.Fatalf("remint returned an empty or unchanged token: %q (old %q)", newTok, old)
+	}
+	if _, ok, _ := apikeyv1.VerifySecretValue(ctx, client, old); ok {
+		t.Error("the OLD token still verifies after remint")
+	}
+	rec, ok, err := apikeyv1.VerifySecretValue(ctx, client, newTok)
+	if err != nil || !ok || rec.GetId() != "st-1" {
+		t.Fatalf("verify (reminted): ok=%v err=%v rec=%+v", ok, err, rec)
+	}
+	if _, err := apikeyv1.RemintSecretValue(ctx, client, minter, "nope"); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint unknown id = %v, want ErrNotFound", err)
+	}
+}
+
 // ---- helpers ----
 
 // tamper flips the last character of a token's secret so verification fails while

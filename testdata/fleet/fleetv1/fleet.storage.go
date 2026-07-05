@@ -343,6 +343,30 @@ func (r *FleetRepository) Undelete(ctx context.Context, key string) (*Fleet, err
 	return r.Get(ctx, key)
 }
 
+// GetByDisplayName looks up the Fleet by its unique display_name value. Tenant-scoped and excludes
+// soft-deleted rows. Returns ErrNotFound when no record matches.
+func (r *FleetRepository) GetByDisplayName(ctx context.Context, value string) (*Fleet, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Fleet: no tenant on a tenant-scoped get by display_name")
+	}
+	q := r.conn(ctx).Where("display_name = ?", value)
+	if !middleware.IsSystemContext(ctx) {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	var m FleetModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get fleet by display_name: %w", err)
+	}
+	return fromModel_Fleet(&m), nil
+}
+
 func (r *FleetRepository) BatchGet(ctx context.Context, keys []string) ([]*Fleet, error) {
 	if len(keys) == 0 {
 		return []*Fleet{}, nil
@@ -736,6 +760,30 @@ func (r *VehicleRepository) Delete(ctx context.Context, key string) error {
 
 func (r *VehicleRepository) Undelete(_ context.Context, _ string) (*Vehicle, error) {
 	return nil, persistence.ErrNotFound
+}
+
+// GetByVin looks up the Vehicle by its unique vin value. Tenant-scoped and excludes
+// soft-deleted rows. Returns ErrNotFound when no record matches.
+func (r *VehicleRepository) GetByVin(ctx context.Context, value string) (*Vehicle, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Vehicle: no tenant on a tenant-scoped get by vin")
+	}
+	q := r.conn(ctx).Where("vin = ?", value)
+	if !middleware.IsSystemContext(ctx) {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	var m VehicleModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get vehicle by vin: %w", err)
+	}
+	return fromModel_Vehicle(&m), nil
 }
 
 func (r *VehicleRepository) BatchGet(ctx context.Context, keys []string) ([]*Vehicle, error) {

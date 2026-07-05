@@ -1784,6 +1784,88 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		fmt.Fprintf(&b, "\treturn fromEnt%s(e), true, nil\n}\n", res)
 	}
 
+	// ---- Remint<Field> helpers (#187) ----
+	// Rotate a leaked/expiring credential in place without deleting the record. The
+	// caller supplies the same minter used at Create; a fresh token is minted, the
+	// four credential columns are overwritten, and the new token is returned once.
+	// TENANT-scoped when the resource is tenant-scoped (a caller may only rotate a
+	// record in its own tenant), unlike Verify's global public_id resolution.
+	// Emitted on the OWNER only (a surface projection reuses the owner's table, so
+	// a package-level helper would collide with the owner's).
+	for _, f := range credentials {
+		if msg.isSurface() {
+			break
+		}
+		setName := entSetterGoName(f.SnakeName)
+		pubSetter := entSetterGoName(f.SnakeName + "_public_id")
+		saltSetter := entSetterGoName(f.SnakeName + "_salt")
+		hashSetter := entSetterGoName(f.SnakeName + "_hash")
+		specSetter := entSetterGoName(f.SnakeName + "_hashspec")
+		fmt.Fprintf(&b, "\n// Remint%s rotates the %s credential for the record keyed by id: it mints a\n", setName, f.SnakeName)
+		b.WriteString("// fresh token, overwrites the record's four credential columns\n")
+		b.WriteString("// (public_id/salt/hash/hashspec), and returns the NEW token once. The previous\n")
+		b.WriteString("// token stops verifying immediately. Tenant-scoped; returns ErrNotFound when no\n")
+		b.WriteString("// such record exists in the caller's tenant, and ErrNoMinter when minter is nil.\n")
+		fmt.Fprintf(&b, "func Remint%s(ctx context.Context, client *ent.Client, minter *secret.CredentialMinter, id string) (string, error) {\n", setName)
+		fmt.Fprintf(&b, "\tif minter == nil {\n\t\treturn \"\", fmt.Errorf(\"credential field %%q set but no minter configured: %%w\", %q, persistence.ErrNoMinter)\n\t}\n", f.SnakeName)
+		if f.CredentialPrefix != "" {
+			fmt.Fprintf(&b, "\tm := *minter\n\tm.Prefix = %q\n", f.CredentialPrefix)
+			b.WriteString("\ttok, cred, merr := m.Mint()\n")
+		} else {
+			b.WriteString("\ttok, cred, merr := minter.Mint()\n")
+		}
+		fmt.Fprintf(&b, "\tif merr != nil {\n\t\treturn \"\", fmt.Errorf(\"mint %s: %%w\", merr)\n\t}\n", f.SnakeName)
+		fmt.Fprintf(&b, "\tu := client.%s.Update().Where(ent%s.ID(id))\n", model, lower)
+		if ownerTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\tif tenantID == \"\" {\n\t\t\treturn \"\", status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped remint\")\n\t\t}\n", lower)
+			fmt.Fprintf(&b, "\t\tu = u.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t}\n")
+		}
+		fmt.Fprintf(&b, "\tn, err := u.Set%s(cred.PublicID).Set%s(cred.Salt).Set%s(cred.Hash).Set%s(cred.Spec.Algo).Save(ctx)\n", pubSetter, saltSetter, hashSetter, specSetter)
+		fmt.Fprintf(&b, "\tif err != nil {\n\t\treturn \"\", fmt.Errorf(\"remint %s: %%w\", err)\n\t}\n", f.SnakeName)
+		b.WriteString("\tif n == 0 {\n\t\treturn \"\", persistence.ErrNotFound\n\t}\n")
+		b.WriteString("\treturn tok, nil\n}\n")
+	}
+
+	// ---- GetBy<Field> helpers (#173) ----
+	// A natural-key lookup for a plain unique STRING field, symmetric with
+	// LookupBy<Secret>Hash — so "resolve by unique value" needs no hand-formatted
+	// AIP-160 filter string. Tenant-scoped when the resource is; ent's default query
+	// scope already excludes soft-deleted rows.
+	for _, f := range msg.Fields {
+		if msg.isSurface() {
+			break
+		}
+		if !f.Unique || f.IsID || f.IsSecret || f.IsCredential || f.IsMessage || f.IsRepeated {
+			continue
+		}
+		if f.EntType != "String" || len(f.UniqueWith) > 0 {
+			continue
+		}
+		pred := entSetterGoName(f.SnakeName)
+		// Resource-qualified name: unlike the GORM method (whose receiver already
+		// scopes it), this is a PACKAGE function, and two resources in one proto can
+		// share a unique field name (e.g. display_name), so Get<Resource>By<Field>
+		// keeps them from colliding in the generated package.
+		fmt.Fprintf(&b, "\n// Get%sBy%s looks up the %s by its unique %s value. Tenant-scoped; excludes\n", res, pred, res, f.SnakeName)
+		b.WriteString("// soft-deleted rows. Returns persistence.ErrNotFound when no record matches.\n")
+		fmt.Fprintf(&b, "func Get%sBy%s(ctx context.Context, client *ent.Client, value string) (*%s, error) {\n", res, pred, res)
+		b.WriteString("\tif value == \"\" {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
+		fmt.Fprintf(&b, "\tq := client.%s.Query().Where(ent%s.%s(value))\n", model, lower, pred)
+		if ownerTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n")
+			fmt.Fprintf(&b, "\t\tif tenantID == \"\" {\n\t\t\treturn nil, status.Error(codes.PermissionDenied, \"%s: no tenant on a tenant-scoped get\")\n\t\t}\n", lower)
+			fmt.Fprintf(&b, "\t\tq = q.Where(ent%s.AccountID(tenantID))\n", lower)
+			b.WriteString("\t}\n")
+		}
+		b.WriteString("\te, err := q.Only(ctx)\n")
+		b.WriteString("\tif err != nil {\n\t\tif ent.IsNotFound(err) {\n\t\t\treturn nil, persistence.ErrNotFound\n\t\t}\n\t\treturn nil, err\n\t}\n")
+		fmt.Fprintf(&b, "\treturn fromEnt%s(e), nil\n}\n", res)
+	}
+
 	// ---- F031 aggregate graph-load primitive (D-2 option a) ----
 	// For an aggregate ROOT that owns members via containment edges, emit
 	// Load<Root>Aggregate: eager-load the root with its declared containment edges

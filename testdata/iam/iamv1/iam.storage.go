@@ -267,6 +267,23 @@ func (r *AccountRepository) Undelete(_ context.Context, _ string) (*Account, err
 	return nil, persistence.ErrNotFound
 }
 
+// GetByDisplayName looks up the Account by its unique display_name value. Tenant-scoped and excludes
+// soft-deleted rows. Returns ErrNotFound when no record matches.
+func (r *AccountRepository) GetByDisplayName(ctx context.Context, value string) (*Account, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := r.conn(ctx).Where("display_name = ?", value)
+	var m AccountModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get account by display_name: %w", err)
+	}
+	return fromModel_Account(&m), nil
+}
+
 func (r *AccountRepository) BatchGet(ctx context.Context, keys []string) ([]*Account, error) {
 	if len(keys) == 0 {
 		return []*Account{}, nil
@@ -650,6 +667,30 @@ func (r *UserRepository) Delete(ctx context.Context, key string) error {
 
 func (r *UserRepository) Undelete(_ context.Context, _ string) (*User, error) {
 	return nil, persistence.ErrNotFound
+}
+
+// GetByEmail looks up the User by its unique email value. Tenant-scoped and excludes
+// soft-deleted rows. Returns ErrNotFound when no record matches.
+func (r *UserRepository) GetByEmail(ctx context.Context, value string) (*User, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "User: no tenant on a tenant-scoped get by email")
+	}
+	q := r.conn(ctx).Where("email = ?", value)
+	if !middleware.IsSystemContext(ctx) {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	var m UserModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get user by email: %w", err)
+	}
+	return fromModel_User(&m), nil
 }
 
 func (r *UserRepository) BatchGet(ctx context.Context, keys []string) ([]*User, error) {
@@ -1045,6 +1086,30 @@ func (r *GroupRepository) Delete(ctx context.Context, key string) error {
 
 func (r *GroupRepository) Undelete(_ context.Context, _ string) (*Group, error) {
 	return nil, persistence.ErrNotFound
+}
+
+// GetByDisplayName looks up the Group by its unique display_name value. Tenant-scoped and excludes
+// soft-deleted rows. Returns ErrNotFound when no record matches.
+func (r *GroupRepository) GetByDisplayName(ctx context.Context, value string) (*Group, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) && tenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "Group: no tenant on a tenant-scoped get by display_name")
+	}
+	q := r.conn(ctx).Where("display_name = ?", value)
+	if !middleware.IsSystemContext(ctx) {
+		q = q.Where("account_id = ?", tenantID)
+	}
+	var m GroupModel
+	if err := q.First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get group by display_name: %w", err)
+	}
+	return fromModel_Group(&m), nil
 }
 
 func (r *GroupRepository) BatchGet(ctx context.Context, keys []string) ([]*Group, error) {

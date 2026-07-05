@@ -191,3 +191,27 @@ func fromEntVehicle(e *ent.Vehicle) *Vehicle {
 	}
 	return p
 }
+
+// GetVehicleByVin looks up the Vehicle by its unique vin value. Tenant-scoped; excludes
+// soft-deleted rows. Returns persistence.ErrNotFound when no record matches.
+func GetVehicleByVin(ctx context.Context, client *ent.Client, value string) (*Vehicle, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := client.Vehicle.Query().Where(entvehicle.Vin(value))
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) {
+		if tenantID == "" {
+			return nil, status.Error(codes.PermissionDenied, "vehicle: no tenant on a tenant-scoped get")
+		}
+		q = q.Where(entvehicle.AccountID(tenantID))
+	}
+	e, err := q.Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, err
+	}
+	return fromEntVehicle(e), nil
+}
