@@ -156,6 +156,12 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "openapiv2to3: unmarshal for yaml: %v\n", err)
 		return 1
 	}
+	// Normalise literal tabs in string values to spaces. Brownfield swagger
+	// descriptions (atlas collection-operator boilerplate, leaked proto-comment
+	// indentation) frequently carry raw tab characters; yaml.v3 emits those as
+	// block scalars that other YAML parsers (spectral's JS-YAML, PyYAML) refuse
+	// to parse, which would break `apx lint`/`finalize` on the emitted spec.
+	raw = sanitizeTabs(raw)
 	yamlBytes, err := yaml.Marshal(raw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openapiv2to3: yaml marshal: %v\n", err)
@@ -190,4 +196,30 @@ func run(args []string) int {
 		fmt.Printf("openapiv2to3: wrote %s\n", covPath)
 	}
 	return 0
+}
+
+// sanitizeTabs recursively replaces literal tab characters in every string
+// value with a single space. Tabs are legal inside YAML scalar content per the
+// spec, but yaml.v3 renders a multi-line string that contains them as a block
+// scalar whose tab-bearing lines other YAML parsers (spectral's JS-YAML,
+// PyYAML) reject — so an emitted spec would fail `apx lint`/`finalize`. Tabs in
+// OpenAPI descriptions are always cosmetic (proto-comment indentation, boilerplate
+// trailing whitespace), so normalising them to spaces is loss-free for the API.
+func sanitizeTabs(v any) any {
+	switch t := v.(type) {
+	case string:
+		return strings.ReplaceAll(t, "\t", " ")
+	case map[string]any:
+		for k, val := range t {
+			t[k] = sanitizeTabs(val)
+		}
+		return t
+	case []any:
+		for i, val := range t {
+			t[i] = sanitizeTabs(val)
+		}
+		return t
+	default:
+		return v
+	}
 }
