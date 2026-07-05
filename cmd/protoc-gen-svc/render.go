@@ -160,6 +160,32 @@ type methodInfo struct {
 	// BatchItemsField is the Go field name of the repeated-resource field on a
 	// BatchGet response (e.g. "Regions"), set only for stdBatchGet methods.
 	BatchItemsField string
+	// Parent is the nested-resource parent scope (#191): when a Get/List/Delete's
+	// AIP-122 URL nests the resource under a parent segment (e.g.
+	// accounts/{ledger_account_id}/entries/{id}), the generated handler must
+	// enforce that parent, not just address by the resource key. It is nil for a
+	// non-nested method. A nested method whose parent segment resolves to no
+	// resource foreign-key field is a fail-loud codegen error (never bound-and-
+	// ignored), surfaced in main.go before this is set.
+	Parent *parentScope
+}
+
+// parentScope describes the enforcement of a nested AIP-122 URL parent segment on
+// a Get/List/Delete method (#191). The parent segment binds a request field (a
+// foreign key), and the managed resource carries a matching scalar FK field. The
+// generated handler filters List by the FK and denies a Get/Delete whose fetched
+// resource belongs to a different parent than the URL names.
+type parentScope struct {
+	// ReqGetter is the Go getter for the parent value on the REQUEST, e.g.
+	// "GetLedgerAccountId".
+	ReqGetter string
+	// ResGetter is the Go getter for the foreign key on the RESOURCE, e.g.
+	// "GetLedgerAccountId".
+	ResGetter string
+	// FKField is the proto field name of the resource's foreign key, e.g.
+	// "ledger_account_id" — used to build the AIP-160 List scope filter (the
+	// repository maps the proto field name to its DB column).
+	FKField string
 }
 
 // isBatchWrite reports whether the method is an AIP-137 batch WRITE
@@ -218,6 +244,7 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	needStatus := false
 	needServicekit := false
 	needReference := false
+	needFmt := false
 	for _, svc := range services {
 		if svc.hasStdMethods() {
 			needPersistence = true
@@ -238,6 +265,20 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 			// The emitted <Svc>References table is []reference.Reference (F041).
 			needReference = true
 		}
+		for _, m := range svc.Methods {
+			if m.Parent == nil {
+				continue
+			}
+			// #191: a nested Get/Delete denies cross-parent access with
+			// status.Errorf(codes.NotFound, ...); a nested List builds its scope
+			// filter with fmt.Sprintf.
+			switch m.Std {
+			case stdGet, stdDelete:
+				needStatus = true
+			case stdList:
+				needFmt = true
+			}
+		}
 	}
 
 	b.WriteString("import (\n")
@@ -245,6 +286,10 @@ func renderSvcFile(pkgName, _ string, services []serviceInfo) string {
 	if needServicekit {
 		// The Module's Register guards a missing Repo/Handler with errors.New.
 		b.WriteString("\t\"errors\"\n")
+	}
+	if needFmt {
+		// A nested List (#191) builds its parent-scope filter with fmt.Sprintf.
+		b.WriteString("\t\"fmt\"\n")
 	}
 	b.WriteString("\n")
 	b.WriteString("\t\"github.com/grpc-ecosystem/grpc-gateway/v2/runtime\"\n")
@@ -439,15 +484,43 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
 				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
 			renderKeyResolve(b, m, res)
-			b.WriteString("\treturn h.Repo.Get(ctx, key)\n")
+			if m.Parent != nil {
+				// #191: a nested resource is addressed under a parent; the fetched
+				// resource must belong to that parent, else it is addressed at the
+				// wrong URL. Deny cross-parent access with NotFound (AIP-correct: the
+				// resource does not exist at the requested address, and existence under
+				// another parent is not leaked).
+				b.WriteString("\tgot, err := h.Repo.Get(ctx, key)\n")
+				b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+				renderParentGuard(b, res, m.Parent)
+				b.WriteString("\treturn got, nil\n")
+			} else {
+				b.WriteString("\treturn h.Repo.Get(ctx, key)\n")
+			}
 			b.WriteString("}\n\n")
 		case stdList:
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
 				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
+			if m.Parent != nil {
+				// #191: scope the list to the parent named in the URL. The scope is an
+				// AIP-160 equality on the resource's foreign key, pushed down through
+				// ListOptions.Filter (the repository binds the value — never SQL
+				// interpolation). A caller-supplied filter is AND-combined so a nested
+				// List cannot widen past its parent.
+				fmt.Fprintf(b, "\tscope := fmt.Sprintf(\"%s = %%q\", req.%s())\n", m.Parent.FKField, m.Parent.ReqGetter)
+				if m.ListHasFilter {
+					b.WriteString("\tif f := req.GetFilter(); f != \"\" {\n")
+					b.WriteString("\t\tscope = scope + \" AND (\" + f + \")\"\n")
+					b.WriteString("\t}\n")
+				}
+			}
 			b.WriteString("\titems, next, err := h.Repo.List(ctx, persistence.ListOptions{\n")
 			b.WriteString("\t\tPageSize:  int(req.GetPageSize()),\n")
 			b.WriteString("\t\tPageToken: req.GetPageToken(),\n")
-			if m.ListHasFilter {
+			switch {
+			case m.Parent != nil:
+				b.WriteString("\t\tFilter: scope,\n")
+			case m.ListHasFilter:
 				b.WriteString("\t\tFilter: req.GetFilter(),\n")
 			}
 			if m.ListHasOrderBy {
@@ -473,6 +546,14 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 			fmt.Fprintf(b, "func (h *%sCRUDHandler) %s(ctx context.Context, req *%s) (*%s, error) {\n",
 				svc.ServiceName, m.Name, m.InputGoIdent, m.OutputGoIdent)
 			renderKeyResolve(b, m, res)
+			if m.Parent != nil {
+				// #191: verify the target belongs to the parent named in the URL before
+				// deleting, so a cross-parent Delete is denied (NotFound) rather than
+				// removing another parent's resource.
+				b.WriteString("\tgot, err := h.Repo.Get(ctx, key)\n")
+				b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+				renderParentGuard(b, res, m.Parent)
+			}
 			b.WriteString("\tif err := h.Repo.Delete(ctx, key); err != nil {\n\t\treturn nil, err\n\t}\n")
 			fmt.Fprintf(b, "\treturn &%s{}, nil\n", m.OutputGoIdent)
 			b.WriteString("}\n\n")
@@ -507,6 +588,16 @@ func renderKeyResolve(b *strings.Builder, m methodInfo, res string) {
 		return
 	}
 	b.WriteString("\tkey := req.GetId()\n")
+}
+
+// renderParentGuard emits the cross-parent denial for a nested Get/Delete (#191):
+// the fetched resource (bound to `got`) must carry the same foreign-key value as
+// the parent segment in the request, else it is addressed under the wrong parent
+// and NotFound is returned. Assumes `got` and `err` are already in scope.
+func renderParentGuard(b *strings.Builder, res string, p *parentScope) {
+	fmt.Fprintf(b, "\tif got.%s() != req.%s() {\n", p.ResGetter, p.ReqGetter)
+	fmt.Fprintf(b, "\t\treturn nil, status.Errorf(codes.NotFound, \"%s not found under the requested parent\")\n", res)
+	b.WriteString("\t}\n")
 }
 
 // renderHandlerConstructors emits New<Svc>Handler (returns the default handler so
@@ -562,6 +653,18 @@ func renderModule(b *strings.Builder, svc serviceInfo) {
 	b.WriteString("\t// unless Handler is set.\n")
 	fmt.Fprintf(b, "\tRepo persistence.%s[*%s, string]\n", svc.repoInterface(), res)
 	b.WriteString("\n")
+	// ID override (#190): the Descriptor's module ID defaults to the proto package
+	// short-name, which is SHARED by every service declared in one proto file. Two
+	// or more such services handed to servicekit.Run collide ("duplicate module
+	// ID"). Set ID to a distinct value per service to host them together; leave it
+	// empty for the package-derived default (the common single-service case).
+	fmt.Fprintf(b, "\t// ID overrides the servicekit module ID this module reports in its\n")
+	fmt.Fprintf(b, "\t// Descriptor. When empty, the ID defaults to %q (the proto package\n", svc.moduleID())
+	b.WriteString("\t// short-name). Set a distinct ID per service when hosting two or more\n")
+	b.WriteString("\t// services from the SAME proto file together, so their module IDs (and the\n")
+	b.WriteString("\t// module-qualified resource names) do not collide at servicekit.Run.\n")
+	b.WriteString("\tID string\n")
+	b.WriteString("\n")
 	b.WriteString("\t// Handler is an OPTIONAL override: when set, the module registers it (via\n")
 	fmt.Fprintf(b, "\t// Register%s) instead of constructing the default CRUD handler over Repo.\n", svc.ServiceName)
 	b.WriteString("\t// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated\n")
@@ -588,8 +691,13 @@ func renderModule(b *strings.Builder, svc serviceInfo) {
 	// Descriptor().
 	fmt.Fprintf(b, "// Descriptor implements servicekit.Module: the static proto facts for %s.\n", svc.ServiceName)
 	fmt.Fprintf(b, "func (m *%s) Descriptor() servicekit.Descriptor {\n", typ)
+	// The effective module ID: opts.ID when set, else the proto-package default
+	// (#190). The module-qualified resource name uses the SAME effective ID so
+	// distinct-ID co-resident services also get distinct resource qualifiers.
+	fmt.Fprintf(b, "\tid := m.opts.ID\n")
+	fmt.Fprintf(b, "\tif id == \"\" {\n\t\tid = %q\n\t}\n", svc.moduleID())
 	b.WriteString("\treturn servicekit.Descriptor{\n")
-	fmt.Fprintf(b, "\t\tID: %q,\n", svc.moduleID())
+	b.WriteString("\t\tID: id,\n")
 	b.WriteString("\t\tMethods: []string{\n")
 	for _, mth := range svc.Methods {
 		fmt.Fprintf(b, "\t\t\t%s_%s_FullMethodName,\n", svc.ServiceName, mth.Name)
@@ -600,7 +708,7 @@ func renderModule(b *strings.Builder, svc serviceInfo) {
 	fmt.Fprintf(b, "\t\tAuthzRules: %sAuthzRules,\n", svc.ServiceName)
 	// Resources: the module-qualified resource name (module-qualified so two
 	// co-resident modules never collide on a bare resource name, §5.7).
-	fmt.Fprintf(b, "\t\tResources: []servicekit.ResourceDescriptor{{Name: %q}},\n", svc.moduleID()+"."+snakeIdent(res))
+	fmt.Fprintf(b, "\t\tResources: []servicekit.ResourceDescriptor{{Name: id + %q}},\n", "."+snakeIdent(res))
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
 

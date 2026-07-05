@@ -1174,6 +1174,7 @@ func (x *ListMembershipsResponse) GetNextPageToken() string {
 type GetApiKeyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1215,10 +1216,18 @@ func (x *GetApiKeyRequest) GetId() string {
 	return ""
 }
 
+func (x *GetApiKeyRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
 type ListApiKeysRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PageSize      int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	PageToken     string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1263,6 +1272,13 @@ func (x *ListApiKeysRequest) GetPageSize() int32 {
 func (x *ListApiKeysRequest) GetPageToken() string {
 	if x != nil {
 		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListApiKeysRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
 	}
 	return ""
 }
@@ -1452,13 +1468,15 @@ const file_iam_proto_rawDesc = "" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\"w\n" +
 	"\x17ListMembershipsResponse\x124\n" +
 	"\vmemberships\x18\x01 \x03(\v2\x12.iam.v1.MembershipR\vmemberships\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\"\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\";\n" +
 	"\x10GetApiKeyRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"P\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\"i\n" +
 	"\x12ListApiKeysRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x02 \x01(\tR\tpageToken\"h\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\"h\n" +
 	"\x13ListApiKeysResponse\x12)\n" +
 	"\bapi_keys\x18\x01 \x03(\v2\x0e.iam.v1.ApiKeyR\aapiKeys\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\">\n" +
@@ -1494,12 +1512,12 @@ const file_iam_proto_rawDesc = "" +
 	"\rGetMembership\x12\x1c.iam.v1.GetMembershipRequest\x1a\x12.iam.v1.Membership\"2\x8a\xb5\x18\x12\n" +
 	"\x03get\x12\vmemberships\x82\xd3\xe4\x93\x02\x16\x12\x14/v1/memberships/{id}\x12\x82\x01\n" +
 	"\x0fListMemberships\x12\x1e.iam.v1.ListMembershipsRequest\x1a\x1f.iam.v1.ListMembershipsResponse\".\x8a\xb5\x18\x13\n" +
-	"\x04list\x12\vmemberships\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/memberships2\xd5\x02\n" +
-	"\rApiKeyService\x12b\n" +
-	"\tGetApiKey\x12\x18.iam.v1.GetApiKeyRequest\x1a\x0e.iam.v1.ApiKey\"+\x8a\xb5\x18\x0f\n" +
-	"\x03get\x12\bapi_keys\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/apikeys/{id}\x12o\n" +
-	"\vListApiKeys\x12\x1a.iam.v1.ListApiKeysRequest\x1a\x1b.iam.v1.ListApiKeysResponse\"'\x8a\xb5\x18\x10\n" +
-	"\x04list\x12\bapi_keys\x82\xd3\xe4\x93\x02\r\x12\v/v1/apikeys\x12o\n" +
+	"\x04list\x12\vmemberships\x82\xd3\xe4\x93\x02\x11\x12\x0f/v1/memberships2\xf5\x02\n" +
+	"\rApiKeyService\x12r\n" +
+	"\tGetApiKey\x12\x18.iam.v1.GetApiKeyRequest\x1a\x0e.iam.v1.ApiKey\";\x8a\xb5\x18\x0f\n" +
+	"\x03get\x12\bapi_keys\x82\xd3\xe4\x93\x02\"\x12 /v1/users/{user_id}/apikeys/{id}\x12\x7f\n" +
+	"\vListApiKeys\x12\x1a.iam.v1.ListApiKeysRequest\x1a\x1b.iam.v1.ListApiKeysResponse\"7\x8a\xb5\x18\x10\n" +
+	"\x04list\x12\bapi_keys\x82\xd3\xe4\x93\x02\x1d\x12\x1b/v1/users/{user_id}/apikeys\x12o\n" +
 	"\fCreateApiKey\x12\x1b.iam.v1.CreateApiKeyRequest\x1a\x0e.iam.v1.ApiKey\"2\x8a\xb5\x18\x12\n" +
 	"\x06create\x12\bapi_keys\x82\xd3\xe4\x93\x02\x16:\aapi_key\"\v/v1/apikeysB>Z<github.com/infobloxopen/devedge-sdk/testdata/iam/iamv1;iamv1b\x06proto3"
 

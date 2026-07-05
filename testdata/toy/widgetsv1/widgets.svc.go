@@ -159,6 +159,13 @@ type WidgetServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.BatchRepository[*Widget, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "toy" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterWidgetService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -182,8 +189,12 @@ type widgetServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for WidgetService.
 func (m *widgetServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "toy"
+	}
 	return servicekit.Descriptor{
-		ID: "toy",
+		ID: id,
 		Methods: []string{
 			WidgetService_CreateWidget_FullMethodName,
 			WidgetService_GetWidget_FullMethodName,
@@ -199,7 +210,7 @@ func (m *widgetServiceModule) Descriptor() servicekit.Descriptor {
 			WidgetService_CancelWidgetOperation_FullMethodName,
 		},
 		AuthzRules: WidgetServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "toy.widget"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".widget"}},
 	}
 }
 

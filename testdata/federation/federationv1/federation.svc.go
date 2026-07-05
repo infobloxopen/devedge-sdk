@@ -99,6 +99,13 @@ type RegionServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.BatchRepository[*Region, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "federation" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterRegionService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -122,8 +129,12 @@ type regionServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for RegionService.
 func (m *regionServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "federation"
+	}
 	return servicekit.Descriptor{
-		ID: "federation",
+		ID: id,
 		Methods: []string{
 			RegionService_CreateRegion_FullMethodName,
 			RegionService_GetRegion_FullMethodName,
@@ -131,7 +142,7 @@ func (m *regionServiceModule) Descriptor() servicekit.Descriptor {
 			RegionService_BatchGetRegions_FullMethodName,
 		},
 		AuthzRules: RegionServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "federation.region"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".region"}},
 	}
 }
 
@@ -236,6 +247,13 @@ type AssetServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*Asset, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "federation" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterAssetService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -259,15 +277,19 @@ type assetServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for AssetService.
 func (m *assetServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "federation"
+	}
 	return servicekit.Descriptor{
-		ID: "federation",
+		ID: id,
 		Methods: []string{
 			AssetService_CreateAsset_FullMethodName,
 			AssetService_GetAsset_FullMethodName,
 			AssetService_ListAssets_FullMethodName,
 		},
 		AuthzRules: AssetServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "federation.asset"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".asset"}},
 	}
 }
 

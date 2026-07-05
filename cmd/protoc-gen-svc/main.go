@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -128,6 +129,18 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 			if mi.Std == stdBatchGet {
 				mi.BatchIDsField = batchIDsField(m)
 				mi.BatchItemsField = listItemsField(m, svc.Resource)
+			}
+			// #191: a nested AIP-122 URL (e.g. accounts/{ledger_account_id}/entries/
+			// {id}) binds a parent segment the generated Get/List/Delete must ENFORCE,
+			// not merely address around. Resolve the parent foreign key; a nested
+			// pattern with no resolvable FK is a fail-loud codegen error.
+			if mi.Std == stdGet || mi.Std == stdList || mi.Std == stdDelete {
+				ps, perr := detectParentScope(m, msgByName[svc.Resource])
+				if perr != nil {
+					gen.Error(perr)
+					return
+				}
+				mi.Parent = ps
 			}
 			svc.Methods = append(svc.Methods, mi)
 		}
@@ -362,6 +375,136 @@ func resourceReferences(m *protogen.Message, facts map[string]resourceFacts) ([]
 		})
 	}
 	return out, nil
+}
+
+// detectParentScope resolves the nested-resource parent scope a Get/List/Delete
+// must enforce (#191). It reads the method's google.api.http path template: any
+// path variable that is a single-segment field OTHER than the resource key
+// ("id"/"name") is a parent segment (e.g. {ledger_account_id} in
+// accounts/{ledger_account_id}/entries/{id}). The immediate parent (closest to
+// the resource) must map to a scalar string foreign-key field on BOTH the request
+// and the managed resource; the handler then filters List by it and denies a
+// cross-parent Get/Delete.
+//
+// Fail-loud contract: a method whose URL nests under a parent segment but whose
+// resource declares no matching scalar FK field is a codegen ERROR — the parent
+// would otherwise be bound by the gateway and silently ignored (the #191 bug).
+// Returns (nil, nil) for a non-nested method.
+func detectParentScope(m *protogen.Method, resource *protogen.Message) (*parentScope, error) {
+	fieldName, nested := parentSegment(httpRulePath(m))
+	if !nested {
+		return nil, nil
+	}
+	if resource == nil {
+		return nil, fmt.Errorf("protoc-gen-svc: %s: URL nests under parent segment {%s} but the service manages no resolvable resource to scope by (#191)", m.GoName, fieldName)
+	}
+	resGetter := scalarStringGetter(resource, fieldName)
+	if resGetter == "" {
+		return nil, fmt.Errorf("protoc-gen-svc: %s.%s: URL nests under parent segment {%s}, but %s has no matching scalar string foreign-key field — the generated handler cannot enforce the parent and refuses to bind-and-ignore it (#191). Add a scalar string %q field to the resource (e.g. via belongs_to) or flatten the URL.",
+			resource.GoIdent.GoName, m.GoName, fieldName, resource.GoIdent.GoName, fieldName)
+	}
+	reqGetter := scalarStringGetter(m.Input, fieldName)
+	if reqGetter == "" {
+		return nil, fmt.Errorf("protoc-gen-svc: %s.%s: URL nests under parent segment {%s}, but request %s has no scalar string field bound to it (#191)",
+			resource.GoIdent.GoName, m.GoName, fieldName, m.Input.GoIdent.GoName)
+	}
+	return &parentScope{ReqGetter: reqGetter, ResGetter: resGetter, FKField: fieldName}, nil
+}
+
+// parentSegment reports the immediate nested-resource parent segment of an
+// AIP/gRPC-gateway URL template and whether the URL nests at all. A parent segment
+// is a single-field {..} variable OTHER than the resource key ("id"/"name") and
+// other than a dotted body path (e.g. {widget.id}). When several parent segments
+// are present (deep nesting) the immediate one — closest to the resource key — is
+// returned, since that is the resource's direct owner. Returns ("", false) for a
+// flat URL.
+func parentSegment(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	var candidates []string
+	for _, v := range pathVariables(path) {
+		// A dotted field path (e.g. {widget.id}) binds a field on the request's
+		// resource body — the resource's own key on Update, never a parent scope.
+		if strings.Contains(v, ".") {
+			continue
+		}
+		// The resource's own key is not a parent.
+		if v == "id" || v == "name" {
+			continue
+		}
+		candidates = append(candidates, v)
+	}
+	if len(candidates) == 0 {
+		return "", false
+	}
+	return candidates[len(candidates)-1], true
+}
+
+// scalarStringGetter returns the Go getter ("Get<GoName>") for a non-repeated
+// string field of msg with the given proto field name, or "" when absent.
+func scalarStringGetter(msg *protogen.Message, protoName string) string {
+	for _, f := range msg.Fields {
+		if string(f.Desc.Name()) == protoName && f.Desc.Kind() == protoreflect.StringKind && !f.Desc.IsList() {
+			return "Get" + f.GoName
+		}
+	}
+	return ""
+}
+
+// httpRulePath returns the URL path template of a method's google.api.http rule
+// (the first bound HTTP method or a custom binding), or "" when the method has no
+// HTTP annotation.
+func httpRulePath(m *protogen.Method) string {
+	opts := m.Desc.Options()
+	if opts == nil || !proto.HasExtension(opts, apiannotations.E_Http) {
+		return ""
+	}
+	rule, _ := proto.GetExtension(opts, apiannotations.E_Http).(*apiannotations.HttpRule)
+	if rule == nil {
+		return ""
+	}
+	switch {
+	case rule.GetGet() != "":
+		return rule.GetGet()
+	case rule.GetPut() != "":
+		return rule.GetPut()
+	case rule.GetPost() != "":
+		return rule.GetPost()
+	case rule.GetPatch() != "":
+		return rule.GetPatch()
+	case rule.GetDelete() != "":
+		return rule.GetDelete()
+	case rule.GetCustom() != nil:
+		return rule.GetCustom().GetPath()
+	}
+	return ""
+}
+
+// pathVariables returns the field paths bound by the {..} variables of an
+// AIP/gRPC-gateway URL template, stripping any "=pattern" suffix (so
+// "{name=accounts/*/entries/*}" yields "name" and "{ledger_account_id}" yields
+// "ledger_account_id").
+func pathVariables(path string) []string {
+	var out []string
+	for {
+		i := strings.IndexByte(path, '{')
+		if i < 0 {
+			break
+		}
+		rest := path[i+1:]
+		j := strings.IndexByte(rest, '}')
+		if j < 0 {
+			break
+		}
+		inner := rest[:j]
+		if eq := strings.IndexByte(inner, '='); eq >= 0 {
+			inner = inner[:eq]
+		}
+		out = append(out, strings.TrimSpace(inner))
+		path = rest[j+1:]
+	}
+	return out
 }
 
 // methodKeyByName reports whether a Get/Delete/Undelete RPC is keyed by an

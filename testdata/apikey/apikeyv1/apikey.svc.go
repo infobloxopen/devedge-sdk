@@ -98,6 +98,13 @@ type APIKeyServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*APIKey, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "apikey" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterAPIKeyService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -121,8 +128,12 @@ type aPIKeyServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for APIKeyService.
 func (m *aPIKeyServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "apikey"
+	}
 	return servicekit.Descriptor{
-		ID: "apikey",
+		ID: id,
 		Methods: []string{
 			APIKeyService_CreateAPIKey_FullMethodName,
 			APIKeyService_GetAPIKey_FullMethodName,
@@ -130,7 +141,7 @@ func (m *aPIKeyServiceModule) Descriptor() servicekit.Descriptor {
 			APIKeyService_DeleteAPIKey_FullMethodName,
 		},
 		AuthzRules: APIKeyServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "apikey.api_key"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".api_key"}},
 	}
 }
 

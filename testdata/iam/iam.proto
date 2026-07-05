@@ -154,12 +154,16 @@ service MembershipService {
 }
 
 service ApiKeyService {
+  // Nested under the owning User (AIP-122 users/{user_id}/apikeys/{id}): the URL
+  // parent segment {user_id} must be ENFORCED by the generated Get/List, not just
+  // bound-and-ignored (#191). ApiKey carries a scalar user_id FK, so the generated
+  // handler scopes List to it and denies a cross-parent Get.
   rpc GetApiKey(GetApiKeyRequest) returns (ApiKey) {
-    option (google.api.http) = {get: "/v1/apikeys/{id}"};
+    option (google.api.http) = {get: "/v1/users/{user_id}/apikeys/{id}"};
     option (infoblox.authz.v1.rule) = {verb: "get", resource: "api_keys"};
   }
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse) {
-    option (google.api.http) = {get: "/v1/apikeys"};
+    option (google.api.http) = {get: "/v1/users/{user_id}/apikeys"};
     option (infoblox.authz.v1.rule) = {verb: "list", resource: "api_keys"};
   }
   rpc CreateApiKey(CreateApiKeyRequest) returns (ApiKey) {
@@ -189,7 +193,7 @@ message GetMembershipRequest   { string id = 1; }
 message ListMembershipsRequest { int32 page_size = 1; string page_token = 2; }
 message ListMembershipsResponse { repeated Membership memberships = 1; string next_page_token = 2; }
 
-message GetApiKeyRequest       { string id = 1; }
-message ListApiKeysRequest     { int32 page_size = 1; string page_token = 2; }
+message GetApiKeyRequest       { string id = 1; string user_id = 2; }
+message ListApiKeysRequest     { int32 page_size = 1; string page_token = 2; string user_id = 3; }
 message ListApiKeysResponse    { repeated ApiKey api_keys = 1; string next_page_token = 2; }
 message CreateApiKeyRequest    { ApiKey api_key = 1; }
