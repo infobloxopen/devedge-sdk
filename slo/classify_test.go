@@ -92,6 +92,49 @@ func TestLint_MissingErrorBudgetPolicyRejected(t *testing.T) {
 	}
 }
 
+func TestLint_PlaceholderPolicyAndUnmarkedDefaultTargetWarned(t *testing.T) {
+	// DX run 24 / finding 110: the two "human did the work" gates were gameable —
+	// a "TODO" placeholder policy and a default target with the uncalibrated marker
+	// simply deleted both passed as "OK: no findings". They must now warn.
+	doc := &Document{
+		SLOs: []SLO{
+			{ // scaffold's "TODO:" placeholder policy, real (non-default) target
+				APIVersion: APIVersion, Kind: KindSLO,
+				Metadata: Metadata{Name: "placeholder-policy", Annotations: map[string]string{
+					"devedge.io/error-budget-policy": "TODO: define the consequence when this budget is spent.",
+				}},
+				Spec: SLOSpec{Objectives: []Objective{{Target: 0.9973}}, AlertPolicies: []string{"p"}},
+			},
+			{ // default target, uncalibrated marker dropped, real policy (the gamed case)
+				APIVersion: APIVersion, Kind: KindSLO,
+				Metadata: Metadata{Name: "unmarked-default", Annotations: map[string]string{
+					"devedge.io/error-budget-policy": "Freeze releases until the 28d budget recovers over a full window.",
+				}},
+				Spec: SLOSpec{Objectives: []Objective{{Target: 0.999}}, AlertPolicies: []string{"p"}},
+			},
+		},
+	}
+	fs := Lint(doc)
+	if fs.HasError() {
+		t.Fatalf("neither gamed case should be a hard error (warn-only), got %+v", fs)
+	}
+	var gotPlaceholder, gotDefault bool
+	for _, f := range fs {
+		if f.Object == "placeholder-policy" && strings.Contains(f.Message, "placeholder") {
+			gotPlaceholder = true
+		}
+		if f.Object == "unmarked-default" && strings.Contains(f.Message, "generated default") {
+			gotDefault = true
+		}
+	}
+	if !gotPlaceholder {
+		t.Errorf("want a placeholder-policy warning, got %+v", fs)
+	}
+	if !gotDefault {
+		t.Errorf("want an unmarked-default-target warning, got %+v", fs)
+	}
+}
+
 func TestLint_LatencyThresholdMustBeBucketBoundary(t *testing.T) {
 	// A calibrated threshold that is not a histogram bucket boundary makes the
 	// le="..." matcher select no series → the latency burn-rate alert silently
