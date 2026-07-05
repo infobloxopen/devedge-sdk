@@ -155,15 +155,38 @@ type classifiedMethod struct {
 	std    aip.StdMethod
 }
 
+// propKeyMode selects how schema properties are keyed against proto fields:
+// by fd.JSONName() (camelCase, the proto-JSON and gateway-v2 default) or by
+// fd.Name() (snake_case, gw-v1 emitters run with json_names_for_fields=false).
+type propKeyMode int
+
+const (
+	keyCamel propKeyMode = iota
+	keySnake
+)
+
 // enrichSchema writes the authoritative proto-derived semantics onto a schema and
 // its properties, and (for resource messages) attaches x-aip-resource. It also
 // enforces that every property maps to a proto field of md (vice-versa drift).
 func enrichSchema(name string, schema *openapi3.Schema, md protoreflect.MessageDescriptor) error {
-	fieldsByJSON := map[string]protoreflect.FieldDescriptor{}
+	return enrichSchemaCore(name, schema, md, keyCamel, nil)
+}
+
+// enrichSchemaCore is the mode-aware body of enrichSchema. With rep == nil it is
+// the fail-loud default path, byte-identical to the historical behavior. With a
+// non-nil rep (gateway-v1 compat) every gate failure degrades to a coverage
+// entry: unmatched properties are counted as skipped instead of erroring, and
+// enrichment continues.
+func enrichSchemaCore(name string, schema *openapi3.Schema, md protoreflect.MessageDescriptor, mode propKeyMode, rep *coverageReport) error {
+	fieldsByKey := map[string]protoreflect.FieldDescriptor{}
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
-		fieldsByJSON[string(fd.JSONName())] = fd
+		key := string(fd.JSONName())
+		if mode == keySnake {
+			key = string(fd.Name())
+		}
+		fieldsByKey[key] = fd
 	}
 
 	_, isResource := aip.ResolveResourceIdentity(md)
@@ -171,8 +194,12 @@ func enrichSchema(name string, schema *openapi3.Schema, md protoreflect.MessageD
 	// Rebuild the schema's required list authoritatively from proto REQUIRED.
 	var required []string
 	for jn, ref := range schema.Properties {
-		fd, ok := fieldsByJSON[jn]
+		fd, ok := fieldsByKey[jn]
 		if !ok {
+			if rep != nil {
+				rep.fieldSkipped(name, jn, fmt.Sprintf("no proto field with this name on %s", md.FullName()))
+				continue
+			}
 			if isResource {
 				return fmt.Errorf("enrich: schema %q property %q has no proto field on %s (FDS/swagger drift)", name, jn, md.FullName())
 			}
@@ -183,6 +210,10 @@ func enrichSchema(name string, schema *openapi3.Schema, md protoreflect.MessageD
 		}
 		bs, err := aip.ResolveFieldBehavior(fd)
 		if err != nil {
+			if rep != nil {
+				rep.fieldSkipped(name, jn, err.Error())
+				continue
+			}
 			return fmt.Errorf("enrich: schema %q: %w", name, err)
 		}
 		p := ref.Value
@@ -209,6 +240,9 @@ func enrichSchema(name string, schema *openapi3.Schema, md protoreflect.MessageD
 		// x-aip-references: WS-021 cross-service reference target.
 		if target, ok := aip.ReferenceTarget(fd); ok {
 			setExt(&p.Extensions, "x-aip-references", map[string]any{"type": target})
+		}
+		if rep != nil {
+			rep.fieldEnriched()
 		}
 	}
 	schema.Required = sortedUnique(required)

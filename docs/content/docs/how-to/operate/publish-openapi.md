@@ -85,6 +85,35 @@ names AIP facts, and each consumer's generator maps them in its own glue (e.g. T
 `IMMUTABLE` → `ForceNew`). The pass fails loud if the descriptor set is missing or drifts from the
 swagger, so the spec is never silently missing contract.
 
+### Converting a legacy (grpc-gateway v1) swagger file
+
+The converter behind `make generate` is `openapiv2to3` (in this repo under `cmd/openapiv2to3`). By
+default it expects gateway-v2 (`protoc-gen-openapiv2`) output. To publish an API whose swagger was
+emitted by the **old grpc-gateway v1 / atlas toolchain** (`protoc-gen-swagger`), pass
+`-compat=gateway-v1`:
+
+```sh
+openapiv2to3 -descriptor api.binpb -compat=gateway-v1 legacy.swagger.json openapi/
+```
+
+In this mode the converter matches operations to proto methods by verb and path template from the
+`google.api.http` rules (tolerating a patched `basePath` prefix), rewrites each matched
+`operationId` to the canonical `Service_Method` form (the original is kept as
+`x-legacy-operation-id`), auto-detects snake_case property names, and resolves legacy definition
+names (`identityUser`-style) back to proto messages. The swagger's `basePath` survives as
+`servers:` in both modes.
+
+| Flag | Description |
+|---|---|
+| `-compat=gateway-v1` | Accept grpc-gateway v1 / `protoc-gen-swagger` era input |
+| `-json-names` | `auto` (default), `snake`, or `camel` — how schema properties are keyed against proto fields |
+| `-strict` | Fail instead of reporting when anything is unmatched or ambiguous |
+
+Instead of failing loud, compat mode writes a per-file coverage report — operations and schemas
+matched/unmatched, fields enriched/skipped — to stderr and to `<name>.openapi.yaml.coverage.json`
+next to the output. Review the report before publishing; pass `-strict` to make any gap a hard
+failure.
+
 ## Step 3 — publish via `de api publish`
 
 `de api publish` is a thin wrapper that:
