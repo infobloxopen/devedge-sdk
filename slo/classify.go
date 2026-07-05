@@ -230,8 +230,60 @@ func LintWithConfig(doc *Document, naming MetricNaming) Findings {
 				Message: fmt.Sprintf("SLO %q target is an un-calibrated default. Set it from a measured baseline (de slo check / query Cortex) before it pages anyone.", s.Metadata.Name),
 			})
 		}
+		// A *present* error-budget policy is not a *real* one: the scaffold ships a
+		// "TODO:" placeholder the human must replace. Without this check the linter
+		// reports "no findings" on a policy nobody wrote — blessing undone work.
+		if pol := strings.TrimSpace(s.Metadata.Annotations["devedge.io/error-budget-policy"]); pol != "" && isPlaceholderPolicy(pol) {
+			fs = append(fs, Finding{
+				Severity: SeverityWarn, Object: s.Metadata.Name, Kind: "SLO",
+				Message: fmt.Sprintf("SLO %q error-budget policy is still a placeholder (%q). Declare the real consequence when the budget is spent (freeze/escalate) — a placeholder policy is decoration.", s.Metadata.Name, truncPolicy(pol)),
+			})
+		}
+		// The un-calibrated marker is self-attested and can simply be deleted to
+		// silence the warning above. Independently flag a target left at exactly a
+		// generated default: dropping the marker does not calibrate it.
+		if !strings.EqualFold(s.Metadata.Annotations["devedge.io/uncalibrated"], "true") && hasDefaultTarget(s) {
+			fs = append(fs, Finding{
+				Severity: SeverityWarn, Object: s.Metadata.Name, Kind: "SLO",
+				Message: fmt.Sprintf("SLO %q target is exactly a generated default (0.999/0.99) but is not marked un-calibrated. Dropping the marker does not calibrate it — set the target from a measured baseline (de slo check) or restore the devedge.io/uncalibrated marker.", s.Metadata.Name),
+			})
+		}
 	}
 	return fs
+}
+
+// isPlaceholderPolicy reports whether an error-budget-policy annotation is still
+// unfilled boilerplate (the scaffold ships "TODO: define the consequence…").
+func isPlaceholderPolicy(s string) bool {
+	u := strings.ToUpper(s)
+	for _, tok := range []string{"TODO", "TBD", "FIXME", "XXX", "<REPLACE", "PLACEHOLDER"} {
+		if strings.Contains(u, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDefaultTarget reports whether any objective is left at a bare generated
+// default target (see derive.go DefaultDeriveOptions: 0.999 availability, 0.99
+// latency). Compared with a small epsilon for YAML float round-tripping.
+func hasDefaultTarget(s *SLO) bool {
+	for _, o := range s.Spec.Objectives {
+		for _, def := range []float64{0.999, 0.99} {
+			if d := o.Target - def; d < 1e-9 && d > -1e-9 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// truncPolicy shortens a policy string for a finding message.
+func truncPolicy(s string) string {
+	if len(s) > 48 {
+		return s[:48] + "…"
+	}
+	return s
 }
 
 // sliMetricIdentifiers gathers the metric names/queries an SLI measures, for the
