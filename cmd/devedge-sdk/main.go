@@ -10,6 +10,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -28,12 +30,58 @@ func newRootCmd() *cobra.Command {
 		Use:           "devedge-sdk",
 		Short:         "devedge-sdk developer CLI",
 		Long:          "devedge-sdk is the developer CLI for the devedge SDK. Use `new service` to scaffold an apx-native, authz-gated, persisting service from one resource.",
+		Version:       resolveCLIVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	root.AddCommand(newNewCmd())
 	root.AddCommand(newAddCmd())
+	root.AddCommand(newVersionCmd())
 	return root
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the devedge-sdk CLI version",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintln(cmd.OutOrStdout(), "devedge-sdk", resolveCLIVersion())
+			return nil
+		},
+	}
+}
+
+// resolveCLIVersion reports the version of the running devedge-sdk binary from
+// the build info embedded by the Go toolchain, so `--version`/`version` work
+// without a linker-injected ldflag. The CLI's own module
+// (github.com/infobloxopen/devedge-sdk/cmd) is tagged `cmd/vX.Y.Z`, so
+// `go install .../cmd/devedge-sdk@vX.Y.Z` sets info.Main.Version to that tag —
+// the primary source. A `go build`/`go run` from source (or an unversioned
+// install) leaves Main.Version as "" or "(devel)"; in that case fall back to
+// this module's resolved version among info.Deps (e.g. a require in a
+// consumer's go.mod), then finally report "(devel)".
+func resolveCLIVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "(devel)"
+	}
+	if isSemver(info.Main.Version) {
+		return info.Main.Version
+	}
+	const modPath = "github.com/infobloxopen/devedge-sdk/cmd"
+	for _, dep := range info.Deps {
+		if dep.Path == modPath && isSemver(dep.Version) {
+			return dep.Version
+		}
+	}
+	return "(devel)"
+}
+
+// isSemver reports whether v looks like a real, resolved module version
+// (e.g. "v0.59.0") rather than the empty string or Go's "(devel)" placeholder.
+func isSemver(v string) bool {
+	return v != "" && v != "(devel)" && strings.HasPrefix(v, "v")
 }
 
 func newNewCmd() *cobra.Command {
