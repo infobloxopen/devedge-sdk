@@ -69,6 +69,53 @@ func TestRenderEntRepoAdapter_credential(t *testing.T) {
 	mustNotContain(t, out, "SecretValue: e.SecretValue")
 }
 
+// TestRenderEntRepoAdapter_remint covers #187 on the ent backend: a Remint<Field>
+// package helper that mints a fresh token, overwrites the four columns, and
+// returns the new token.
+func TestRenderEntRepoAdapter_remint(t *testing.T) {
+	msg := serviceTokenMessage()
+	out := renderEntRepoAdapter(msg, msg, "apikeyv1", "github.com/example/apikey/apikeyv1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n---\n%s", err, out)
+	}
+	mustContain(t, out, "func RemintSecretValue(ctx context.Context, client *ent.Client, minter *secret.CredentialMinter, id string) (string, error)")
+	mustContain(t, out, "if minter == nil {")
+	mustContain(t, out, `m.Prefix = "st"`)
+	mustContain(t, out, "client.ServiceToken.Update().Where(entservicetoken.ID(id))")
+	mustContain(t, out, "SetSecretValuePublicID(cred.PublicID)")
+	mustContain(t, out, "SetSecretValueHashspec(cred.Spec.Algo)")
+	mustContain(t, out, "if n == 0 {")
+	mustContain(t, out, "persistence.ErrNotFound")
+	mustContain(t, out, "return tok, nil")
+}
+
+// linkMessage is a tenant-scoped resource with a plain unique string field (slug).
+func linkMessage() entMessageInfo {
+	return entMessageInfo{
+		MessageName: "Link",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "account_id", SnakeName: "account_id", EntType: "String"},
+			{Name: "slug", SnakeName: "slug", EntType: "String", Unique: true},
+		},
+	}
+}
+
+// TestRenderEntRepoAdapter_getByUnique covers #173 on the ent backend: a tenant-
+// scoped GetBy<Field> natural-key lookup for a plain unique string field.
+func TestRenderEntRepoAdapter_getByUnique(t *testing.T) {
+	msg := linkMessage()
+	out := renderEntRepoAdapter(msg, msg, "linkv1", "github.com/example/link/linkv1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n---\n%s", err, out)
+	}
+	mustContain(t, out, "func GetLinkBySlug(ctx context.Context, client *ent.Client, value string) (*Link, error)")
+	mustContain(t, out, "if value == \"\" {")
+	mustContain(t, out, "client.Link.Query().Where(entlink.Slug(value))")
+	mustContain(t, out, "q = q.Where(entlink.AccountID(tenantID))")
+	mustContain(t, out, "persistence.ErrNotFound")
+}
+
 func TestRenderEntRepository_credentialBatchForwardsMinter(t *testing.T) {
 	msg := serviceTokenMessage()
 	out := renderEntRepository(msg, msg, "apikeyv1", "github.com/example/apikey/apikeyv1")

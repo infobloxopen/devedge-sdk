@@ -206,6 +206,30 @@ func fromEntGroup(e *ent.Group) *Group {
 	return p
 }
 
+// GetGroupByDisplayName looks up the Group by its unique display_name value. Tenant-scoped; excludes
+// soft-deleted rows. Returns persistence.ErrNotFound when no record matches.
+func GetGroupByDisplayName(ctx context.Context, client *ent.Client, value string) (*Group, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := client.Group.Query().Where(entgroup.DisplayName(value))
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) {
+		if tenantID == "" {
+			return nil, status.Error(codes.PermissionDenied, "group: no tenant on a tenant-scoped get")
+		}
+		q = q.Where(entgroup.AccountID(tenantID))
+	}
+	e, err := q.Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, err
+	}
+	return fromEntGroup(e), nil
+}
+
 // LoadGroupAggregate eager-loads the Group aggregate root identified by id together
 // with its owned containment members, in one tx-bound query (the F031 graph-load
 // primitive, D-2). It resolves the tx-or-client from ctx so it participates in an

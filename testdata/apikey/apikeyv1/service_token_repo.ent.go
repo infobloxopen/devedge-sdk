@@ -191,3 +191,29 @@ func VerifySecretValue(ctx context.Context, client *ent.Client, token string) (*
 	}
 	return fromEntServiceToken(e), true, nil
 }
+
+// RemintSecretValue rotates the secret_value credential for the record keyed by id: it mints a
+// fresh token, overwrites the record's four credential columns
+// (public_id/salt/hash/hashspec), and returns the NEW token once. The previous
+// token stops verifying immediately. Tenant-scoped; returns ErrNotFound when no
+// such record exists in the caller's tenant, and ErrNoMinter when minter is nil.
+func RemintSecretValue(ctx context.Context, client *ent.Client, minter *secret.CredentialMinter, id string) (string, error) {
+	if minter == nil {
+		return "", fmt.Errorf("credential field %q set but no minter configured: %w", "secret_value", persistence.ErrNoMinter)
+	}
+	m := *minter
+	m.Prefix = "st"
+	tok, cred, merr := m.Mint()
+	if merr != nil {
+		return "", fmt.Errorf("mint secret_value: %w", merr)
+	}
+	u := client.ServiceToken.Update().Where(entservicetoken.ID(id))
+	n, err := u.SetSecretValuePublicID(cred.PublicID).SetSecretValueSalt(cred.Salt).SetSecretValueHash(cred.Hash).SetSecretValueHashspec(cred.Spec.Algo).Save(ctx)
+	if err != nil {
+		return "", fmt.Errorf("remint secret_value: %w", err)
+	}
+	if n == 0 {
+		return "", persistence.ErrNotFound
+	}
+	return tok, nil
+}

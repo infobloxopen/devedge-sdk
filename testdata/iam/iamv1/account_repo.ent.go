@@ -166,3 +166,20 @@ func fromEntAccount(e *ent.Account) *Account {
 	}
 	return p
 }
+
+// GetAccountByDisplayName looks up the Account by its unique display_name value. Tenant-scoped; excludes
+// soft-deleted rows. Returns persistence.ErrNotFound when no record matches.
+func GetAccountByDisplayName(ctx context.Context, client *ent.Client, value string) (*Account, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := client.Account.Query().Where(entaccount.DisplayName(value))
+	e, err := q.Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, err
+	}
+	return fromEntAccount(e), nil
+}

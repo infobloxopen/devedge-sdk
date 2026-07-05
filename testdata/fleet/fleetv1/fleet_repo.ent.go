@@ -235,6 +235,30 @@ func fromEntFleet(e *ent.Fleet) *Fleet {
 	return p
 }
 
+// GetFleetByDisplayName looks up the Fleet by its unique display_name value. Tenant-scoped; excludes
+// soft-deleted rows. Returns persistence.ErrNotFound when no record matches.
+func GetFleetByDisplayName(ctx context.Context, client *ent.Client, value string) (*Fleet, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := client.Fleet.Query().Where(entfleet.DisplayName(value))
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) {
+		if tenantID == "" {
+			return nil, status.Error(codes.PermissionDenied, "fleet: no tenant on a tenant-scoped get")
+		}
+		q = q.Where(entfleet.AccountID(tenantID))
+	}
+	e, err := q.Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, err
+	}
+	return fromEntFleet(e), nil
+}
+
 // LoadFleetAggregate eager-loads the Fleet aggregate root identified by id together
 // with its owned containment members, in one tx-bound query (the F031 graph-load
 // primitive, D-2). It resolves the tx-or-client from ctx so it participates in an

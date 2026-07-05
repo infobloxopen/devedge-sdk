@@ -14,25 +14,71 @@ package module
 import (
 	"gorm.io/gorm"
 
+	"github.com/infobloxopen/devedge-sdk/secret"
 	"github.com/infobloxopen/devedge-sdk/servicekit"
 
 	{{.GoPkg}} "{{.GoImportPath}}"
 )
+
+// moduleConfig holds the optional, host-supplied policy a composed host injects per
+// module (#186): a credential minter and/or a secret encryptor. It is empty by
+// default — a resource with no `credential`/`secret` field needs neither, and the
+// generated repository constructor takes neither.
+type moduleConfig struct {
+	minter    *secret.CredentialMinter
+	encryptor secret.Encryptor
+}
+
+// ModuleOption configures NewModule. A composed host uses these to supply the
+// PRODUCTION credential/secret policy per module (e.g. secret.NewVaultTransit vs
+// secret.NewDev, a custom HashSpec/SecretBits) instead of a hard-coded zero value.
+type ModuleOption func(*moduleConfig)
+
+// WithCredentialMinter supplies the *secret.CredentialMinter this module's
+// repository mints verify-only `credential` fields with. Add it — and reference
+// cfg.minter in NewModule below — once the resource declares a credential field.
+func WithCredentialMinter(m *secret.CredentialMinter) ModuleOption {
+	return func(c *moduleConfig) { c.minter = m }
+}
+
+// WithEncryptor supplies the secret.Encryptor this module's repository hashes/
+// encrypts `secret` fields with. Add it — and reference cfg.encryptor in NewModule
+// below — once the resource declares a secret field.
+func WithEncryptor(enc secret.Encryptor) ModuleOption {
+	return func(c *moduleConfig) { c.encryptor = enc }
+}
 
 // NewModule builds the {{.BinName}} module over the host's shared *gorm.DB. It
 // constructs this service's generated repository and its DB-readiness check from
 // the connection the host owns, then returns the same decorated servicekit.Module
 // the standalone host uses. A composed host calls NewModule for every member
 // uniformly; only the module knows its own repository + model types.
-func NewModule(db *gorm.DB) servicekit.Module {
+//
+// opts let a composed host inject a policy-configured minter/encryptor per module
+// (WithCredentialMinter / WithEncryptor) — see the note below for wiring them into
+// the repository once the resource has a credential/secret field.
+func NewModule(db *gorm.DB, opts ...ModuleOption) servicekit.Module {
+	cfg := moduleConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	// Construct this module's repository. For the DEFAULT resource (no `secret` or
+	// `credential` field) New{{.Resource}}Repository(db) is complete and cfg is
+	// unused. When you add such a field the generated constructor grows a positional
+	// parameter — inject the host-supplied policy from cfg here, e.g.:
+	//   secret field:     {{.GoPkg}}.New{{.Resource}}Repository(db, cfg.encryptor)
+	//   credential field: {{.GoPkg}}.New{{.Resource}}Repository(db, cfg.minter)
+	//   both:             {{.GoPkg}}.New{{.Resource}}Repository(db, cfg.encryptor, cfg.minter)
+	repo := {{.GoPkg}}.New{{.Resource}}Repository(db)
+
 	// A live *gorm.DB yields a *sql.DB (a health.Pinger) for the readiness check;
 	// mirror the standalone host's wiring. If the handle is unavailable, register
 	// the module without the DB check rather than panic in a constructor.
 	sqlDB, err := db.DB()
 	if err != nil {
-		return Module({{.GoPkg}}.New{{.Resource}}Repository(db), nil)
+		return Module(repo, nil)
 	}
-	return Module({{.GoPkg}}.New{{.Resource}}Repository(db), sqlDB)
+	return Module(repo, sqlDB)
 }
 
 // Models returns this module's domain models for the host's SQLite dev-fast-path

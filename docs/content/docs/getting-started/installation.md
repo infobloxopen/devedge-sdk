@@ -84,6 +84,19 @@ smoke test, then runs the first `buf generate`. See the [Quickstart](../quicksta
 The manual plugin install below is what the CLI does under the hood — useful when wiring an existing repo
 by hand (see [Define a service](../../how-to/model-and-persist/define-a-service/)).
 
+To pin a specific release instead of `@latest` — recommended for reproducible builds — install with the
+version tag:
+
+```bash
+go install github.com/infobloxopen/devedge-sdk/cmd/devedge-sdk@v0.59.0
+```
+
+Verify what actually landed on your `PATH`:
+
+```bash
+devedge-sdk --version   # or: devedge-sdk version
+```
+
 ## Codegen plugins
 
 The codegen plugins are `main` packages under the SDK repo. Install them onto your `PATH` so

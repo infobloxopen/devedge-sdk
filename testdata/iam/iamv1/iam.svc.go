@@ -6,9 +6,12 @@ package iamv1
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/infobloxopen/devedge-sdk/persistence"
 	"github.com/infobloxopen/devedge-sdk/server"
@@ -88,6 +91,13 @@ type AccountServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*Account, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "iam" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterAccountService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -111,15 +121,19 @@ type accountServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for AccountService.
 func (m *accountServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "iam"
+	}
 	return servicekit.Descriptor{
-		ID: "iam",
+		ID: id,
 		Methods: []string{
 			AccountService_GetAccount_FullMethodName,
 			AccountService_ListAccounts_FullMethodName,
 			AccountService_CreateAccount_FullMethodName,
 		},
 		AuthzRules: AccountServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.account"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".account"}},
 	}
 }
 
@@ -209,6 +223,13 @@ type UserServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*User, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "iam" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterUserService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -232,15 +253,19 @@ type userServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for UserService.
 func (m *userServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "iam"
+	}
 	return servicekit.Descriptor{
-		ID: "iam",
+		ID: id,
 		Methods: []string{
 			UserService_GetUser_FullMethodName,
 			UserService_ListUsers_FullMethodName,
 			UserService_CreateUser_FullMethodName,
 		},
 		AuthzRules: UserServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.user"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".user"}},
 	}
 }
 
@@ -330,6 +355,13 @@ type GroupServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*Group, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "iam" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterGroupService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -353,15 +385,19 @@ type groupServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for GroupService.
 func (m *groupServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "iam"
+	}
 	return servicekit.Descriptor{
-		ID: "iam",
+		ID: id,
 		Methods: []string{
 			GroupService_GetGroup_FullMethodName,
 			GroupService_ListGroups_FullMethodName,
 			GroupService_CreateGroup_FullMethodName,
 		},
 		AuthzRules: GroupServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.group"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".group"}},
 	}
 }
 
@@ -451,6 +487,13 @@ type MembershipServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*Membership, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "iam" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterMembershipService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -474,14 +517,18 @@ type membershipServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for MembershipService.
 func (m *membershipServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "iam"
+	}
 	return servicekit.Descriptor{
-		ID: "iam",
+		ID: id,
 		Methods: []string{
 			MembershipService_GetMembership_FullMethodName,
 			MembershipService_ListMemberships_FullMethodName,
 		},
 		AuthzRules: MembershipServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.membership"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".membership"}},
 	}
 }
 
@@ -528,13 +575,22 @@ type ApiKeyServiceCRUDHandler struct {
 
 func (h *ApiKeyServiceCRUDHandler) GetApiKey(ctx context.Context, req *GetApiKeyRequest) (*ApiKey, error) {
 	key := req.GetId()
-	return h.Repo.Get(ctx, key)
+	got, err := h.Repo.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if got.GetUserId() != req.GetUserId() {
+		return nil, status.Errorf(codes.NotFound, "ApiKey not found under the requested parent")
+	}
+	return got, nil
 }
 
 func (h *ApiKeyServiceCRUDHandler) ListApiKeys(ctx context.Context, req *ListApiKeysRequest) (*ListApiKeysResponse, error) {
+	scope := fmt.Sprintf("user_id = %q", req.GetUserId())
 	items, next, err := h.Repo.List(ctx, persistence.ListOptions{
 		PageSize:  int(req.GetPageSize()),
 		PageToken: req.GetPageToken(),
+		Filter:    scope,
 	})
 	if err != nil {
 		return nil, err
@@ -571,6 +627,13 @@ type ApiKeyServiceModuleOptions struct {
 	// unless Handler is set.
 	Repo persistence.Repository[*ApiKey, string]
 
+	// ID overrides the servicekit module ID this module reports in its
+	// Descriptor. When empty, the ID defaults to "iam" (the proto package
+	// short-name). Set a distinct ID per service when hosting two or more
+	// services from the SAME proto file together, so their module IDs (and the
+	// module-qualified resource names) do not collide at servicekit.Run.
+	ID string
+
 	// Handler is an OPTIONAL override: when set, the module registers it (via
 	// RegisterApiKeyService) instead of constructing the default CRUD handler over Repo.
 	// Use it to add custom / non-CRUD methods WITHOUT abandoning this generated
@@ -594,15 +657,19 @@ type apiKeyServiceModule struct {
 
 // Descriptor implements servicekit.Module: the static proto facts for ApiKeyService.
 func (m *apiKeyServiceModule) Descriptor() servicekit.Descriptor {
+	id := m.opts.ID
+	if id == "" {
+		id = "iam"
+	}
 	return servicekit.Descriptor{
-		ID: "iam",
+		ID: id,
 		Methods: []string{
 			ApiKeyService_GetApiKey_FullMethodName,
 			ApiKeyService_ListApiKeys_FullMethodName,
 			ApiKeyService_CreateApiKey_FullMethodName,
 		},
 		AuthzRules: ApiKeyServiceAuthzRules,
-		Resources:  []servicekit.ResourceDescriptor{{Name: "iam.api_key"}},
+		Resources:  []servicekit.ResourceDescriptor{{Name: id + ".api_key"}},
 	}
 }
 

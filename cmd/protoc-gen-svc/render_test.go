@@ -211,14 +211,21 @@ func TestRenderSvcFile_module(t *testing.T) {
 	// Constructor returns a servicekit.Module.
 	mustContain(t, out, "func APIKeyServiceModule(opts APIKeyServiceModuleOptions) servicekit.Module {")
 
-	// Descriptor: module ID from the proto package's first segment; methods from
-	// the FullMethod constants; AuthzRules referencing the generated table;
-	// module-qualified resource name (snake-cased).
+	// #190: an optional ID override on the options, so two+ services from one proto
+	// can be hosted together with distinct module IDs.
+	mustContain(t, out, "ID string")
+
+	// Descriptor: module ID defaults to the proto package's first segment but honors
+	// the opts.ID override (#190); methods from the FullMethod constants; AuthzRules
+	// referencing the generated table; module-qualified resource name (snake-cased,
+	// qualified by the EFFECTIVE id).
 	mustContain(t, out, "func (m *aPIKeyServiceModule) Descriptor() servicekit.Descriptor {")
-	mustContain(t, out, `ID: "apikey"`)
+	mustContain(t, out, "id := m.opts.ID")
+	mustContain(t, out, `id = "apikey"`)
+	mustContain(t, out, "ID: id,")
 	mustContain(t, out, "APIKeyService_CreateAPIKey_FullMethodName,")
 	mustContain(t, out, "AuthzRules: APIKeyServiceAuthzRules,")
-	mustContain(t, out, `Resources: []servicekit.ResourceDescriptor{{Name: "apikey.api_key"}}`)
+	mustContain(t, out, `Resources: []servicekit.ResourceDescriptor{{Name: id + ".api_key"}}`)
 
 	// Register wraps the existing WithRepository over the shared server — it does
 	// NOT reimplement registration. The override seam: Handler wins when set,
@@ -485,6 +492,87 @@ func TestRenderSvcFile_nonTargetRepoStaysPlain(t *testing.T) {
 	mustContain(t, out, "Repo persistence.Repository[*APIKey, string]")
 	mustNotContain(t, out, "persistence.BatchRepository")
 	mustNotContain(t, out, "RecordBatchTarget(")
+}
+
+// nestedService is a nested child resource (Entry under accounts/{ledger_account_
+// id}/entries/{id}) whose Get/List/Delete carry a parentScope on the FK field
+// ledger_account_id — the #191 shape.
+func nestedService() serviceInfo {
+	p := &parentScope{ReqGetter: "GetLedgerAccountId", ResGetter: "GetLedgerAccountId", FKField: "ledger_account_id"}
+	return serviceInfo{
+		ServiceName:  "EntryService",
+		Resource:     "Entry",
+		ProtoPackage: "ledger.v1",
+		Methods: []methodInfo{
+			{Name: "CreateEntry", InputGoIdent: "CreateEntryRequest", OutputGoIdent: "Entry", Std: stdCreate, ResourceField: "Entry"},
+			{Name: "GetEntry", InputGoIdent: "GetEntryRequest", OutputGoIdent: "Entry", Std: stdGet, Parent: p},
+			{Name: "ListEntries", InputGoIdent: "ListEntriesRequest", OutputGoIdent: "ListEntriesResponse", Std: stdList, ListItemsField: "Entries", Parent: p},
+			{Name: "DeleteEntry", InputGoIdent: "DeleteEntryRequest", OutputGoIdent: "DeleteEntryResponse", Std: stdDelete, Parent: p},
+		},
+	}
+}
+
+// TestRenderSvcFile_nestedParentEnforcement is the #191 regression guard: a nested
+// resource's generated Get/List/Delete ENFORCE the URL parent segment instead of
+// ignoring it. Get/Delete fetch then deny a cross-parent target with NotFound;
+// List scopes by the FK through a pushed-down AIP-160 filter.
+func TestRenderSvcFile_nestedParentEnforcement(t *testing.T) {
+	out := renderSvcFile("ledgerv1", "x;ledgerv1", []serviceInfo{nestedService()})
+
+	// Get: fetch, then deny a cross-parent hit with NotFound.
+	mustContain(t, out, "got, err := h.Repo.Get(ctx, key)")
+	mustContain(t, out, "if got.GetLedgerAccountId() != req.GetLedgerAccountId() {")
+	mustContain(t, out, `status.Errorf(codes.NotFound, "Entry not found under the requested parent")`)
+
+	// List: scoped by the FK, pushed down through ListOptions.Filter.
+	mustContain(t, out, `scope := fmt.Sprintf("ledger_account_id = %q", req.GetLedgerAccountId())`)
+	mustContain(t, out, "Filter: scope,")
+
+	// Delete: parent verified before the delete happens.
+	mustContain(t, out, "if err := h.Repo.Delete(ctx, key); err != nil {")
+
+	// Imports for the enforcement (fmt for the scope, status/codes for the guard).
+	mustContain(t, out, `"fmt"`)
+	mustContain(t, out, `"google.golang.org/grpc/codes"`)
+	mustContain(t, out, `"google.golang.org/grpc/status"`)
+
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("nested-enforcement output not valid Go: %v\n--- output ---\n%s", err, out)
+	}
+}
+
+// TestRenderSvcFile_nonNestedUnaffected confirms the enforcement is additive: a
+// flat (non-nested) CRUD service still delegates Get/Delete straight to the repo
+// and does not build a scope filter.
+func TestRenderSvcFile_nonNestedUnaffected(t *testing.T) {
+	out := renderSvcFile("apikeyv1", "x;apikeyv1", []serviceInfo{crudService()})
+	mustContain(t, out, "return h.Repo.Get(ctx, key)")
+	mustNotContain(t, out, "not found under the requested parent")
+	mustNotContain(t, out, "scope := fmt.Sprintf")
+}
+
+// TestParentSegment covers the URL-template parent-segment parser that drives the
+// #191 enforcement + fail-loud decision.
+func TestParentSegment(t *testing.T) {
+	cases := []struct {
+		path   string
+		want   string
+		nested bool
+	}{
+		{"/v1/entries", "", false},      // flat collection
+		{"/v1/entries/{id}", "", false}, // flat item (id is the key)
+		{"/v1/accounts/{ledger_account_id}/entries", "ledger_account_id", true},
+		{"/v1/accounts/{ledger_account_id}/entries/{id}", "ledger_account_id", true},
+		{"/v1/accounts/{ledger_account_id}/entries/{entry.id}", "ledger_account_id", true}, // dotted body key ignored
+		{"/v1/{name=accounts/*/entries/*}", "", false},                                     // name= binds the resource key
+		{"/v1/orgs/{org_id}/accounts/{account_id}/entries/{id}", "account_id", true},       // immediate parent wins
+	}
+	for _, c := range cases {
+		got, nested := parentSegment(c.path)
+		if got != c.want || nested != c.nested {
+			t.Errorf("parentSegment(%q) = (%q, %v), want (%q, %v)", c.path, got, nested, c.want, c.nested)
+		}
+	}
 }
 
 func mustContain(t *testing.T, s, substr string) {

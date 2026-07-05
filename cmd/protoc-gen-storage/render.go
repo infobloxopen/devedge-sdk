@@ -1585,6 +1585,102 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		fmt.Fprintf(b, "\treturn fromModel_%s(&m), true, nil\n}\n\n", resource)
 	}
 
+	// Remint<Field> methods for verify-only credential fields (#187): rotate a
+	// leaked/expiring credential in place, without deleting the record (which would
+	// lose its id, history, and relationships). Model type follows the OWNER; the
+	// lookup+overwrite is TENANT-scoped (a caller may only rotate a record in its
+	// own tenant), unlike Verify's global public_id resolution.
+	for _, f := range msg.Fields {
+		if !f.IsCredential {
+			continue
+		}
+		gfn := goFieldName(f)
+		resource := msg.MessageName
+		fmt.Fprintf(b, "// Remint%s rotates the %s credential for the record keyed by id: it mints a\n", gfn, f.SnakeName)
+		b.WriteString("// fresh token, overwrites the record's four credential columns\n")
+		b.WriteString("// (public_id/salt/hash/hashspec), and returns the NEW token once. The previous\n")
+		b.WriteString("// token stops verifying immediately. Tenant-scoped; returns ErrNotFound when no\n")
+		b.WriteString("// such record exists in the caller's tenant, and ErrNoMinter when the\n")
+		b.WriteString("// repository was constructed without a minter.\n")
+		fmt.Fprintf(b, "func (r *%sRepository) Remint%s(ctx context.Context, id string) (string, error) {\n", resource, gfn)
+		fmt.Fprintf(b, "\tif r.minter == nil { return \"\", fmt.Errorf(\"credential field %%q set but no minter configured: %%w\", %q, persistence.ErrNoMinter) }\n", f.Name)
+		if f.CredentialPrefix != "" {
+			minterVar := "m" + gfn
+			fmt.Fprintf(b, "\t%s := *r.minter\n", minterVar)
+			fmt.Fprintf(b, "\t%s.Prefix = %q\n", minterVar, f.CredentialPrefix)
+			fmt.Fprintf(b, "\ttok, cred, err := %s.Mint()\n", minterVar)
+		} else {
+			b.WriteString("\ttok, cred, err := r.minter.Mint()\n")
+		}
+		fmt.Fprintf(b, "\tif err != nil { return \"\", fmt.Errorf(\"mint %s: %%w\", err) }\n", f.Name)
+		if hasTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			gormTenantDeny(b, "\t", "\"\", ", msg.MessageName, "remint")
+		}
+		fmt.Fprintf(b, "\tq := r.conn(ctx).Model(&%sModel{}).Where(\"id = ?\", id)\n", model)
+		if hasTenant {
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		}
+		b.WriteString("\tres := q.Updates(map[string]interface{}{\n")
+		fmt.Fprintf(b, "\t\t%q: cred.PublicID,\n", f.SnakeName+"_public_id")
+		fmt.Fprintf(b, "\t\t%q: cred.Salt,\n", f.SnakeName+"_salt")
+		fmt.Fprintf(b, "\t\t%q: cred.Hash,\n", f.SnakeName+"_hash")
+		fmt.Fprintf(b, "\t\t%q: cred.Spec.Algo,\n", f.SnakeName+"_hashspec")
+		b.WriteString("\t})\n")
+		fmt.Fprintf(b, "\tif res.Error != nil { return \"\", fmt.Errorf(\"remint %s: %%w\", res.Error) }\n", f.SnakeName)
+		b.WriteString("\tif res.RowsAffected == 0 { return \"\", persistence.ErrNotFound }\n")
+		b.WriteString("\treturn tok, nil\n}\n\n")
+	}
+
+	// GetBy<Field> methods for plain `unique` fields (#173): a natural-key lookup
+	// symmetric with LookupBy<Field>Hash, so a "resolve by unique value" (e.g. a URL
+	// shortener's slug) needs no hand-formatted AIP-160 filter string. Emitted for a
+	// unique scalar field that is not the id, a secret/credential, a relationship, or
+	// repeated. Tenant-scoped; excludes soft-deleted rows via the default scope.
+	// Emitted on the OWNER only — a multi-surface projection reuses the owner's
+	// table, so a surface would re-declare the same lookup.
+	for _, f := range msg.Fields {
+		if msg.MessageName != owner.MessageName {
+			break
+		}
+		if !f.Unique || f.IsID || f.IsSecret || f.IsCredential || f.IsMessage || f.IsRepeated {
+			continue
+		}
+		// The natural-key lookup targets a unique string value (slug/vin/email); a
+		// non-string type is out of the #173 shape.
+		if f.GoType != "string" {
+			continue
+		}
+		// A field unique only WITHIN a scope (unique_with) is not unique by its own
+		// value alone, so a single-value GetBy would be ambiguous — skip it.
+		if len(f.UniqueWith) > 0 {
+			continue
+		}
+		gfn := goFieldName(f)
+		resource := msg.MessageName
+		lowerResource := strings.ToLower(resource[:1]) + resource[1:]
+		fmt.Fprintf(b, "// GetBy%s looks up the %s by its unique %s value. Tenant-scoped and excludes\n", gfn, resource, f.SnakeName)
+		b.WriteString("// soft-deleted rows. Returns ErrNotFound when no record matches.\n")
+		fmt.Fprintf(b, "func (r *%sRepository) GetBy%s(ctx context.Context, value string) (%s, error) {\n", resource, gfn, pbType)
+		b.WriteString("\tif value == \"\" {\n\t\treturn nil, persistence.ErrNotFound\n\t}\n")
+		if hasTenant {
+			b.WriteString("\ttenantID := middleware.TenantIDFromContext(ctx)\n")
+			gormTenantDeny(b, "\t", "nil, ", msg.MessageName, "get by "+f.SnakeName)
+		}
+		fmt.Fprintf(b, "\tq := r.conn(ctx).Where(\"%s = ?\", value)\n", f.SnakeName)
+		if hasTenant {
+			b.WriteString("\tif !middleware.IsSystemContext(ctx) {\n\t\tq = q.Where(\"account_id = ?\", tenantID)\n\t}\n")
+		}
+		fmt.Fprintf(b, "\tvar m %sModel\n", model)
+		b.WriteString("\tif err := q.First(&m).Error; err != nil {\n")
+		b.WriteString("\t\tif err == gorm.ErrRecordNotFound {\n")
+		b.WriteString("\t\t\treturn nil, persistence.ErrNotFound\n")
+		b.WriteString("\t\t}\n")
+		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"get %s by %s: %%w\", err)\n", lowerResource, f.SnakeName)
+		b.WriteString("\t}\n")
+		fmt.Fprintf(b, "\treturn fromModel_%s(&m), nil\n}\n\n", resource)
+	}
+
 	// Batch methods (AIP-137): atomic BatchGet/BatchUpdate/BatchDelete.
 	// BatchGet: single IN query reassembled into key order; a missing or
 	// soft-deleted key (excluded by the default scope) yields ErrNotFound.

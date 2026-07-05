@@ -83,6 +83,26 @@ carries ≥256 bits of entropy, so a password-style KDF would only add per-verif
 > argument. Regenerate, then update every hand-written construction call site the compiler flags
 > (`cmd/<svc>/main.go`, and `module/compose.go` if you compose modules).
 
+### Rotating a credential
+
+When a token leaks — or on a scheduled rotation — reissue it WITHOUT deleting the record (which would
+lose its id, history, and relationships). The generator emits `Remint<Field>` alongside `Verify<Field>`:
+it mints a fresh token, overwrites the record's four `_public_id`/`_salt`/`_hash`/`_hashspec` columns,
+and returns the new token exactly once. The previous token stops verifying immediately.
+
+```go
+// Rotate the credential for one record, keyed by id. Tenant-scoped: a caller can
+// only rotate a record in its own tenant.
+newToken, err := repo.RemintSecretValue(ctx, "st-1") // gorm: method on the concrete repository
+// ent: newToken, err := apikeyv1.RemintSecretValue(ctx, client, minter, "st-1")
+// Hand newToken to the client now; the old token no longer verifies.
+```
+
+Like `Verify<Field>`, the call shape follows the backend: on **gorm** `Remint<Field>` is a method on
+the concrete repository (it already holds the minter); on **ent** it is a package-level function taking
+the ent client and the same `*secret.CredentialMinter`. It returns `persistence.ErrNotFound` when no
+such record exists in the caller's tenant, and `persistence.ErrNoMinter` when no minter is configured.
+
 ### Serving verification over an RPC
 
 `Verify<Field>` is generated on the **concrete** repository (gorm) or as a package function over the

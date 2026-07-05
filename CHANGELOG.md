@@ -10,6 +10,54 @@ under [History](#history).
 
 ## History
 
+### v0.59.0 — Nested-resource parent enforcement, credential rotation, and DX fixes
+
+An issue-sweep release: a P1 authorization fix in generated CRUD, a credential
+rotation primitive, the ent composition seam, and several developer-experience
+fixes.
+
+- **Nested URL parent enforcement (`protoc-gen-svc`).** For a nested AIP-122
+  resource (`accounts/{parent}/entries/{id}`) the gateway bound the parent segment
+  to a request field but the generated `Get`/`List`/`Delete` ignored it — leaking
+  siblings across parents within a tenant. The generated handler now scopes `List`
+  to the parent's foreign key (pushed down through an AIP-160 filter) and denies a
+  cross-parent `Get`/`Delete` with `NotFound`. A nested URL whose resource has no
+  matching scalar FK field is now a **fail-loud** codegen error, never a silent
+  bind-and-ignore.
+- **Per-service module ID override (`protoc-gen-svc`).** `Descriptor.ID` was derived
+  only from the proto package short-name, so two or more services declared in one
+  proto file collided (`duplicate module ID`) at `servicekit.Run`.
+  `<Service>ModuleOptions` gains an optional `ID` field (package-derived default
+  unchanged); the module-qualified resource name uses the effective ID.
+- **`Remint<Field>` credential rotation (`protoc-gen-storage`, `protoc-gen-ent`).**
+  A verify-only `credential` field now gets a generated `Remint<Field>` alongside
+  `Verify<Field>`: it mints a fresh token, overwrites the row's four
+  `_public_id`/`_salt`/`_hash`/`_hashspec` columns in place (tenant-scoped), and
+  returns the new token once — the old token stops verifying immediately. No more
+  delete-and-recreate to rotate a leaked token.
+- **`GetBy<Field>` natural-key lookup (`protoc-gen-storage`, `protoc-gen-ent`).** A
+  plain `unique: true` string field now gets a generated `GetBy<Field>` lookup
+  (symmetric with `LookupBy<Field>Hash`), tenant-scoped and soft-delete aware — so
+  a "resolve by natural key" needs no hand-formatted filter string. Fields unique
+  only within a scope (`unique_with`) are excluded (ambiguous by a single value).
+- **ent composition seam (scaffold, WS-012).** The `module/compose.go` seam now has
+  an ent variant — `NewModule(*ent.Client) servicekit.Module` plus a host-owned
+  `CreateSchema` migration path — so `de compose` can compose ent modules, mirroring
+  the gorm `NewModule(db)`/`Models()` template.
+- **Per-module minter/encryptor injection (scaffold).** The compose seam's
+  `NewModule` now takes functional options (`WithCredentialMinter`/`WithEncryptor`)
+  so a composed host can supply a policy-configured credential minter or secret
+  encryptor per module instead of a hard-coded zero value. Default behavior is
+  unchanged.
+- **`devedge-sdk --version` / `version`.** The CLI now reports its build version
+  (from `runtime/debug` build info); `installation.md` documents pinning
+  `@vX.Y.Z` and verifying the installed version.
+- **`OTEL_TRACES_EXPORTER` runtime selection.** `observability/otel` `Setup` now
+  honors the `OTEL_TRACES_EXPORTER` env (`otlp`/`stdout`/`none`, plus the
+  OTel-standard `console` alias for `stdout`) when `Config.Exporter` is empty, so
+  dev can flip to stdout tracing without a code change. An explicit `Config.Exporter`
+  still wins.
+
 ### v0.58.0 — Verify-only credential field mode (WS-033)
 
 A new field mode for API keys and tokens: **`credential`**, the gold-standard "hash, never encrypt"

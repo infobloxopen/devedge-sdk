@@ -1,0 +1,85 @@
+// Package module — composable entrypoint (WS-012), ent backend. NewModule and
+// CreateSchema are the uniform, resource-agnostic seam a HOST calls to build this
+// module over a shared ent client. A composed "suite" host (`de compose build`)
+// builds each member module's NewModule the same way — so the composed host needs
+// no per-resource knowledge (it never names this service's repository). The
+// standalone host may call NewModule too.
+//
+// "Module owns domain, host owns process": the HOST opens the client and owns the
+// process; this module builds its OWN typed ent repository from that client
+// (domain behavior). CreateSchema is the ent analogue of the gorm backend's
+// Models()/AutoMigrate: the HOST runs it once per module (host-run migration).
+package module
+
+import (
+	"context"
+
+	"github.com/infobloxopen/devedge-sdk/secret"
+	"github.com/infobloxopen/devedge-sdk/servicekit"
+
+	entclient "{{.Module}}/gen/ent"
+	{{.GoPkg}} "{{.GoImportPath}}"
+)
+
+// moduleConfig holds the optional, host-supplied policy a composed host injects per
+// module (#186): a credential minter and/or a secret encryptor. It is empty by
+// default — a resource with no `credential`/`secret` field needs neither, and the
+// generated repository constructor takes neither.
+type moduleConfig struct {
+	minter    *secret.CredentialMinter
+	encryptor secret.Encryptor
+}
+
+// ModuleOption configures NewModule. A composed host uses these to supply the
+// PRODUCTION credential/secret policy per module (e.g. secret.NewVaultTransit vs
+// secret.NewDev, a custom HashSpec/SecretBits) instead of a hard-coded zero value.
+type ModuleOption func(*moduleConfig)
+
+// WithCredentialMinter supplies the *secret.CredentialMinter this module's
+// repository mints verify-only `credential` fields with. Add it — and reference
+// cfg.minter in NewModule below — once the resource declares a credential field.
+func WithCredentialMinter(m *secret.CredentialMinter) ModuleOption {
+	return func(c *moduleConfig) { c.minter = m }
+}
+
+// WithEncryptor supplies the secret.Encryptor this module's repository hashes/
+// encrypts `secret` fields with. Add it — and reference cfg.encryptor in NewModule
+// below — once the resource declares a secret field.
+func WithEncryptor(enc secret.Encryptor) ModuleOption {
+	return func(c *moduleConfig) { c.encryptor = enc }
+}
+
+// NewModule builds the {{.BinName}} module over the host's shared *ent.Client. It
+// constructs this service's generated ent repository adapter from the client the
+// host owns and returns the same decorated servicekit.Module the standalone host
+// uses. A composed host calls NewModule for every member uniformly; only the
+// module knows its own repository type.
+//
+// The DB-readiness check is left to the host: ent does not expose its pooled
+// *sql.DB, so the module registers without a DB check (a host that wants one opens
+// a stdlib *sql.DB on the same DSN, as the standalone main does). opts let a
+// composed host inject a policy-configured minter/encryptor per module
+// (WithCredentialMinter / WithEncryptor) — see the note below.
+func NewModule(client *entclient.Client, opts ...ModuleOption) servicekit.Module {
+	cfg := moduleConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	// Construct this module's repository. For the DEFAULT resource (no `secret` or
+	// `credential` field) New{{.Resource}}EntRepository(client) is complete and cfg
+	// is unused. When you add such a field the generated constructor grows a
+	// positional parameter — inject the host-supplied policy from cfg here, e.g.:
+	//   secret field:     {{.GoPkg}}.New{{.Resource}}EntRepository(client, cfg.encryptor)
+	//   credential field: {{.GoPkg}}.New{{.Resource}}EntRepository(client, cfg.minter)
+	//   both:             {{.GoPkg}}.New{{.Resource}}EntRepository(client, cfg.encryptor, cfg.minter)
+	repo := {{.GoPkg}}.New{{.Resource}}EntRepository(client)
+	return Module(repo, nil)
+}
+
+// CreateSchema runs this module's ent schema migration on the host's shared client
+// (the ent analogue of the gorm backend's host-run AutoMigrate over Models()). A
+// composed host calls it once per member module. In production, point the client at
+// postgres/mysql and drive the versioned SQL migration seam instead.
+func CreateSchema(ctx context.Context, client *entclient.Client) error {
+	return client.Schema.Create(ctx)
+}

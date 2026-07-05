@@ -164,11 +164,15 @@ func renderTemplates(dir string, m *Model) error {
 	// so `go mod tidy` keeps the entc-only deps for `go generate ./gen/ent`.
 	if m.Backend == BackendEnt {
 		outs = append(outs, out{"tools.go.tmpl", "tools.go", 0o644})
+		// WS-012 composable seam, ent variant (#177): NewModule(*ent.Client) +
+		// CreateSchema let a composed host (`de compose build`) build this module
+		// over a shared ent client and run its schema migration — mirroring the gorm
+		// NewModule(db)/Models() seam.
+		outs = append(outs, out{"module_compose.ent.go.tmpl", filepath.Join("module", "compose.go"), 0o644})
 	} else {
 		// WS-012 composable seam: NewModule(db)/Models() let a composed host
 		// (`de compose build`) build this module over one shared *gorm.DB without
-		// naming its repository/model. gorm-only for now (the ent variant tracks
-		// New<R>EntRepository + Schema.Create — a fast-follow).
+		// naming its repository/model.
 		outs = append(outs, out{"module_compose.gorm.go.tmpl", filepath.Join("module", "compose.go"), 0o644})
 	}
 	for _, o := range outs {

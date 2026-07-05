@@ -1541,6 +1541,38 @@ func (r *ServiceTokenRepository) VerifySecretValue(ctx context.Context, token st
 	return fromModel_ServiceToken(&m), true, nil
 }
 
+// RemintSecretValue rotates the secret_value credential for the record keyed by id: it mints a
+// fresh token, overwrites the record's four credential columns
+// (public_id/salt/hash/hashspec), and returns the NEW token once. The previous
+// token stops verifying immediately. Tenant-scoped; returns ErrNotFound when no
+// such record exists in the caller's tenant, and ErrNoMinter when the
+// repository was constructed without a minter.
+func (r *ServiceTokenRepository) RemintSecretValue(ctx context.Context, id string) (string, error) {
+	if r.minter == nil {
+		return "", fmt.Errorf("credential field %q set but no minter configured: %w", "secret_value", persistence.ErrNoMinter)
+	}
+	mSecretValue := *r.minter
+	mSecretValue.Prefix = "st"
+	tok, cred, err := mSecretValue.Mint()
+	if err != nil {
+		return "", fmt.Errorf("mint secret_value: %w", err)
+	}
+	q := r.conn(ctx).Model(&ServiceTokenModel{}).Where("id = ?", id)
+	res := q.Updates(map[string]interface{}{
+		"secret_value_public_id": cred.PublicID,
+		"secret_value_salt":      cred.Salt,
+		"secret_value_hash":      cred.Hash,
+		"secret_value_hashspec":  cred.Spec.Algo,
+	})
+	if res.Error != nil {
+		return "", fmt.Errorf("remint secret_value: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return "", persistence.ErrNotFound
+	}
+	return tok, nil
+}
+
 func (r *ServiceTokenRepository) BatchGet(ctx context.Context, keys []string) ([]*ServiceToken, error) {
 	if len(keys) == 0 {
 		return []*ServiceToken{}, nil

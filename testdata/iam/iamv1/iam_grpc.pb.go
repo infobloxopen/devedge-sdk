@@ -724,6 +724,10 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ApiKeyServiceClient interface {
+	// Nested under the owning User (AIP-122 users/{user_id}/apikeys/{id}): the URL
+	// parent segment {user_id} must be ENFORCED by the generated Get/List, not just
+	// bound-and-ignored (#191). ApiKey carries a scalar user_id FK, so the generated
+	// handler scopes List to it and denies a cross-parent Get.
 	GetApiKey(ctx context.Context, in *GetApiKeyRequest, opts ...grpc.CallOption) (*ApiKey, error)
 	ListApiKeys(ctx context.Context, in *ListApiKeysRequest, opts ...grpc.CallOption) (*ListApiKeysResponse, error)
 	CreateApiKey(ctx context.Context, in *CreateApiKeyRequest, opts ...grpc.CallOption) (*ApiKey, error)
@@ -771,6 +775,10 @@ func (c *apiKeyServiceClient) CreateApiKey(ctx context.Context, in *CreateApiKey
 // All implementations must embed UnimplementedApiKeyServiceServer
 // for forward compatibility.
 type ApiKeyServiceServer interface {
+	// Nested under the owning User (AIP-122 users/{user_id}/apikeys/{id}): the URL
+	// parent segment {user_id} must be ENFORCED by the generated Get/List, not just
+	// bound-and-ignored (#191). ApiKey carries a scalar user_id FK, so the generated
+	// handler scopes List to it and denies a cross-parent Get.
 	GetApiKey(context.Context, *GetApiKeyRequest) (*ApiKey, error)
 	ListApiKeys(context.Context, *ListApiKeysRequest) (*ListApiKeysResponse, error)
 	CreateApiKey(context.Context, *CreateApiKeyRequest) (*ApiKey, error)

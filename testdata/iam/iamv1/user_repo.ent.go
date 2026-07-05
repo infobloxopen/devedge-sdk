@@ -210,3 +210,27 @@ func fromEntUser(e *ent.User) *User {
 	}
 	return p
 }
+
+// GetUserByEmail looks up the User by its unique email value. Tenant-scoped; excludes
+// soft-deleted rows. Returns persistence.ErrNotFound when no record matches.
+func GetUserByEmail(ctx context.Context, client *ent.Client, value string) (*User, error) {
+	if value == "" {
+		return nil, persistence.ErrNotFound
+	}
+	q := client.User.Query().Where(entuser.Email(value))
+	tenantID := middleware.TenantIDFromContext(ctx)
+	if !middleware.IsSystemContext(ctx) {
+		if tenantID == "" {
+			return nil, status.Error(codes.PermissionDenied, "user: no tenant on a tenant-scoped get")
+		}
+		q = q.Where(entuser.AccountID(tenantID))
+	}
+	e, err := q.Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, err
+	}
+	return fromEntUser(e), nil
+}
