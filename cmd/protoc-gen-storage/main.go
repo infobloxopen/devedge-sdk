@@ -111,6 +111,13 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				if rd, ok := proto.GetExtension(mopts, apiannotations.E_Resource).(*apiannotations.ResourceDescriptor); ok {
 					if patterns := rd.GetPattern(); len(patterns) > 0 {
 						msg.ResourcePattern = patterns[0]
+						// Format<R>Name fills exactly one id variable; a multi-segment
+						// pattern leaves the parent variables empty and resourcename.Format
+						// errors, so the AIP-122 name renders SILENTLY blank. Fail loud
+						// until nested naming is implemented (DX run 26, finding 116).
+						if strings.Count(msg.ResourcePattern, "{") > 1 {
+							gen.Error(fmt.Errorf("protoc-gen-storage: %s: multi-segment resource pattern %q is not supported — Format%sName fills only one id, so parent segments render empty and the AIP-122 name is silently blank; use a single-segment pattern (e.g. %q)", msg.MessageName, msg.ResourcePattern, msg.MessageName, "entries/{entry}"))
+						}
 					}
 				}
 			}

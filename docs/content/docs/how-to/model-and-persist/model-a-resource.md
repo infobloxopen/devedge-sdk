@@ -246,6 +246,16 @@ become graph edges, which suits relationship-heavy domains. See
 [Storage Shapes](../storage-shapes/) for when to choose ent, and the
 [Codegen reference](../../../reference/codegen/) for the exact generated shape.
 
+{{< callout type="warning" >}}
+**Name the relationship field distinctly from your scalar fields.** ent derives the edge's setter from
+the *field's own name*, not from `foreign_key` — an edge `Account account = …` generates `SetAccountID`,
+which collides with an existing scalar `account_id`'s `SetAccountID` and fails the build with
+`method <T>Mutation.SetAccountID already declared`. Above, `fleet`/`fleet_id` share on purpose (the
+edge's `foreign_key` *is* the scalar). If the edge points at a different column, give it a distinct name
+(e.g. `Account ledger_account = …` with `foreign_key: "ledger_account_id"`) so its derived accessor does
+not clash with a tenant/scope scalar like `account_id`.
+{{< /callout >}}
+
 {{< callout type="info" >}}
 **A `has_many` is not eager-loaded on a plain read.** `Get<Parent>` returns the parent with an empty
 children slice, which keeps a single-resource read from loading an unbounded set of children. To read
