@@ -18,6 +18,8 @@ package otel
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -47,7 +49,10 @@ type Config struct {
 	ServiceName    string
 	ServiceVersion string
 	// Exporter selects the backend: "otlp" (default), "stdout" (dev), or "none"
-	// (no-op providers — fully disable export without removing the call).
+	// (no-op providers — fully disable export without removing the call). When
+	// Exporter is empty, Setup falls back to the OTEL_TRACES_EXPORTER
+	// environment variable (accepting the OpenTelemetry-standard "console"
+	// alias for "stdout") before defaulting to "otlp" — see Setup.
 	Exporter string
 	// OTLPEndpoint optionally overrides OTEL_EXPORTER_OTLP_ENDPOINT for the OTLP
 	// exporter (host:port, e.g. "localhost:4317"). Leave empty to honor the env.
@@ -65,6 +70,15 @@ type Config struct {
 // construction) and simply has nothing to flush, so an unset endpoint never
 // crashes startup; it is a clean no-op-on-export until an endpoint appears.
 //
+// Exporter selection precedence: an explicit, non-empty cfg.Exporter always
+// wins (code beats env). When cfg.Exporter is empty, Setup falls back to the
+// OTEL_TRACES_EXPORTER environment variable — accepting the SDK's own
+// "otlp"/"stdout"/"none" vocabulary plus the OpenTelemetry-standard "console"
+// alias for "stdout" (case-insensitively) — so a developer can flip to stdout
+// for local runs without touching code. An unset/empty env still defaults to
+// "otlp"; an unrecognized env value is passed through to the switch below and
+// rejected there like any other unknown exporter.
+//
 // Setup never sets globals on the error path: if an exporter fails to construct
 // it returns the error with a no-op shutdown, leaving the process on the global
 // no-op providers.
@@ -72,6 +86,12 @@ func Setup(ctx context.Context, cfg Config) (shutdown func(context.Context) erro
 	noop := func(context.Context) error { return nil }
 
 	exporter := cfg.Exporter
+	if exporter == "" {
+		exporter = strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_TRACES_EXPORTER")))
+		if exporter == "console" {
+			exporter = "stdout"
+		}
+	}
 	if exporter == "" {
 		exporter = "otlp"
 	}
