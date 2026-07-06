@@ -78,6 +78,10 @@ func del(path string) *apiannotations.HttpRule {
 	return &apiannotations.HttpRule{Pattern: &apiannotations.HttpRule_Delete{Delete: path}}
 }
 
+func put(path string) *apiannotations.HttpRule {
+	return &apiannotations.HttpRule{Pattern: &apiannotations.HttpRule_Put{Put: path}}
+}
+
 func post(path, body string, additional ...*apiannotations.HttpRule) *apiannotations.HttpRule {
 	return &apiannotations.HttpRule{
 		Pattern:            &apiannotations.HttpRule_Post{Post: path},
@@ -715,5 +719,169 @@ func TestDefaultModeGoldenByteIdentical(t *testing.T) {
 	// And no coverage report in default mode.
 	if _, err := os.Stat(filepath.Join(outDir, "toy.openapi.yaml.coverage.json")); !os.IsNotExist(err) {
 		t.Error("default mode must not write a coverage report")
+	}
+}
+
+// --- literal-valued path bindings (WS-035 F-26 / F-27) ---
+
+// TestSplitTemplateLiteralBindings pins the segment classifier: a variable whose
+// pattern is a pure literal collapses to that static segment (matching the
+// swagger protoc-gen-swagger renders); a `*`/`**` pattern (or none) stays one
+// variable segment even when the greedy capture contains a '/'.
+func TestSplitTemplateLiteralBindings(t *testing.T) {
+	seg := func(lit string, isVar bool) pathSeg { return pathSeg{lit: lit, isVar: isVar} }
+	cases := []struct {
+		in   string
+		want []pathSeg
+	}{
+		// DDI Create: two literal-valued bindings → two static segments.
+		{"/{payload.id.application_name=federation}/{payload.id.resource_type=delegation}",
+			[]pathSeg{seg("federation", false), seg("delegation", false)}},
+		// DDI Read: literals + a trailing bare variable.
+		{"/{id.application_name=federation}/{id.resource_type=delegation}/{id.resource_id}",
+			[]pathSeg{seg("federation", false), seg("delegation", false), seg("", true)}},
+		// WAPI Delete/Read/Update: a literal + a `*/**` greedy capture that must
+		// stay ONE variable segment (not be shredded on its inner '/').
+		{"/{ref.object_type=networkview}/{ref.ref_data=*/**}",
+			[]pathSeg{seg("networkview", false), seg("", true)}},
+		// WAPI Create: a single literal-valued binding.
+		{"/{payload.ref.object_type=network}", []pathSeg{seg("network", false)}},
+		// The swagger these render to.
+		{"/federation/delegation/{id}",
+			[]pathSeg{seg("federation", false), seg("delegation", false), seg("", true)}},
+		// Custom-method suffix survives on a variable segment.
+		{"/things/{id}:archive", []pathSeg{seg("things", false), seg("", true).withLit(":archive")}},
+	}
+	for _, c := range cases {
+		got := splitTemplate(c.in)
+		if !segsEqual(got, c.want) {
+			t.Errorf("splitTemplate(%q) shape = %v, want %v", c.in, got, c.want)
+		}
+	}
+	// Two rules differing ONLY by the literal must NOT be equal (F-27 root cause).
+	a := splitTemplate("/{payload.ref.object_type=network}")
+	b := splitTemplate("/{payload.ref.object_type=networkcontainer}")
+	if segsEqual(a, b) {
+		t.Error("rules differing only by literal collapsed to one shape (F-27 regression)")
+	}
+}
+
+// withLit is a tiny test helper so the case table above reads cleanly.
+func (s pathSeg) withLit(lit string) pathSeg { s.lit = lit; return s }
+
+// ddiLikeFDS builds a FileDescriptorSet in the DDI identifier idiom: two
+// resource services whose Create rules differ ONLY by the resource-type literal,
+// plus a WAPI-style service using a literal object-type + a `*/**` ref capture.
+func ddiLikeFDS(t *testing.T) *protoregistry.Files {
+	t.Helper()
+	file := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("ddi/v1/ddi.proto"),
+		Package: proto.String("ddi.v1"),
+		Syntax:  proto.String("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			message("Realm", strField("id", 1)),
+			message("Block", strField("id", 1)),
+			message("NetworkRef", strField("ref_data", 1)),
+			message("Empty"),
+		},
+		Service: []*descriptorpb.ServiceDescriptorProto{
+			{
+				Name: proto.String("RealmService"),
+				Method: []*descriptorpb.MethodDescriptorProto{
+					method("Create", ".ddi.v1.Realm", ".ddi.v1.Realm",
+						post("/{payload.id.application_name=federation}/{payload.id.resource_type=realm}", "payload")),
+					method("Read", ".ddi.v1.Empty", ".ddi.v1.Realm",
+						get("/{id.application_name=federation}/{id.resource_type=realm}/{id.resource_id}")),
+				},
+			},
+			{
+				Name: proto.String("BlockService"),
+				Method: []*descriptorpb.MethodDescriptorProto{
+					method("Create", ".ddi.v1.Block", ".ddi.v1.Block",
+						post("/{payload.id.application_name=federation}/{payload.id.resource_type=block}", "payload")),
+					method("Read", ".ddi.v1.Empty", ".ddi.v1.Block",
+						get("/{id.application_name=federation}/{id.resource_type=block}/{id.resource_id}")),
+				},
+			},
+			{
+				Name: proto.String("NetworkService"),
+				Method: []*descriptorpb.MethodDescriptorProto{
+					method("Read", ".ddi.v1.Empty", ".ddi.v1.NetworkRef",
+						get("/{ref.object_type=network}/{ref.ref_data=*/**}")),
+					method("Update", ".ddi.v1.NetworkRef", ".ddi.v1.NetworkRef",
+						put("/{payload.ref.object_type=network}/{payload.ref.ref_data=*/**}")),
+				},
+			},
+		},
+	}
+	files, err := protodesc.NewFiles(&descriptorpb.FileDescriptorSet{
+		File: []*descriptorpb.FileDescriptorProto{file},
+	})
+	if err != nil {
+		t.Fatalf("protodesc.NewFiles: %v", err)
+	}
+	return files
+}
+
+// TestCompatLiteralPathBindings drives enrichCompat end-to-end over the DDI
+// idiom: every literal-collapsed CRUD op matches its proto method (F-26 gone),
+// the two Creates that differ only by literal resolve to DISTINCT services with
+// no ambiguity (F-27 gone), and the literal+`*/**` WAPI ops match too.
+func TestCompatLiteralPathBindings(t *testing.T) {
+	files := ddiLikeFDS(t)
+	const swagger = `{
+	  "swagger": "2.0",
+	  "info": {"title": "ddi", "version": "1.0"},
+	  "basePath": "/api/ddi/v1",
+	  "paths": {
+	    "/federation/realm": {"post": {"operationId": "realmCreate", "responses": {"200": {"description": "ok"}}}},
+	    "/federation/realm/{id}": {"get": {"operationId": "realmRead", "parameters": [{"name": "id", "in": "path", "required": true, "type": "string"}], "responses": {"200": {"description": "ok"}}}},
+	    "/federation/block": {"post": {"operationId": "blockCreate", "responses": {"200": {"description": "ok"}}}},
+	    "/federation/block/{id}": {"get": {"operationId": "blockRead", "parameters": [{"name": "id", "in": "path", "required": true, "type": "string"}], "responses": {"200": {"description": "ok"}}}},
+	    "/network/{ref_data}": {
+	      "get": {"operationId": "networkRead", "parameters": [{"name": "ref_data", "in": "path", "required": true, "type": "string"}], "responses": {"200": {"description": "ok"}}},
+	      "put": {"operationId": "networkUpdate", "parameters": [{"name": "ref_data", "in": "path", "required": true, "type": "string"}], "responses": {"200": {"description": "ok"}}}
+	    }
+	  },
+	  "definitions": {}
+	}`
+
+	var doc2 openapi2.T
+	if err := json.Unmarshal([]byte(swagger), &doc2); err != nil {
+		t.Fatalf("parse v2 fixture: %v", err)
+	}
+	doc, err := openapi2conv.ToV3(&doc2)
+	if err != nil {
+		t.Fatalf("ToV3: %v", err)
+	}
+	rep, err := enrichCompat(doc, files, compatOptions{jsonNames: "auto"})
+	if err != nil {
+		t.Fatalf("enrichCompat: %v", err)
+	}
+
+	if rep.Operations.Total != 6 || rep.Operations.Matched != 6 {
+		t.Fatalf("operations coverage = %d/%d, want 6/6 (unmatched=%+v ambiguous=%+v)",
+			rep.Operations.Total, rep.Operations.Matched, rep.Operations.Unmatched, rep.Operations.Ambiguous)
+	}
+	if len(rep.Operations.Ambiguous) != 0 {
+		t.Errorf("ambiguous = %+v, want none (F-27 must be gone)", rep.Operations.Ambiguous)
+	}
+	if len(rep.ProtoMethodsUnmatched) != 0 {
+		t.Errorf("protoMethodsUnmatched = %v, want none", rep.ProtoMethodsUnmatched)
+	}
+
+	want := map[[2]string]string{
+		{"post", "/federation/realm"}:     "RealmService_Create",
+		{"get", "/federation/realm/{id}"}: "RealmService_Read",
+		{"post", "/federation/block"}:     "BlockService_Create",
+		{"get", "/federation/block/{id}"}: "BlockService_Read",
+		{"get", "/network/{ref_data}"}:    "NetworkService_Read",
+		{"put", "/network/{ref_data}"}:    "NetworkService_Update",
+	}
+	for key, id := range want {
+		op := findOp(t, doc, key[0], key[1])
+		if op.OperationID != id {
+			t.Errorf("%s %s operationId = %q, want %q", key[0], key[1], op.OperationID, id)
+		}
 	}
 }

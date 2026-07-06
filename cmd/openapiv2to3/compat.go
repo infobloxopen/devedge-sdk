@@ -186,23 +186,90 @@ type pathSeg struct {
 	isVar bool
 }
 
+// splitTemplate parses a path template into shape-matching segments.
+//
+// google.api.http variables take the forms {field}, {field=pattern}, and
+// {field=*/**}. protoc-gen-swagger renders a variable whose pattern is a pure
+// LITERAL (no `*`/`**`) as a STATIC path segment — e.g.
+// `{payload.ref.object_type=networkview}` emits as `/networkview`, and the DDI
+// identifier idiom `{payload.id.application_name=federation}/
+// {payload.id.resource_type=delegation}` emits as `/federation/delegation`. So a
+// literal-valued binding must match as that literal, in both directions
+// (swagger→proto and proto→swagger): otherwise every such CRUD op is
+// false-UNMATCHED (F-26) and WAPI Creates that differ only by their literal all
+// collapse to one shape → false-AMBIGUOUS (F-27).
+//
+// A variable with a `*`/`**` pattern (or none) keeps wildcard semantics and
+// matches any other variable segment positionally. A `**` can span multiple URL
+// segments, but protoc-gen-swagger collapses it to a single `{param}`, so it
+// counts as one variable segment here (e.g. `{ref.ref_data=*/**}` ↔ `{ref_data}`).
 func splitTemplate(p string) []pathSeg {
 	var out []pathSeg
-	for _, s := range strings.Split(strings.Trim(p, "/"), "/") {
-		if s == "" {
+	for _, tok := range splitPathTokens(p) {
+		if tok == "" {
 			continue
 		}
-		if strings.HasPrefix(s, "{") {
-			trail := ""
-			if j := strings.LastIndexByte(s, '}'); j >= 0 && j+1 < len(s) {
-				trail = s[j+1:]
+		if !strings.HasPrefix(tok, "{") {
+			out = append(out, pathSeg{lit: tok})
+			continue
+		}
+		// Variable segment: {field[=pattern]}[trail], where trail is a custom-
+		// method suffix like ":archive". Braces do not nest in http templates,
+		// so the first '}' closes the variable.
+		inner, trail := tok[1:], ""
+		if j := strings.IndexByte(tok, '}'); j >= 0 {
+			inner, trail = tok[1:j], tok[j+1:]
+		}
+		pattern := ""
+		if eq := strings.IndexByte(inner, '='); eq >= 0 {
+			pattern = inner[eq+1:]
+		}
+		if pattern != "" && !strings.Contains(pattern, "*") {
+			// Pure-literal binding → static segment(s) (the pattern itself may be
+			// multi-segment, e.g. {name=a/b}); the custom-method suffix rides the
+			// last literal so `{x=a}:go` != `{x=a}:stop`.
+			lits := strings.Split(strings.Trim(pattern, "/"), "/")
+			for i, l := range lits {
+				if l == "" {
+					continue
+				}
+				if i == len(lits)-1 {
+					l += trail
+				}
+				out = append(out, pathSeg{lit: l})
 			}
-			out = append(out, pathSeg{isVar: true, lit: trail})
 			continue
 		}
-		out = append(out, pathSeg{lit: s})
+		// Wildcard or bare variable → one variable segment (suffix preserved).
+		out = append(out, pathSeg{isVar: true, lit: trail})
 	}
 	return out
+}
+
+// splitPathTokens splits a path on '/' while keeping a '/' that lives INSIDE a
+// {…} variable pattern (the greedy `{field=*/**}` capture) within one token, so
+// such a variable is not shredded into bogus segments before splitTemplate can
+// classify it.
+func splitPathTokens(p string) []string {
+	p = strings.Trim(p, "/")
+	var tokens []string
+	depth, start := 0, 0
+	for i := 0; i < len(p); i++ {
+		switch p[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+		case '/':
+			if depth == 0 {
+				tokens = append(tokens, p[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(tokens, p[start:])
 }
 
 func segsEqual(a, b []pathSeg) bool {
