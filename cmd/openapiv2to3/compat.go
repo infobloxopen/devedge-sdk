@@ -36,6 +36,15 @@ import (
 	"github.com/infobloxopen/devedge-sdk/internal/aip"
 )
 
+// opMatch is one swagger operation matched to a proto http binding (index into
+// the bindings slice). op is set to nil when a match is withdrawn as ambiguous.
+type opMatch struct {
+	op      *openapi3.Operation
+	verb    string
+	path    string
+	binding int
+}
+
 // compatOptions carries the -compat sub-flags.
 type compatOptions struct {
 	// jsonNames is "auto", "snake", or "camel" (-json-names).
@@ -51,10 +60,12 @@ type coverageReport struct {
 	Mode                  string         `json:"mode"`
 	JSONNames             string         `json:"jsonNames"`
 	JSONNamesSource       string         `json:"jsonNamesSource"` // "flag" or "auto"
-	Operations            opCoverage     `json:"operations"`
-	Schemas               schemaCoverage `json:"schemas"`
-	Fields                fieldCoverage  `json:"fields"`
-	ProtoMethodsUnmatched []string       `json:"protoMethodsUnmatched,omitempty"`
+	Operations            opCoverage        `json:"operations"`
+	Schemas               schemaCoverage    `json:"schemas"`
+	Fields                fieldCoverage     `json:"fields"`
+	FormatsSanitized      int               `json:"formatsSanitized"`
+	PathParams            pathParamCoverage `json:"pathParams"`
+	ProtoMethodsUnmatched []string          `json:"protoMethodsUnmatched,omitempty"`
 }
 
 type opCoverage struct {
@@ -144,6 +155,15 @@ func (r *coverageReport) print(w io.Writer) {
 	fmt.Fprintf(w, "  fields: %d enriched, %d skipped\n", r.Fields.Enriched, r.Fields.Skipped)
 	for _, g := range r.Fields.SkippedDetail {
 		fmt.Fprintf(w, "    SKIPPED %s.%s: %s\n", g.Schema, g.Property, g.Reason)
+	}
+	fmt.Fprintf(w, "  formats sanitized: %d\n", r.FormatsSanitized)
+	fmt.Fprintf(w, "  path params: %d restored, %d de-duplicated\n", r.PathParams.Restored, r.PathParams.Deduped)
+	for _, f := range r.PathParams.Details {
+		if f.Kind == "mismatch" {
+			fmt.Fprintf(w, "    MISMATCH %s: %s\n", f.From, f.Reason)
+			continue
+		}
+		fmt.Fprintf(w, "    %s %s -> %s\n", strings.ToUpper(f.Kind), f.From, f.To)
 	}
 	if n := len(r.ProtoMethodsUnmatched); n > 0 {
 		fmt.Fprintf(w, "  proto methods with no swagger operation: %d\n", n)
@@ -489,6 +509,10 @@ func detectJSONNames(doc *openapi3.T, resolved map[string]protoreflect.MessageDe
 func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOptions) (*coverageReport, error) {
 	rep := &coverageReport{Mode: "gateway-v1"}
 
+	// (a) Drop invalid type/format pairs (e.g. legacy `format: boolean`) before
+	// enrichment so the emitted spec is generatable by strict clients.
+	sanitizeFormats(doc, rep)
+
 	bindings, facts := collectBindings(files)
 	resolver := buildSchemaResolver(files)
 
@@ -553,12 +577,6 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 	}
 
 	// Match every swagger (verb, path) against the proto http bindings.
-	type opMatch struct {
-		op      *openapi3.Operation
-		verb    string
-		path    string
-		binding int // index into bindings
-	}
 	var matches []opMatch
 	var pathKeys []string
 	pathsMap := map[string]*openapi3.PathItem{}
@@ -670,6 +688,11 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 			}
 		}
 	}
+
+	// (b) Restore duplicate-collapsed path-template variable names from the
+	// matched proto rules (mechanical de-dup where no rule matched), so path
+	// templates carry unique parameter names.
+	restorePathParams(doc, matches, bindings, rep)
 
 	// The default path's "every REST-exposed method has an operation" gate,
 	// degraded to a report entry.
