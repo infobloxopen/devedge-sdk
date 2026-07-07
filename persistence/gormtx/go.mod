@@ -15,9 +15,9 @@ go 1.25.5
 
 require (
 	github.com/infobloxopen/devedge-sdk v0.60.0
-	google.golang.org/grpc v1.81.1
-	gorm.io/gorm v1.31.1
-	modernc.org/sqlite v1.52.0
+	google.golang.org/grpc v1.82.0
+	gorm.io/gorm v1.31.2
+	modernc.org/sqlite v1.53.0
 )
 
 require (
@@ -30,6 +30,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-sqlite3 v1.14.28 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -43,7 +44,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	modernc.org/libc v1.72.3 // indirect
+	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
