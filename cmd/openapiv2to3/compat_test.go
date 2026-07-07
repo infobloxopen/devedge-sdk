@@ -589,6 +589,25 @@ func TestCompatStrictOnFixture(t *testing.T) {
 	}
 }
 
+// TestStrictExcludesUncoveredProtoMethods pins WS-035 R1: a proto method with no
+// swagger operation (a legitimate partial view) is a report section, never a
+// -strict failure, while a real gap (unmatched/ambiguous op or schema, or a
+// skipped field) still fails strict.
+func TestStrictExcludesUncoveredProtoMethods(t *testing.T) {
+	onlyUncovered := &coverageReport{ProtoMethodsUnmatched: []string{"svc.M (get /x)"}}
+	if !onlyUncovered.hasGaps() {
+		t.Error("hasGaps must be true when a proto method is uncovered")
+	}
+	if onlyUncovered.strictGaps() {
+		t.Error("strictGaps must be false when the only gap is an uncovered proto method (R1)")
+	}
+	realGap := &coverageReport{}
+	realGap.Operations.Unmatched = []opGap{{Verb: "get", Path: "/x"}}
+	if !realGap.strictGaps() {
+		t.Error("strictGaps must be true for an unmatched operation")
+	}
+}
+
 // --- run()-level end-to-end ---
 
 // writeGW1Fixture materializes the FDS + swagger to disk for run()-level tests.
@@ -647,8 +666,8 @@ func TestRunCompatEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(covBytes, &rep); err != nil {
 		t.Fatalf("parse coverage report: %v", err)
 	}
-	if rep.Mode != "gateway-v1" || rep.JSONNames != "snake" {
-		t.Errorf("coverage mode/jsonNames = %s/%s, want gateway-v1/snake", rep.Mode, rep.JSONNames)
+	if rep.Mode != "default" || rep.JSONNames != "snake" {
+		t.Errorf("coverage mode/jsonNames = %s/%s, want default/snake", rep.Mode, rep.JSONNames)
 	}
 	if rep.Operations.Total != 7 || rep.Operations.Matched != 6 {
 		t.Errorf("coverage operations = %d/%d, want 7 total / 6 matched", rep.Operations.Total, rep.Operations.Matched)
@@ -658,12 +677,12 @@ func TestRunCompatEndToEnd(t *testing.T) {
 	}
 }
 
-// TestRunCompatStrictFails: under -strict the fixture's gaps are a hard
-// failure and nothing is written.
+// TestRunCompatStrictFails: -strict (no -compat needed — it is the opt-in in the
+// default flow) makes the fixture's gaps a hard failure and nothing is written.
 func TestRunCompatStrictFails(t *testing.T) {
 	fdsPath, swaggerPath := writeGW1Fixture(t)
 	outDir := t.TempDir()
-	if code := run([]string{"-descriptor", fdsPath, "-compat=gateway-v1", "-strict", swaggerPath, outDir}); code == 0 {
+	if code := run([]string{"-descriptor", fdsPath, "-strict", swaggerPath, outDir}); code == 0 {
 		t.Fatal("run with -strict on a gappy fixture: want non-zero exit")
 	}
 	entries, _ := os.ReadDir(outDir)
@@ -672,16 +691,15 @@ func TestRunCompatStrictFails(t *testing.T) {
 	}
 }
 
-// TestRunFlagValidation: the compat sub-flags are rejected without -compat,
-// and unknown mode/json-names values are rejected.
+// TestRunFlagValidation: -json-names and -strict are valid on their own now
+// (WS-035 R1), so only genuinely invalid flag values are rejected — an unknown
+// -compat value (a typo of the deprecated alias) and an unknown -json-names.
 func TestRunFlagValidation(t *testing.T) {
 	fdsPath, swaggerPath := writeGW1Fixture(t)
 	outDir := t.TempDir()
 	for name, args := range map[string][]string{
-		"strict without compat":     {"-descriptor", fdsPath, "-strict", swaggerPath, outDir},
-		"json-names without compat": {"-descriptor", fdsPath, "-json-names=snake", swaggerPath, outDir},
-		"unknown compat mode":       {"-descriptor", fdsPath, "-compat=gateway-v3", swaggerPath, outDir},
-		"unknown json-names":        {"-descriptor", fdsPath, "-compat=gateway-v1", "-json-names=kebab", swaggerPath, outDir},
+		"unknown compat mode": {"-descriptor", fdsPath, "-compat=gateway-v3", swaggerPath, outDir},
+		"unknown json-names":  {"-descriptor", fdsPath, "-json-names=kebab", swaggerPath, outDir},
 	} {
 		if code := run(args); code == 0 {
 			t.Errorf("%s: want non-zero exit", name)
@@ -693,9 +711,12 @@ func TestRunFlagValidation(t *testing.T) {
 	}
 }
 
-// TestDefaultModeGoldenByteIdentical guards the gateway-v2 default path: with
-// no -compat flag the conversion of the toy fixture must stay byte-identical
-// to the checked-in golden (existing consumers: `de api publish`, apx).
+// TestDefaultModeGoldenByteIdentical is the consumer-safety guard for the WS-035
+// R1 default flip: routing a clean gateway-v2 spec (the toy) through the now-
+// default tolerant enrichment must still produce byte-identical v3 output AND no
+// coverage sidecar (existing consumers: `de api publish`, apx). Synthetic body
+// wrappers and injected well-known types are recognized, not gaps, so the
+// conversion is clean.
 func TestDefaultModeGoldenByteIdentical(t *testing.T) {
 	fdsPath, swaggerPath := toyPaths(t)
 	if _, err := os.Stat(fdsPath); err != nil {

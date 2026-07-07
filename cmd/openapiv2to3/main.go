@@ -9,24 +9,32 @@
 //
 // Usage:
 //
-//	openapiv2to3 -descriptor <fds.binpb> [-compat=gateway-v1 [-json-names=auto|snake|camel] [-strict]] <input.swagger.json> [output-dir]
+//	openapiv2to3 -descriptor <fds.binpb> [-json-names=auto|snake|camel] [-strict] <input.swagger.json> [output-dir]
 //
 // The output lands at <output-dir>/<name>.openapi.yaml (default: openapi/ beside
 // the input).
 //
-// By default the input is assumed to follow gateway-v2 (protoc-gen-openapiv2)
-// conventions — `Service_Method` operationIds and camelCase property names —
-// and the enrichment gates fail loud on any drift. -compat=gateway-v1 accepts
-// swagger emitted by the OLD grpc-gateway v1 / atlas toolchains
-// (protoc-gen-swagger era) instead: operations are matched to proto methods by
-// (verb, path-template) from google.api.http rules (prefix-tolerant, so a
-// patched basePath is fine), operationIds are rewritten to the canonical
-// `Service_Method` form (original kept as x-legacy-operation-id), snake_case
-// property names are auto-detected (-json-names overrides), and legacy
-// definition names are resolved back to proto messages. In compat mode the
-// fail-loud gates degrade to a coverage report on stderr plus
-// <out>.coverage.json next to the output; -strict restores hard failure when
-// anything is unmatched or ambiguous.
+// The enrichment matches swagger operations to proto methods by (verb,
+// path-template) from google.api.http rules (prefix-tolerant, so a patched
+// basePath is fine), rewrites each matched operationId to the canonical
+// `Service_Method` form (the original kept as x-legacy-operation-id when it
+// differs), auto-detects snake_case vs camelCase property names (-json-names
+// overrides), and resolves definition names back to proto messages through a
+// tiered resolver. This tolerant matching is the DEFAULT for every input —
+// gateway-v2 (protoc-gen-openapiv2) and the OLD grpc-gateway v1 / atlas
+// (protoc-gen-swagger) toolchains alike; nothing about the input is assumed
+// (WS-035 R1). Any unmatched/ambiguous item, plus proto methods with no swagger
+// operation (a legitimate partial view), is reported — on stderr always, and to
+// <out>.coverage.json when there is anything to review — rather than failing.
+//
+// -strict opts back into hard failure (non-zero exit, no output) when an
+// operation, schema, or field is unmatched or ambiguous. Proto methods with no
+// swagger operation stay a report section even under -strict: a swagger that
+// covers only part of a service is a partial view, not a defect.
+//
+// -compat=gateway-v1 is a DEPRECATED no-op, retained one release for grace: the
+// tolerant matching it used to gate is now the default, so the flag is accepted
+// and ignored.
 package main
 
 import (
@@ -52,16 +60,16 @@ func main() {
 func run(args []string) int {
 	fs := flag.NewFlagSet("openapiv2to3", flag.ContinueOnError)
 	descriptorPath := fs.String("descriptor", "", "path to a binary proto FileDescriptorSet for the enrichment pass (required)")
-	compatMode := fs.String("compat", "", `legacy-emitter compatibility mode; the only value is "gateway-v1" (grpc-gateway v1 / protoc-gen-swagger era). Default: off — gateway-v2 conventions, fail-loud enrichment`)
-	jsonNames := fs.String("json-names", "auto", `with -compat=gateway-v1: how schema properties are keyed against proto fields — "auto" (probe the document), "snake" (fd.Name()), or "camel" (fd.JSONName())`)
-	strict := fs.Bool("strict", false, "with -compat=gateway-v1: fail (non-zero exit, no output) if any operation, schema, or field is unmatched or ambiguous, instead of reporting")
+	compatMode := fs.String("compat", "", `DEPRECATED no-op (accepted for one release): the tolerant matching "gateway-v1" used to gate is now the default for every input`)
+	jsonNames := fs.String("json-names", "auto", `how schema properties are keyed against proto fields — "auto" (probe the document), "snake" (fd.Name()), or "camel" (fd.JSONName())`)
+	strict := fs.Bool("strict", false, "fail (non-zero exit, no output) if any operation, schema, or field is unmatched or ambiguous, instead of reporting (proto methods with no swagger operation stay a report section)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "openapiv2to3: %v\n", err)
 		return 1
 	}
 	rest := fs.Args()
 	if len(rest) < 1 {
-		fmt.Fprintf(os.Stderr, "usage: openapiv2to3 -descriptor <fds.binpb> [-compat=gateway-v1 [-json-names=auto|snake|camel] [-strict]] <input.swagger.json> [output-dir]\n")
+		fmt.Fprintf(os.Stderr, "usage: openapiv2to3 -descriptor <fds.binpb> [-json-names=auto|snake|camel] [-strict] <input.swagger.json> [output-dir]\n")
 		return 1
 	}
 	inputPath := rest[0]
@@ -70,22 +78,21 @@ func run(args []string) int {
 		outDir = rest[1]
 	}
 
-	// Flag validation: the compat sub-flags are meaningless without -compat.
+	// -compat is a deprecated no-op (WS-035 R1): the tolerant matching it used to
+	// gate is now the default, so accept "gateway-v1" and ignore it (one release
+	// of grace), and still reject any other value so a typo is caught.
 	switch *compatMode {
 	case "":
-		if *strict || *jsonNames != "auto" {
-			fmt.Fprintln(os.Stderr, "openapiv2to3: -strict and -json-names require -compat=gateway-v1")
-			return 1
-		}
 	case "gateway-v1":
-		switch *jsonNames {
-		case "auto", "snake", "camel":
-		default:
-			fmt.Fprintf(os.Stderr, "openapiv2to3: invalid -json-names %q (want auto, snake, or camel)\n", *jsonNames)
-			return 1
-		}
+		fmt.Fprintln(os.Stderr, "openapiv2to3: -compat=gateway-v1 is deprecated and now a no-op; its tolerant matching is the default")
 	default:
-		fmt.Fprintf(os.Stderr, "openapiv2to3: unknown -compat mode %q (the only value is \"gateway-v1\")\n", *compatMode)
+		fmt.Fprintf(os.Stderr, "openapiv2to3: unknown -compat mode %q (\"gateway-v1\" is the only accepted, deprecated value)\n", *compatMode)
+		return 1
+	}
+	switch *jsonNames {
+	case "auto", "snake", "camel":
+	default:
+		fmt.Fprintf(os.Stderr, "openapiv2to3: invalid -json-names %q (want auto, snake, or camel)\n", *jsonNames)
 		return 1
 	}
 
@@ -128,19 +135,15 @@ func run(args []string) int {
 		v3doc.Servers = openapi3.Servers{&openapi3.Server{URL: doc2.BasePath}}
 	}
 
-	// Lossless, proto-authoritative enrichment pass (WS-024 Part B).
-	var rep *coverageReport
-	if *compatMode == "gateway-v1" {
-		rep, err = enrichCompat(v3doc, files, compatOptions{jsonNames: *jsonNames, strict: *strict})
-		if rep != nil {
-			rep.Input = inputPath
-			rep.print(os.Stderr)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "openapiv2to3: enrich %s: %v\n", inputPath, err)
-			return 1
-		}
-	} else if err := enrich(v3doc, files); err != nil {
+	// Lossless, proto-authoritative enrichment pass (WS-024 Part B). The tolerant
+	// (verb, path-template) matching + coverage report is the default for every
+	// input (WS-035 R1); -strict opts back into fail-loud.
+	rep, err := enrichCompat(v3doc, files, compatOptions{jsonNames: *jsonNames, strict: *strict})
+	if rep != nil {
+		rep.Input = inputPath
+		rep.print(os.Stderr)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "openapiv2to3: enrich %s: %v\n", inputPath, err)
 		return 1
 	}
@@ -181,8 +184,13 @@ func run(args []string) int {
 	}
 	fmt.Printf("openapiv2to3: wrote %s\n", outPath)
 
-	// Compat mode: the machine-readable coverage report lands next to the spec.
-	if rep != nil {
+	// The machine-readable coverage report lands next to the spec ONLY when there
+	// is something to review (an unmatched/ambiguous item, a skipped field, a
+	// sanitized format, a repaired path, or an uncovered proto method). A clean
+	// conversion writes just the spec, so existing consumers (`de api publish`,
+	// apx) see no new file in openapi/ (WS-035 R1); the human summary still prints
+	// to stderr every run.
+	if rep != nil && rep.hasReviewable() {
 		covPath := outPath + ".coverage.json"
 		covBytes, err := json.MarshalIndent(rep, "", "  ")
 		if err != nil {

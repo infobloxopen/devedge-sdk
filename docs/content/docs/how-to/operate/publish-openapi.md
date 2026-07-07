@@ -82,37 +82,41 @@ disagree, the proto value wins. Per property and operation you get:
 
 The extensions are consumer-neutral (`x-aip-*`, never `x-terraform-*` or similar): the contract
 names AIP facts, and each consumer's generator maps them in its own glue (e.g. Terraform maps
-`IMMUTABLE` → `ForceNew`). The pass fails loud if the descriptor set is missing or drifts from the
-swagger, so the spec is never silently missing contract.
+`IMMUTABLE` → `ForceNew`). The pass fails loud if the descriptor set is missing, so the spec is
+never silently missing contract; drift between the swagger and the descriptor set is reported (see
+below), or made a hard failure with `-strict`.
 
-### Converting a legacy (grpc-gateway v1) swagger file
+### How the converter matches the swagger to the proto contract
 
-The converter behind `make generate` is `openapiv2to3` (in this repo under `cmd/openapiv2to3`). By
-default it expects gateway-v2 (`protoc-gen-openapiv2`) output. To publish an API whose swagger was
-emitted by the **old grpc-gateway v1 / atlas toolchain** (`protoc-gen-swagger`), pass
-`-compat=gateway-v1`:
+The converter behind `make generate` is `openapiv2to3` (in this repo under `cmd/openapiv2to3`). It
+matches swagger operations to proto methods by verb and path template from the `google.api.http`
+rules (tolerating a patched `basePath` prefix), rewrites each matched `operationId` to the canonical
+`Service_Method` form (the original is kept as `x-legacy-operation-id` when it differs), auto-detects
+snake_case vs camelCase property names, and resolves definition names back to proto messages. The
+swagger's `basePath` survives as `servers:`.
+
+This tolerant matching is the **default for every input** — swagger emitted by gateway-v2
+(`protoc-gen-openapiv2`) and by the old grpc-gateway v1 / atlas toolchain (`protoc-gen-swagger`,
+whose ids are not `Service_Method` and whose properties are often snake_case) convert the same way,
+with no flag:
 
 ```sh
-openapiv2to3 -descriptor api.binpb -compat=gateway-v1 legacy.swagger.json openapi/
+openapiv2to3 -descriptor api.binpb service.swagger.json openapi/
 ```
-
-In this mode the converter matches operations to proto methods by verb and path template from the
-`google.api.http` rules (tolerating a patched `basePath` prefix), rewrites each matched
-`operationId` to the canonical `Service_Method` form (the original is kept as
-`x-legacy-operation-id`), auto-detects snake_case property names, and resolves legacy definition
-names (`identityUser`-style) back to proto messages. The swagger's `basePath` survives as
-`servers:` in both modes.
 
 | Flag | Description |
 |---|---|
-| `-compat=gateway-v1` | Accept grpc-gateway v1 / `protoc-gen-swagger` era input |
 | `-json-names` | `auto` (default), `snake`, or `camel` — how schema properties are keyed against proto fields |
-| `-strict` | Fail instead of reporting when anything is unmatched or ambiguous |
+| `-strict` | Fail (non-zero exit, no output) when an operation, schema, or field is unmatched or ambiguous, instead of reporting |
+| `-compat=gateway-v1` | **Deprecated no-op** (accepted for one release): the tolerant matching it used to gate is now the default |
 
-Instead of failing loud, compat mode writes a per-file coverage report — operations and schemas
-matched/unmatched, fields enriched/skipped — to stderr and to `<name>.openapi.yaml.coverage.json`
-next to the output. Review the report before publishing; pass `-strict` to make any gap a hard
-failure.
+Rather than failing loud, the converter writes a per-file coverage report — operations and schemas
+matched/unmatched, fields enriched/skipped, formats sanitized, path templates repaired — to stderr on
+every run, and to `<name>.openapi.yaml.coverage.json` next to the output **when there is something to
+review** (a clean conversion writes just the spec). Review the report before publishing; pass
+`-strict` to make any gap a hard failure. Proto methods that have no swagger operation — a swagger
+that exposes only part of a service is a legitimate partial view — are always a report section, never
+a `-strict` failure.
 
 ## Step 3 — publish via `de api publish`
 

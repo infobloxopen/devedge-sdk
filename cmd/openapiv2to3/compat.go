@@ -1,25 +1,29 @@
 package main
 
-// gateway-v1 compatibility mode (WS-035): accept swagger 2.0 files emitted by
-// the OLD grpc-gateway v1 / atlas toolchains (protoc-gen-swagger era) and still
-// run the proto-authoritative enrichment pass. Those files differ from the
-// gateway-v2 output the default path assumes in four ways, each handled here:
+// Tolerant, proto-authoritative enrichment (WS-035): the DEFAULT pass for every
+// input, whether emitted by gateway-v2 (protoc-gen-openapiv2) or the OLD
+// grpc-gateway v1 / atlas toolchains (protoc-gen-swagger era). Nothing about the
+// swagger is assumed; four things that legacy emitters do differently are all
+// handled by matching against the FDS rather than by convention:
 //
-//  1. operationIds are NOT `Service_Method` — so operations are matched to
-//     proto methods by (verb, path-template) from `google.api.http` rules,
+//  1. operationIds are not necessarily `Service_Method` — operations are matched
+//     to proto methods by (verb, path-template) from `google.api.http` rules,
 //     prefix-tolerantly (swagger paths are often relative to a patched
 //     basePath, e.g. proto `/host_app/v1/on_prem_hosts` vs swagger
 //     basePath `/api/host_app/v1` + path `/on_prem_hosts`);
 //  2. matched operations get a canonical proto-derived operationId
-//     (`Service_Method`), the original preserved as x-legacy-operation-id;
+//     (`Service_Method`); when it differs, the original is preserved as
+//     x-legacy-operation-id (so clean gateway-v2 ids stay untouched);
 //  3. schema properties may be snake_case (`json_names_for_fields=false`) —
 //     auto-detected, overridable with -json-names;
 //  4. definition names are the gw-v1/atlas style (bare or package-concat like
 //     `identityUser`), resolved to proto messages through a tiered resolver.
 //
-// The default path's fail-loud losslessness gates degrade to a per-file
-// COVERAGE REPORT (human-readable on stderr + <out>.coverage.json); -strict
-// opts back into hard failure when anything is unmatched or ambiguous.
+// Any unmatched/ambiguous item, plus proto methods with no swagger operation, is
+// a per-file COVERAGE REPORT (human-readable on stderr; <out>.coverage.json when
+// there is anything to review). -strict opts back into hard failure when an
+// operation, schema, or field is unmatched or ambiguous — but uncovered proto
+// methods stay a report section (a partial view is not a defect; WS-035 R1).
 
 import (
 	"fmt"
@@ -45,11 +49,12 @@ type opMatch struct {
 	binding int
 }
 
-// compatOptions carries the -compat sub-flags.
+// compatOptions carries the enrichment flags.
 type compatOptions struct {
 	// jsonNames is "auto", "snake", or "camel" (-json-names).
 	jsonNames string
-	// strict opts back into fail-loud: any unmatched/ambiguous item errors.
+	// strict opts back into fail-loud: any unmatched/ambiguous operation, schema,
+	// or field errors (uncovered proto methods stay a report section).
 	strict bool
 }
 
@@ -87,6 +92,7 @@ type schemaCoverage struct {
 	Total     int           `json:"total"`
 	Enriched  int           `json:"enriched"`
 	WellKnown int           `json:"wellKnown"` // google.* messages (protobufAny, rpcStatus, …): recognized, deliberately not enriched
+	Synthetic int           `json:"synthetic"` // gateway-synthetic request-body wrappers (<Service><Method>Body): no proto message by design
 	Matched   []schemaMatch `json:"matched,omitempty"`
 	Unmatched []schemaGap   `json:"unmatched,omitempty"`
 	Ambiguous []schemaGap   `json:"ambiguous,omitempty"`
@@ -123,17 +129,40 @@ func (r *coverageReport) fieldSkipped(schema, property, reason string) {
 	r.Fields.SkippedDetail = append(r.Fields.SkippedDetail, fieldGap{Schema: schema, Property: property, Reason: reason})
 }
 
-// hasGaps reports whether anything in the file failed to match — the -strict
-// failure condition (the report-mode analogue of the default path's gates).
+// hasGaps reports whether anything in the file failed to match — an
+// unmatched/ambiguous operation or schema, a skipped field, or a proto method
+// with no swagger operation.
 func (r *coverageReport) hasGaps() bool {
 	return len(r.Operations.Unmatched) > 0 || len(r.Operations.Ambiguous) > 0 ||
 		len(r.Schemas.Unmatched) > 0 || len(r.Schemas.Ambiguous) > 0 ||
 		r.Fields.Skipped > 0 || len(r.ProtoMethodsUnmatched) > 0
 }
 
+// strictGaps reports the gaps that fail the -strict gate. Unlike hasGaps it
+// EXCLUDES proto methods with no swagger operation (WS-035 R1): a swagger that
+// exposes only part of a service's methods is a legitimate partial view, not a
+// conversion defect, so such uncovered (e.g. gRPC-only) methods stay a report
+// section even under -strict. Everything else — an unmatched/ambiguous
+// operation or schema, or a skipped field — is a hard failure.
+func (r *coverageReport) strictGaps() bool {
+	return len(r.Operations.Unmatched) > 0 || len(r.Operations.Ambiguous) > 0 ||
+		len(r.Schemas.Unmatched) > 0 || len(r.Schemas.Ambiguous) > 0 ||
+		r.Fields.Skipped > 0
+}
+
+// hasReviewable reports whether the conversion produced anything an operator
+// should review before publishing — a gap (see hasGaps) OR a transformation the
+// tool applied (a sanitized format, a repaired/de-duplicated path template).
+// When false the conversion was clean, and run() writes no coverage sidecar so
+// existing consumers see just the spec.
+func (r *coverageReport) hasReviewable() bool {
+	return r.hasGaps() || r.FormatsSanitized > 0 ||
+		r.PathParams.Restored > 0 || r.PathParams.Deduped > 0
+}
+
 // print writes the human-readable coverage summary.
 func (r *coverageReport) print(w io.Writer) {
-	fmt.Fprintf(w, "openapiv2to3: gateway-v1 compat coverage for %s:\n", r.Input)
+	fmt.Fprintf(w, "openapiv2to3: coverage for %s:\n", r.Input)
 	fmt.Fprintf(w, "  json-names: %s (%s)\n", r.JSONNames, r.JSONNamesSource)
 	fmt.Fprintf(w, "  operations: %d total, %d matched, %d unmatched, %d ambiguous\n",
 		r.Operations.Total, r.Operations.Matched, len(r.Operations.Unmatched), len(r.Operations.Ambiguous))
@@ -144,8 +173,8 @@ func (r *coverageReport) print(w io.Writer) {
 		fmt.Fprintf(w, "    AMBIGUOUS %s %s (operationId %q): %s\n      candidates: %s\n",
 			g.Verb, g.Path, g.OperationID, g.Reason, strings.Join(g.Candidates, ", "))
 	}
-	fmt.Fprintf(w, "  schemas: %d total, %d enriched, %d well-known, %d unmatched, %d ambiguous\n",
-		r.Schemas.Total, r.Schemas.Enriched, r.Schemas.WellKnown, len(r.Schemas.Unmatched), len(r.Schemas.Ambiguous))
+	fmt.Fprintf(w, "  schemas: %d total, %d enriched, %d well-known, %d synthetic, %d unmatched, %d ambiguous\n",
+		r.Schemas.Total, r.Schemas.Enriched, r.Schemas.WellKnown, r.Schemas.Synthetic, len(r.Schemas.Unmatched), len(r.Schemas.Ambiguous))
 	for _, g := range r.Schemas.Unmatched {
 		fmt.Fprintf(w, "    UNMATCHED %q: %s\n", g.Name, g.Reason)
 	}
@@ -527,6 +556,23 @@ func (r *schemaResolver) resolve(name string) (protoreflect.MessageDescriptor, s
 	return nil, "", &schemaGap{Name: name, Reason: "no proto message found"}
 }
 
+// wellKnownSchemaNames are the schema names grpc-gateway injects for
+// google.protobuf / google.rpc messages (rendered into every swagger that
+// references Any, Status, NullValue, …). They carry no app contract and a
+// service's FileDescriptorSet often does not vendor the google descriptor, so
+// recognize them by name — otherwise they are false "unmatched schema" gaps that
+// would noise up the coverage report and false-fail -strict on ordinary specs.
+var wellKnownSchemaNames = map[string]bool{
+	"protobufAny":       true,
+	"protobufNullValue": true,
+	"protobufDuration":  true,
+	"protobufStruct":    true,
+	"protobufListValue": true,
+	"rpcStatus":         true,
+	"googlerpcStatus":   true,
+	"googleprotobufAny": true,
+}
+
 // --- json-names auto-detection ------------------------------------------------
 
 // detectJSONNames probes the resolved (schema, message) pairs: for every
@@ -567,14 +613,14 @@ func detectJSONNames(doc *openapi3.T, resolved map[string]protoreflect.MessageDe
 
 // --- the compat enrichment pass -------------------------------------------------
 
-// enrichCompat is the gateway-v1 analogue of enrich: same proto-authoritative
-// enrichment, but operations are matched by (verb, path-template), operationIds
-// are canonicalized, properties may be keyed snake_case, and definition names go
-// through the tiered resolver. It ALWAYS returns a coverage report (for stderr +
-// <out>.coverage.json); the error is non-nil only under opts.strict when the
-// report has gaps.
+// enrichCompat is the default proto-authoritative enrichment pass: operations
+// are matched by (verb, path-template), operationIds are canonicalized,
+// properties may be keyed snake_case, and definition names go through the tiered
+// resolver. It ALWAYS returns a coverage report (for stderr + <out>.coverage.json
+// when reviewable); the error is non-nil only under opts.strict when the report
+// has strict-gaps (uncovered proto methods excluded, per WS-035 R1).
 func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOptions) (*coverageReport, error) {
-	rep := &coverageReport{Mode: "gateway-v1"}
+	rep := &coverageReport{Mode: "default"}
 
 	// (a) Drop invalid type/format pairs (e.g. legacy `format: boolean`) before
 	// enrichment so the emitted spec is generatable by strict clients.
@@ -582,6 +628,14 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 
 	bindings, facts := collectBindings(files)
 	resolver := buildSchemaResolver(files)
+
+	// grpc-gateway synthesizes a `<Service><Method>Body` wrapper schema for a
+	// method whose HTTP body is a field subset; it has no proto message by design,
+	// so recognize the names up front and never treat them as unmatched.
+	bodyWrappers := map[string]bool{}
+	for _, b := range bindings {
+		bodyWrappers[string(b.svc.Name())+string(b.method.Name())+"Body"] = true
+	}
 
 	// Resolve every definition name to a proto message (or report why not).
 	resolved := map[string]protoreflect.MessageDescriptor{} // enrichable (non-google) matches
@@ -596,9 +650,17 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 	for _, name := range schemaNames {
 		md, tier, gap := resolver.resolve(name)
 		if gap != nil {
-			if gap.Candidates != nil {
+			switch {
+			case gap.Candidates != nil:
 				rep.Schemas.Ambiguous = append(rep.Schemas.Ambiguous, *gap)
-			} else {
+			case wellKnownSchemaNames[name]:
+				// Gateway-injected google.* type absent from the FDS — recognized,
+				// not app contract, not a gap.
+				rep.Schemas.WellKnown++
+			case bodyWrappers[name]:
+				// Gateway-synthetic request-body wrapper — no proto message by design.
+				rep.Schemas.Synthetic++
+			default:
 				rep.Schemas.Unmatched = append(rep.Schemas.Unmatched, *gap)
 			}
 			continue
@@ -742,10 +804,14 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 		}
 		b := bindings[m.binding]
 		rep.Operations.Matched++
-		if legacy := m.op.OperationID; legacy != "" {
+		canonical := b.canonicalOperationID()
+		// Preserve the original id only when canonicalization actually changes it,
+		// so a clean gateway-v2 document (ids already `Service_Method`) is not
+		// littered with a redundant x-legacy-operation-id equal to the operationId.
+		if legacy := m.op.OperationID; legacy != "" && legacy != canonical {
 			setExt(&m.op.Extensions, "x-legacy-operation-id", legacy)
 		}
-		m.op.OperationID = b.canonicalOperationID()
+		m.op.OperationID = canonical
 		f := facts[b.svc.FullName()]
 		std := aip.ClassifyMethod(b.method, f.res, f.softDelete)
 		setExt(&m.op.Extensions, "x-aip-method", std.String())
@@ -770,8 +836,8 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 	}
 	sort.Strings(rep.ProtoMethodsUnmatched)
 
-	if opts.strict && rep.hasGaps() {
-		return rep, fmt.Errorf("gateway-v1 compat under -strict: %d operations unmatched, %d ambiguous; %d schemas unmatched, %d ambiguous; %d fields skipped; %d proto methods without operations",
+	if opts.strict && rep.strictGaps() {
+		return rep, fmt.Errorf("-strict: %d operations unmatched, %d ambiguous; %d schemas unmatched, %d ambiguous; %d fields skipped (%d proto methods without operations are reported, not a failure)",
 			len(rep.Operations.Unmatched), len(rep.Operations.Ambiguous),
 			len(rep.Schemas.Unmatched), len(rep.Schemas.Ambiguous),
 			rep.Fields.Skipped, len(rep.ProtoMethodsUnmatched))

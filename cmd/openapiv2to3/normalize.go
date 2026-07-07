@@ -1,10 +1,10 @@
 package main
 
-// gateway-v1 compat NORMALIZATIONS (WS-035): two source-swagger heritage
-// defects that the old protoc-gen-swagger / atlas toolchains bake into their
-// output and that hard-fail strict downstream client generators (oapi-codegen,
-// tsc-on-ng-openapi-gen). Both run only under -compat=gateway-v1; the default
-// (gateway-v2) path is untouched and stays byte-identical.
+// Source-swagger NORMALIZATIONS (WS-035): two heritage defects that the old
+// protoc-gen-swagger / atlas toolchains bake into their output and that hard-
+// fail strict downstream client generators (oapi-codegen, tsc-on-ng-openapi-gen).
+// Both run as part of the default enrichment pass; each fires only on the actual
+// defect, so a clean gateway-v2 document passes through unchanged.
 //
 //  (a) format sanitization — drop `format` values that are invalid per the
 //      OpenAPI Specification for the schema's `type` (at minimum
@@ -39,7 +39,7 @@ var badFormatsByType = map[string]map[string]bool{
 
 // sanitizeFormats drops invalid type/format pairs from every schema reachable
 // in the document (component schemas + parameter/body/response schemas),
-// counting each drop in the coverage report. Compat-mode only.
+// counting each drop in the coverage report.
 func sanitizeFormats(doc *openapi3.T, rep *coverageReport) {
 	visited := map[*openapi3.Schema]bool{}
 	var walk func(ref *openapi3.SchemaRef)
@@ -251,7 +251,7 @@ func equalStrs(a, b []string) bool {
 // (the path key + every path parameter, positionally); with no matched rule (or
 // a var-count mismatch) it de-duplicates the names mechanically so the emitted
 // spec is at least buildable. Non-duplicated templates are left untouched — the
-// repair fires only on the actual defect. Compat-mode only.
+// repair fires only on the actual defect.
 func restorePathParams(doc *openapi3.T, matches []opMatch, bindings []httpBinding, rep *coverageReport) {
 	if doc.Paths == nil {
 		return
