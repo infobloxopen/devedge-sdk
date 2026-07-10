@@ -23,7 +23,7 @@ bool searchable = <next free>;   // include this column in the resource's full-t
 
 // infoblox/storage/v1/storage.proto — new message-level option (model is 50050)
 message SearchConfig {
-  enum Strategy { STRATEGY_UNSPECIFIED = 0; JIT = 1; INDEXED = 2; PROJECTED = 3; }
+  enum Strategy { STRATEGY_UNSPECIFIED = 0; STRATEGY_JIT = 1; STRATEGY_INDEXED = 2; STRATEGY_PROJECTED = 3; }
   Strategy strategy    = 1;             // default JIT
   string   text_config = 2;             // Postgres TS config; default "simple"
   repeated SearchSource sources = 3;    // calculated/transformed sources beyond field-flagged columns
@@ -47,9 +47,15 @@ extend google.protobuf.MessageOptions { SearchConfig search = 50051; }  // next 
 ```
 
 Field-flagged columns (`searchable=true`) are implicit sources; `SearchConfig.sources` adds
-calculated ones. Release = a new `infoblox.field.v1` + `infoblox.storage.v1` alpha in both apis repos
-via the apx canonical pipeline (see memory `apx-canonical-api-schemas` for the gotchas), authorized
-for public release this session.
+calculated ones.
+
+> **RELEASED (WP-0, 2026-07-10) — authoritative schema.** Shipped in public `infobloxopen/apis`:
+> `infoblox.field.v1` **v1.0.0-alpha.5** (`bool searchable = 12`) and `infoblox.storage.v1`
+> **v1.0.0-alpha.2** (`SearchConfig search = 50051`). Enum values are **`STRATEGY_UNSPECIFIED`
+> (=JIT) / `STRATEGY_JIT` / `STRATEGY_INDEXED` / `STRATEGY_PROJECTED`** (buf STANDARD ruleset requires
+> the prefix). When implementing, read the actual released `.proto` from the apis module — it, not
+> this sketch, is authoritative. (`storage.v1` alpha.2 also released in internal `Infoblox-CTO/apis`;
+> `field.v1` is public-only and that is fine — devedge-sdk consumes `field.v1` from the public repo.)
 
 ## The shared resolver + flavor compilers (`internal/aip`)
 
