@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/internal/aip"
 )
 
@@ -83,8 +84,9 @@ func enrich(doc *openapi3.T, files *protoregistry.Files) error {
 				}
 				opID := fmt.Sprintf("%s_%s", sd.Name(), md.Name())
 				opToMethod[opID] = classifiedMethod{
-					method: md,
-					std:    aip.ClassifyMethod(md, res, softDelete),
+					method:   md,
+					std:      aip.ClassifyMethod(md, res, softDelete),
+					resource: res,
 				}
 			}
 		}
@@ -122,6 +124,17 @@ func enrich(doc *openapi3.T, files *protoregistry.Files) error {
 				if pg := paginationExt(cm.method); pg != nil {
 					setExt(&op.Extensions, "x-aip-pagination", pg)
 				}
+				// WS-041 full-text search (FR-D1): a searchable List resource gets a
+				// `q` query parameter and an x-aip-search extension (searchable source
+				// names, strategy, text_config), parallel to x-aip-pagination.
+				sx, err := searchExt(cm.resource)
+				if err != nil {
+					return fmt.Errorf("enrich: operation %q: %w", op.OperationID, err)
+				}
+				if sx != nil {
+					ensureQueryParam(op, "q", "WS-041 full-text search: free-text query across the resource's searchable fields.")
+					setExt(&op.Extensions, "x-aip-search", sx)
+				}
 			}
 		}
 	}
@@ -153,6 +166,9 @@ func enrich(doc *openapi3.T, files *protoregistry.Files) error {
 type classifiedMethod struct {
 	method protoreflect.MethodDescriptor
 	std    aip.StdMethod
+	// resource is the service's detected resource message (nil when none). For a
+	// List op it carries the searchable surface consumed by x-aip-search (WS-041).
+	resource protoreflect.MessageDescriptor
 }
 
 // propKeyMode selects how schema properties are keyed against proto fields:
@@ -289,6 +305,68 @@ func paginationExt(md protoreflect.MethodDescriptor) map[string]any {
 		return nil
 	}
 	return ext
+}
+
+// searchExt builds the x-aip-search extension for a searchable List resource
+// (WS-041 FR-D1): the searchable source names (field JSON names + calculated
+// source names, in vector order via searchgen.Compiled.SourceNames), the
+// materialization strategy, and the Postgres text-search config. It returns nil
+// for a non-searchable resource. It uses the SAME shared resolver + compiler the
+// storage/ent generators use, so the published contract cannot drift from the
+// emitted predicate (FR-A1/FM-5), and fails loud on a leaky/non-textual
+// searchable field, a reserved PROJECTED strategy, or an unknown flavor.
+func searchExt(res protoreflect.MessageDescriptor) (map[string]any, error) {
+	if res == nil {
+		return nil, nil
+	}
+	cfg, err := aip.ResolveSearchConfig(res)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.IsSearchable() {
+		return nil, nil
+	}
+	compiled, err := searchgen.Compile(cfg, res, searchgen.DialectPostgres)
+	if err != nil {
+		return nil, err
+	}
+	if compiled == nil {
+		return nil, nil
+	}
+	sources := compiled.SourceNames
+	if sources == nil {
+		sources = []string{}
+	}
+	return map[string]any{
+		"queryParam": "q",
+		"sources":    sources,
+		"strategy":   cfg.Strategy.String(),
+		"textConfig": compiled.TextConfig,
+	}, nil
+}
+
+// ensureQueryParam guarantees op carries a string query parameter named name with
+// the given authoritative description. grpc-gateway already emits a parameter for
+// each scalar request field (so `q` is normally present) — this overwrites its
+// description with the proto-authoritative text, and adds the parameter if the
+// base spec somehow lacks it.
+func ensureQueryParam(op *openapi3.Operation, name, description string) {
+	for _, p := range op.Parameters {
+		if p != nil && p.Value != nil && p.Value.Name == name && p.Value.In == openapi3.ParameterInQuery {
+			p.Value.Description = description
+			return
+		}
+	}
+	op.Parameters = append(op.Parameters, &openapi3.ParameterRef{
+		Value: &openapi3.Parameter{
+			Name:        name,
+			In:          openapi3.ParameterInQuery,
+			Description: description,
+			Schema: &openapi3.SchemaRef{
+				Value: &openapi3.Schema{Type: &openapi3.Types{openapi3.TypeString}},
+			},
+		},
+	})
 }
 
 // behaviorNames returns the raw field_behavior enum names for the extension.

@@ -133,6 +133,13 @@
             "in": "query",
             "required": false,
             "type": "string"
+          },
+          {
+            "name": "q",
+            "description": "WS-041 full-text search (`q` collection operator): free-text query across the\nresource's searchable fields; mapped onto persistence.ListOptions.Search.",
+            "in": "query",
+            "required": false,
+            "type": "string"
           }
         ],
         "tags": [
@@ -366,7 +373,7 @@
                 },
                 "displayName": {
                   "type": "string",
-                  "description": "display_name is client-REQUIRED (explicit field_behavior)."
+                  "description": "display_name is client-REQUIRED (explicit field_behavior) and field-flagged\nsearchable (WS-041): included in the resource's full-text search vector."
                 },
                 "color": {
                   "type": "string",
@@ -693,7 +700,7 @@
         },
         "displayName": {
           "type": "string",
-          "description": "display_name is client-REQUIRED (explicit field_behavior)."
+          "description": "display_name is client-REQUIRED (explicit field_behavior) and field-flagged\nsearchable (WS-041): included in the resource's full-text search vector."
         },
         "color": {
           "type": "string",

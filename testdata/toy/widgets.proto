@@ -15,6 +15,7 @@ import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "infoblox/authz/v1/authz.proto";
 import "infoblox/field/v1/field.proto";
+import "infoblox/storage/v1/storage.proto";
 
 // Widget is the resource managed by WidgetService.
 message Widget {
@@ -23,13 +24,43 @@ message Widget {
     pattern: "widgets/{widget}"
   };
 
+  // WS-041 full-text search: display_name is a field-flagged searchable source
+  // (below), and category_label is a message-level calculated source carrying a
+  // Postgres CASE expr (the DDI `map_zone_type` shape, used on Postgres) plus a
+  // portable `cel` alternate (used for the SQLite `LIKE` fallback), so the
+  // resource stays SQLite-portable while exercising the sql/postgres flavor.
+  option (infoblox.storage.v1.search) = {
+    strategy: STRATEGY_JIT
+    text_config: "simple"
+    sources {
+      name: "category_label"
+      exprs {
+        expr {
+          flavor: "sql"
+          dialect: "postgres"
+          version: "1"
+          expr: "CASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END"
+        }
+        expr {
+          flavor: "cel"
+          version: "1"
+          expr: "msg.category == 'premium' ? 'tier premium' : 'tier standard'"
+        }
+      }
+    }
+  };
+
   // name is the AIP-122 resource name, e.g. "widgets/abc123".
   string name         = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
   // id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the
   // API contract (FR-A6 "annotate once") — no explicit field_behavior needed.
   string id           = 2 [(infoblox.field.v1.opts) = {id: {strategy: STRATEGY_USER_SETTABLE}}];
-  // display_name is client-REQUIRED (explicit field_behavior).
-  string display_name = 3 [(google.api.field_behavior) = REQUIRED];
+  // display_name is client-REQUIRED (explicit field_behavior) and field-flagged
+  // searchable (WS-041): included in the resource's full-text search vector.
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (infoblox.field.v1.opts) = {searchable: true}
+  ];
   // color is IMMUTABLE (explicit field_behavior): set at create, never updated.
   string color        = 4 [(google.api.field_behavior) = IMMUTABLE];
   int32  weight       = 5;
@@ -69,6 +100,9 @@ message ListWidgetsRequest  {
   bool   show_deleted = 3;
   // AIP-157: fields to return; empty means all fields.
   google.protobuf.FieldMask read_mask = 4;
+  // WS-041 full-text search (`q` collection operator): free-text query across the
+  // resource's searchable fields; mapped onto persistence.ListOptions.Search.
+  string q = 5;
 }
 message ListWidgetsResponse {
   repeated Widget widgets         = 1;

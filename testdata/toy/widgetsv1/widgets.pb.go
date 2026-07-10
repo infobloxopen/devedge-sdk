@@ -13,6 +13,7 @@ package widgetsv1
 import (
 	_ "github.com/infobloxopen/apis/proto/infoblox/authz/v1"
 	_ "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	_ "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -39,7 +40,8 @@ type Widget struct {
 	// id is USER_SETTABLE (AIP-133): the annotation alone derives IMMUTABLE for the
 	// API contract (FR-A6 "annotate once") — no explicit field_behavior needed.
 	Id string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
-	// display_name is client-REQUIRED (explicit field_behavior).
+	// display_name is client-REQUIRED (explicit field_behavior) and field-flagged
+	// searchable (WS-041): included in the resource's full-text search vector.
 	DisplayName string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	// color is IMMUTABLE (explicit field_behavior): set at create, never updated.
 	Color  string `protobuf:"bytes,4,opt,name=color,proto3" json:"color,omitempty"`
@@ -299,7 +301,10 @@ type ListWidgetsRequest struct {
 	// AIP-148: include soft-deleted widgets when true.
 	ShowDeleted bool `protobuf:"varint,3,opt,name=show_deleted,json=showDeleted,proto3" json:"show_deleted,omitempty"`
 	// AIP-157: fields to return; empty means all fields.
-	ReadMask      *fieldmaskpb.FieldMask `protobuf:"bytes,4,opt,name=read_mask,json=readMask,proto3" json:"read_mask,omitempty"`
+	ReadMask *fieldmaskpb.FieldMask `protobuf:"bytes,4,opt,name=read_mask,json=readMask,proto3" json:"read_mask,omitempty"`
+	// WS-041 full-text search (`q` collection operator): free-text query across the
+	// resource's searchable fields; mapped onto persistence.ListOptions.Search.
+	Q             string `protobuf:"bytes,5,opt,name=q,proto3" json:"q,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -360,6 +365,13 @@ func (x *ListWidgetsRequest) GetReadMask() *fieldmaskpb.FieldMask {
 		return x.ReadMask
 	}
 	return nil
+}
+
+func (x *ListWidgetsRequest) GetQ() string {
+	if x != nil {
+		return x.Q
+	}
+	return ""
 }
 
 type ListWidgetsResponse struct {
@@ -1056,11 +1068,11 @@ var File_widgets_proto protoreflect.FileDescriptor
 
 const file_widgets_proto_rawDesc = "" +
 	"\n" +
-	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\"\x95\x04\n" +
+	"\rwidgets.proto\x12\x06toy.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dinfoblox/authz/v1/authz.proto\x1a\x1dinfoblox/field/v1/field.proto\x1a!infoblox/storage/v1/storage.proto\"\x97\x06\n" +
 	"\x06Widget\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x18\n" +
-	"\x02id\x18\x02 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12&\n" +
-	"\fdisplay_name\x18\x03 \x01(\tB\x03\xe0A\x02R\vdisplayName\x12\x19\n" +
+	"\x02id\x18\x02 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12,\n" +
+	"\fdisplay_name\x18\x03 \x01(\tB\t\xe0A\x02\x9a\xb5\x18\x02`\x01R\vdisplayName\x12\x19\n" +
 	"\x05color\x18\x04 \x01(\tB\x03\xe0A\x05R\x05color\x12\x16\n" +
 	"\x06weight\x18\x05 \x01(\x05R\x06weight\x12\x12\n" +
 	"\x04etag\x18\x06 \x01(\tR\x04etag\x12\x18\n" +
@@ -1072,8 +1084,13 @@ const file_widgets_proto_rawDesc = "" +
 	"\x16toy.example.com/WidgetR\bparentId\x12@\n" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"deleteTime\x12D\n" +
-	"\rarchived_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\farchivedTime:-\xeaA*\n" +
-	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\"\x81\x01\n" +
+	"\rarchived_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\farchivedTime:\xa8\x02\xeaA*\n" +
+	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\x9a\xb8\x18\xf6\x01\b\x01\x12\x06simple\x1a\xe9\x01\n" +
+	"\x0ecategory_label\x1a\xd6\x01\n" +
+	"\x8b\x01\n" +
+	"\x03sql\x12\bpostgres\x1a\x011\"wCASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END\n" +
+	"F\n" +
+	"\x03cel\x1a\x011\"<msg.category == 'premium' ? 'tier premium' : 'tier standard'\"\x81\x01\n" +
 	"\x13CreateWidgetRequest\x12&\n" +
 	"\x06widget\x18\x01 \x01(\v2\x0e.toy.v1.WidgetR\x06widget\x12\x1d\n" +
 	"\n" +
@@ -1081,13 +1098,14 @@ const file_widgets_proto_rawDesc = "" +
 	"\rvalidate_only\x18\x03 \x01(\bR\fvalidateOnly\"[\n" +
 	"\x10GetWidgetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x127\n" +
-	"\tread_mask\x18\b \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"\xac\x01\n" +
+	"\tread_mask\x18\b \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"\xba\x01\n" +
 	"\x12ListWidgetsRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\x12!\n" +
 	"\fshow_deleted\x18\x03 \x01(\bR\vshowDeleted\x127\n" +
-	"\tread_mask\x18\x04 \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\"g\n" +
+	"\tread_mask\x18\x04 \x01(\v2\x1a.google.protobuf.FieldMaskR\breadMask\x12\f\n" +
+	"\x01q\x18\x05 \x01(\tR\x01q\"g\n" +
 	"\x13ListWidgetsResponse\x12(\n" +
 	"\awidgets\x18\x01 \x03(\v2\x0e.toy.v1.WidgetR\awidgets\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"^\n" +

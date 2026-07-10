@@ -171,6 +171,14 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 		sql, args := cond.SQL()
 		q = q.Where(sql, args...)
 	}
+	if opts.Search != "" {
+		switch r.db.Dialector.Name() {
+		case "postgres":
+			q = q.Where("to_tsvector('simple', replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ') || ' ' || (CASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END)) @@ websearch_to_tsquery('simple', ?)", opts.Search)
+		default:
+			q = q.Where("lower(coalesce(CAST(\"display_name\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%'", opts.Search)
+		}
+	}
 	if opts.OrderBy != "" {
 		clauses, err := filter.ParseOrderBy(opts.OrderBy, WidgetColumns)
 		if err != nil {

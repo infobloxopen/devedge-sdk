@@ -241,6 +241,24 @@ type messageInfo struct {
 	// id-less Create mints a fresh id and an empty id is never persisted.
 	IdStrategy  fieldv1.IdOptions_Strategy
 	IdGenerator fieldv1.IdOptions_Generator
+	// Search carries the compiled full-text search surface (WS-041) when the
+	// resource declares one; nil otherwise. It drives the generated List `q`
+	// predicate. Populated in main.go from searchgen.Compile.
+	Search *searchInfo
+}
+
+// searchInfo is the compiled full-text search surface embedded into a generated
+// GORM List (WS-041, SD-6/FR-B3/B5). The generated `q` predicate branches on the
+// runtime dialect (db.Dialector.Name()): Postgres runs true FTS over
+// PostgresVector; a portable resource degrades to a case-insensitive LIKE
+// contains over SQLiteVector on any other engine; a resource with a sql/postgres
+// source (PostgresOnly) has no portable form and fails loud at runtime on a
+// non-Postgres backend rather than emit wrong SQL.
+type searchInfo struct {
+	PostgresVector string // to_tsvector argument (Postgres FTS branch)
+	SQLiteVector   string // text concatenation for the SQLite LIKE fallback ("" when PostgresOnly)
+	PostgresOnly   bool   // true => no SQLite form; non-Postgres backends fail loud
+	TextConfig     string // resolved Postgres text-search config (default "simple")
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -1166,6 +1184,32 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	fmt.Fprintf(b, "\t\tsql, args := cond.SQL()\n")
 	fmt.Fprintf(b, "\t\tq = q.Where(sql, args...)\n")
 	fmt.Fprintf(b, "\t}\n")
+	// WS-041 AIP `q` full-text search predicate, ANDed after the AIP-160 filter
+	// WHERE (SD-6). The user term is ALWAYS a bound parameter (never interpolated,
+	// FM-3). The vector is dialect-specific, chosen from the runtime dialect: on
+	// Postgres a parameterized to_tsvector(...) @@ websearch_to_tsquery(...) (SD-5);
+	// on any other engine (the SQLite dev/test driver) a case-insensitive LIKE
+	// contains over the portable vector (FR-B5). A resource carrying a sql/postgres
+	// source has no portable form (PostgresOnly) and fails loud on a non-Postgres
+	// backend rather than emit wrong SQL (SD-4/FM-8).
+	if msg.Search != nil {
+		s := msg.Search
+		pgPred := fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ?)", s.TextConfig, s.PostgresVector, s.TextConfig)
+		b.WriteString("\tif opts.Search != \"\" {\n")
+		b.WriteString("\t\tswitch r.db.Dialector.Name() {\n")
+		b.WriteString("\t\tcase \"postgres\":\n")
+		fmt.Fprintf(b, "\t\t\tq = q.Where(%q, opts.Search)\n", pgPred)
+		b.WriteString("\t\tdefault:\n")
+		if s.PostgresOnly {
+			fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.Unimplemented, %q)\n",
+				fmt.Sprintf("full-text search for %s requires PostgreSQL", msg.MessageName))
+		} else {
+			ltPred := fmt.Sprintf("lower(%s) LIKE '%%' || lower(?) || '%%'", s.SQLiteVector)
+			fmt.Fprintf(b, "\t\t\tq = q.Where(%q, opts.Search)\n", ltPred)
+		}
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+	}
 	fmt.Fprintf(b, "\tif opts.OrderBy != \"\" {\n")
 	fmt.Fprintf(b, "\t\tclauses, err := filter.ParseOrderBy(opts.OrderBy, %sColumns)\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\tif err != nil {\n")
