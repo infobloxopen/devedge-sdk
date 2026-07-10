@@ -101,8 +101,8 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 							bld.WriteString(")")
 						default:
 							bld.WriteString("lower(coalesce(CAST(\"email\" AS text), '') || ' ' || coalesce(CAST(\"display_name\" AS text), '')) LIKE '%' || lower(")
-							bld.Arg(search)
-							bld.WriteString(") || '%'")
+							bld.Arg(persistence.EscapeLikePattern(search))
+							bld.WriteString(") || '%' ESCAPE '\\'")
 						}
 					}))
 				}))

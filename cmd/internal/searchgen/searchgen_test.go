@@ -360,6 +360,24 @@ func TestCompile_RejectRules(t *testing.T) {
 			wantPart: "non-immutable",
 		},
 		{
+			// SEC-041-03: an expanded volatile/side-effecting function is rejected.
+			name: "pg_sleep side-effecting function",
+			mo: searchOpts(&storagev1.SearchConfig{Sources: []*storagev1.SearchSource{
+				exprS("x", &storagev1.SearchExpr{Flavor: "sql", Dialect: "postgres", Expr: "pg_sleep(5)::text"}),
+			}}),
+			dialect:  DialectPostgres,
+			wantPart: "pg_sleep",
+		},
+		{
+			// SEC-041-02: a non-identifier text_config must fail loud (it is
+			// interpolated into to_tsvector('<cfg>', …), not bound).
+			name: "invalid text_config identifier",
+			mo: searchOpts(&storagev1.SearchConfig{TextConfig: `simple') --`}),
+			fopts:    map[string]*fieldv1.FieldOptions{"display_name": {Searchable: true}},
+			dialect:  DialectPostgres,
+			wantPart: "text_config",
+		},
+		{
 			name: "cross-table sql reference",
 			mo: searchOpts(&storagev1.SearchConfig{Sources: []*storagev1.SearchSource{
 				exprS("x", &storagev1.SearchExpr{Flavor: "sql", Dialect: "postgres",
@@ -380,6 +398,19 @@ func TestCompile_RejectRules(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantPart)
 			}
 		})
+	}
+}
+
+// TestCompile_TextConfigValidation proves SEC-041-02: a resolved text_config that
+// is a valid Postgres regconfig identifier ("english") compiles and is surfaced,
+// while a non-identifier value fails loud (covered for the reject side in
+// TestCompile_RejectRules).
+func TestCompile_TextConfigValidation(t *testing.T) {
+	md := buildM(t, searchOpts(&storagev1.SearchConfig{TextConfig: "english"}),
+		map[string]*fieldv1.FieldOptions{"display_name": {Searchable: true}})
+	c := mustCompile(t, md, DialectPostgres)
+	if c.TextConfig != "english" {
+		t.Errorf("TextConfig = %q, want english", c.TextConfig)
 	}
 }
 

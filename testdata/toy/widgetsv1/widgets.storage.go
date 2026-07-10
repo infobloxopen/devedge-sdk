@@ -176,7 +176,7 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 		case "postgres":
 			q = q.Where("to_tsvector('simple', replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ') || ' ' || (CASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END)) @@ websearch_to_tsquery('simple', ?)", opts.Search)
 		default:
-			q = q.Where("lower(coalesce(CAST(\"display_name\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%'", opts.Search)
+			q = q.Where("lower(coalesce(CAST(\"display_name\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(opts.Search))
 		}
 	}
 	if opts.OrderBy != "" {
@@ -601,7 +601,7 @@ func (r *GizmoRepository) List(ctx context.Context, opts persistence.ListOptions
 		case "postgres":
 			q = q.Where("search_vector @@ websearch_to_tsquery('simple', ?)", opts.Search)
 		default:
-			q = q.Where("lower(coalesce(CAST(\"label\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%'", opts.Search)
+			q = q.Where("lower(coalesce(CAST(\"label\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(opts.Search))
 		}
 	}
 	if opts.OrderBy != "" {

@@ -1590,10 +1590,13 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 			b.WriteString("\t\t\t\t\t\t\t// source has no portable form); match nothing on a non-Postgres backend.\n")
 			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\"1 = 0\")\n")
 		} else {
+			// The user term is escaped (persistence.EscapeLikePattern) and matched with
+			// an ESCAPE '\' clause so its LIKE metacharacters (% _ \) are LITERAL, not
+			// wildcards (SEC-041-01). It stays a bound arg (FM-3).
 			ltFrag := fmt.Sprintf("lower(%s) LIKE '%%' || lower(", s.SQLiteVector)
 			fmt.Fprintf(&b, "\t\t\t\t\t\t\tbld.WriteString(%q)\n", ltFrag)
-			b.WriteString("\t\t\t\t\t\t\tbld.Arg(search)\n")
-			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\") || '%'\")\n")
+			b.WriteString("\t\t\t\t\t\t\tbld.Arg(persistence.EscapeLikePattern(search))\n")
+			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\") || '%' ESCAPE '\\\\'\")\n")
 		}
 		b.WriteString("\t\t\t\t\t\t}\n")
 		b.WriteString("\t\t\t\t\t}))\n")

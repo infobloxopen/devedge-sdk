@@ -497,7 +497,7 @@ func (r *UserRepository) List(ctx context.Context, opts persistence.ListOptions)
 		case "postgres":
 			q = q.Where("to_tsvector('simple', replace(replace(coalesce(CAST(\"email\" AS text), ''), '@', ' '), '.', ' ') || ' ' || replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ')) @@ websearch_to_tsquery('simple', ?)", opts.Search)
 		default:
-			q = q.Where("lower(coalesce(CAST(\"email\" AS text), '') || ' ' || coalesce(CAST(\"display_name\" AS text), '')) LIKE '%' || lower(?) || '%'", opts.Search)
+			q = q.Where("lower(coalesce(CAST(\"email\" AS text), '') || ' ' || coalesce(CAST(\"display_name\" AS text), '')) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(opts.Search))
 		}
 	}
 	if opts.OrderBy != "" {

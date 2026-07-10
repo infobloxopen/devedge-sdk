@@ -1232,8 +1232,11 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 			fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.Unimplemented, %q)\n",
 				fmt.Sprintf("full-text search for %s requires PostgreSQL", msg.MessageName))
 		} else {
-			ltPred := fmt.Sprintf("lower(%s) LIKE '%%' || lower(?) || '%%'", s.SQLiteVector)
-			fmt.Fprintf(b, "\t\t\tq = q.Where(%q, opts.Search)\n", ltPred)
+			// The user term is escaped (persistence.EscapeLikePattern) and matched with
+			// an ESCAPE '\' clause so its LIKE metacharacters (% _ \) are LITERAL, not
+			// wildcards (SEC-041-01). It stays a bound parameter (FM-3).
+			ltPred := fmt.Sprintf("lower(%s) LIKE '%%' || lower(?) || '%%' ESCAPE '\\'", s.SQLiteVector)
+			fmt.Fprintf(b, "\t\t\tq = q.Where(%q, persistence.EscapeLikePattern(opts.Search))\n", ltPred)
 		}
 		b.WriteString("\t\t}\n")
 		b.WriteString("\t}\n")

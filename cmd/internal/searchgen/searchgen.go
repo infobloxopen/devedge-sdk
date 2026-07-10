@@ -130,6 +130,14 @@ func Compile(cfg aip.SearchConfig, md protoreflect.MessageDescriptor, dialect st
 	if out.TextConfig == "" {
 		out.TextConfig = aip.DefaultTextConfig
 	}
+	// text_config is author input but is INTERPOLATED into to_tsvector('<cfg>', …) /
+	// websearch_to_tsquery('<cfg>', …) in both generators and the INDEXED migration
+	// (a regconfig name cannot be a bind parameter). Validate it as a Postgres
+	// identifier so a hostile value can never break out of the quoted string
+	// (SEC-041-02, FM-3).
+	if !textConfigRe.MatchString(out.TextConfig) {
+		return nil, fmt.Errorf("searchgen: %s declares text_config %q, which is not a valid Postgres text-search configuration identifier (must match %s)", msgName, out.TextConfig, textConfigRe.String())
+	}
 
 	var pgFrags, ltFrags []string
 	for _, src := range cfg.Sources {
@@ -332,7 +340,19 @@ var volatileTokens = []string{
 	"now(", "random(", "current_timestamp", "current_date", "current_time",
 	"clock_timestamp(", "statement_timestamp(", "timeofday(", "nextval(",
 	"currval(", "gen_random_uuid(", "uuid_generate", "current_user", "session_user",
+	// Side-effecting / I/O / server-info functions: not immutable and a
+	// data-exfiltration or DoS surface if reached from a search expression
+	// (best-effort denylist, RQ-2 / SEC-041-03).
+	"pg_sleep(", "pg_read_file(", "pg_read_binary_file(", "pg_ls_dir(",
+	"lo_import(", "lo_export(", "dblink(", "query_to_xml(",
 }
+
+// textConfigRe validates a resolved Postgres text-search configuration (a
+// regconfig identifier) before it is interpolated into to_tsvector('<cfg>', …).
+// A regconfig cannot be passed as a bind parameter, so the name is only ever
+// safe when it is a plain identifier; anything else fails loud at codegen
+// (SEC-041-02).
+var textConfigRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // crossTableRe matches SQL keywords that imply a subquery / another table — a
 // search source must read only the owner row (Q4 single-table, SD-4).

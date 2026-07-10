@@ -144,6 +144,48 @@ func TestSearch_SQLite_QComposesWithFilter(t *testing.T) {
 	}
 }
 
+// TestSearch_SQLite_LikeMetacharsAreLiteral proves SEC-041-01: the SQLite LIKE
+// fallback treats a search term's LIKE metacharacters (%, _, \) as LITERAL text,
+// not wildcards. A term of "%" must match ONLY rows whose searchable text contains
+// a literal '%', never every row; a term of "_" only rows containing '_'. Before
+// the fix the term was bound un-escaped, so q="%" matched everything (a wildcard).
+func TestSearch_SQLite_LikeMetacharsAreLiteral(t *testing.T) {
+	db := openWidgetDB(t)
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	repo := widgetsv1.NewWidgetRepository(db, secret.NewDev(make([]byte, 32)))
+	ctx := context.Background()
+	for _, w := range []*widgetsv1.Widget{
+		{Id: "w-pct", DisplayName: "50% off sale", Category: "standard"},   // literal %
+		{Id: "w-under", DisplayName: "sale_price drop", Category: "standard"}, // literal _
+		{Id: "w-plain", DisplayName: "regular price", Category: "standard"},   // neither
+	} {
+		if _, err := repo.Create(ctx, w); err != nil {
+			t.Fatalf("Create %s: %v", w.Id, err)
+		}
+	}
+
+	cases := []struct {
+		q    string
+		want []string
+	}{
+		{"%", []string{"w-pct"}},     // NOT a wildcard-all: only the literal-% row
+		{"50%", []string{"w-pct"}},   // a term containing % matches the literal-% row
+		{"_", []string{"w-under"}},   // '_' is literal too: only the literal-_ row
+		{"nomatch", []string{}},      // an ordinary miss still misses
+	}
+	for _, tc := range cases {
+		items, _, err := repo.List(ctx, persistence.ListOptions{Search: tc.q, PageSize: 100})
+		if err != nil {
+			t.Fatalf("List(q=%q): %v", tc.q, err)
+		}
+		if got := idSet(items); !eqIDs(got, tc.want) {
+			t.Errorf("q=%q: got %v, want %v (metacharacters must be literal, not wildcards)", tc.q, got, tc.want)
+		}
+	}
+}
+
 // newGORMWidgetServer boots a real gRPC server backed by the GORM repository and
 // returns its bound address. It registers the GENERATED CRUD handler over the
 // generated repository, so ListWidgets flows request.q -> ListOptions.Search ->
