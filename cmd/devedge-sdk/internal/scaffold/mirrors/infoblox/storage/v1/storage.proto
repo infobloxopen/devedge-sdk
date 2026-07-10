@@ -20,4 +20,56 @@ extend google.protobuf.MessageOptions {
   // model of its own. Absent (the common case) means the model is the message name
   // itself.
   string model = 50050;
+
+  // search declares the resource's full-text search configuration: strategy,
+  // text-search config, and any calculated/transformed sources beyond the
+  // field-flagged columns (infoblox.field.v1.FieldOptions.searchable).
+  SearchConfig search = 50051;
+}
+
+// SearchConfig declares how a resource message participates in full-text
+// search: the materialization strategy, the Postgres text-search config, and
+// any calculated sources beyond field-flagged columns.
+message SearchConfig {
+  // Strategy selects how the search vector is materialized.
+  enum Strategy {
+    STRATEGY_UNSPECIFIED = 0;  // treated as STRATEGY_JIT
+    STRATEGY_JIT          = 1;  // computed at query time (default)
+    STRATEGY_INDEXED      = 2;  // persisted + indexed (generated column + GIN index)
+    STRATEGY_PROJECTED    = 3;  // reserved
+  }
+  Strategy strategy    = 1;  // default STRATEGY_JIT
+  string   text_config = 2;  // Postgres TS config; default "simple"
+  // sources lists calculated/transformed sources beyond field-flagged columns.
+  repeated SearchSource sources = 3;
+}
+
+// SearchSource declares one contributor to a resource's search vector beyond a
+// plain field-flagged column: either a portable field reference or a set of
+// flavored expressions.
+message SearchSource {
+  // name is a logical name for diagnostics and x-aip-search.
+  string name = 1;
+  oneof from {
+    // field is a field reference (portable across engines).
+    string field = 2;
+    // exprs is a set of flavored expressions.
+    SearchExprSet exprs = 3;
+  }
+  // text_config optionally overrides the SearchConfig-level text_config for
+  // this source.
+  string text_config = 4;
+}
+
+// SearchExprSet is a set of flavored expressions for one SearchSource.
+message SearchExprSet {
+  repeated SearchExpr expr = 1;
+}
+
+// SearchExpr is one flavored expression contributing to a search source.
+message SearchExpr {
+  string flavor  = 1;  // "sql" | "cel"
+  string dialect = 2;  // sql only: "postgres"
+  string version = 3;  // flavor spec version (pins meaning)
+  string expr    = 4;
 }

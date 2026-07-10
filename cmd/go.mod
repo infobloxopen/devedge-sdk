@@ -19,8 +19,8 @@ require (
 	github.com/getkin/kin-openapi v0.140.0
 	github.com/google/cel-go v0.24.1
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4
-	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5
+	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2
 	github.com/infobloxopen/devedge-sdk v0.59.0
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
@@ -42,7 +42,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	golang.org/x/exp v0.0.0-20230515195305-f3d0a9c9a5cc // indirect
+	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
