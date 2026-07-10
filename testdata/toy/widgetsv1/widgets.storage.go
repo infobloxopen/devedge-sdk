@@ -511,7 +511,6 @@ func fromModel_Gizmo(m *GizmoModel) *Gizmo {
 		return nil
 	}
 	p := &Gizmo{Id: m.ID}
-	p.Name = FormatGizmoName(m.ID)
 	p.Label = m.Label
 	p.Category = m.Category
 	if FromModelGizmoCustom != nil {
@@ -537,20 +536,6 @@ var GizmoColumns = map[string]string{
 	"id":       "id",
 	"label":    "label",
 	"category": "category",
-}
-
-// GizmoNamePattern is the AIP-122 resource name pattern for Gizmo.
-const GizmoNamePattern = "gizmos/{gizmo}"
-
-// FormatGizmoName builds the resource name for the given ID.
-func FormatGizmoName(id string) string {
-	name, _ := resourcename.Format(GizmoNamePattern, map[string]string{"gizmo": id})
-	return name
-}
-
-// ParseGizmoName extracts the resource ID from the given name.
-func ParseGizmoName(name string) (string, error) {
-	return resourcename.IDFromName(GizmoNamePattern, name)
 }
 
 // GizmoRepository is a GORM-backed persistence.Repository for *Gizmo.

@@ -91,12 +91,15 @@ message Widget {
 // shape) with a portable `cel` alternate, so the persisted column exercises the
 // sql/postgres flavor (AC-8) while the resource stays SQLite-portable (the query-time
 // LIKE fallback stands on SQLite; INDEXED is a Postgres-only materialization, FR-C3).
-// It has no RPC surface — it is exercised directly through the generated repository.
+// It has no RPC surface and is deliberately NOT an API resource (no
+// (google.api.resource)): it is a PURE STORAGE MODEL (a message with an `id` field is
+// picked up by protoc-gen-storage regardless of resource identity) exercised directly
+// through the generated repository. Keeping it out of the (google.api.resource) set is
+// intentional — a resource with no service emits no grpc-gateway schema, so the OpenAPI
+// enrichment's losslessness gate would flag it as FDS/swagger drift. Do NOT re-add
+// (google.api.resource) here; give it a WidgetService-style RPC surface first if it
+// ever needs to be REST-exposed.
 message Gizmo {
-  option (google.api.resource) = {
-    type: "toy.example.com/Gizmo"
-    pattern: "gizmos/{gizmo}"
-  };
   option (infoblox.storage.v1.search) = {
     strategy: STRATEGY_INDEXED
     text_config: "simple"
@@ -118,12 +121,11 @@ message Gizmo {
     }
   };
 
-  string name     = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
-  string id       = 2 [(infoblox.field.v1.opts) = {id: {strategy: STRATEGY_USER_SETTABLE}}];
+  string id       = 1 [(infoblox.field.v1.opts) = {id: {strategy: STRATEGY_USER_SETTABLE}}];
   // label is field-flagged searchable (WS-041): included in the persisted vector.
-  string label    = 3 [(infoblox.field.v1.opts) = {searchable: true}];
+  string label    = 2 [(infoblox.field.v1.opts) = {searchable: true}];
   // category is a string-backed enum feeding the tier_label CASE source.
-  string category = 4 [(infoblox.field.v1.opts) = {allowed_values: ["standard", "premium"]}];
+  string category = 3 [(infoblox.field.v1.opts) = {allowed_values: ["standard", "premium"]}];
 }
 
 message CreateWidgetRequest {

@@ -189,15 +189,21 @@ func (x *Widget) GetArchivedTime() *timestamppb.Timestamp {
 // shape) with a portable `cel` alternate, so the persisted column exercises the
 // sql/postgres flavor (AC-8) while the resource stays SQLite-portable (the query-time
 // LIKE fallback stands on SQLite; INDEXED is a Postgres-only materialization, FR-C3).
-// It has no RPC surface — it is exercised directly through the generated repository.
+// It has no RPC surface and is deliberately NOT an API resource (no
+// (google.api.resource)): it is a PURE STORAGE MODEL (a message with an `id` field is
+// picked up by protoc-gen-storage regardless of resource identity) exercised directly
+// through the generated repository. Keeping it out of the (google.api.resource) set is
+// intentional — a resource with no service emits no grpc-gateway schema, so the OpenAPI
+// enrichment's losslessness gate would flag it as FDS/swagger drift. Do NOT re-add
+// (google.api.resource) here; give it a WidgetService-style RPC surface first if it
+// ever needs to be REST-exposed.
 type Gizmo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Id    string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// label is field-flagged searchable (WS-041): included in the persisted vector.
-	Label string `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`
+	Label string `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
 	// category is a string-backed enum feeding the tier_label CASE source.
-	Category      string `protobuf:"bytes,4,opt,name=category,proto3" json:"category,omitempty"`
+	Category      string `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -230,13 +236,6 @@ func (x *Gizmo) ProtoReflect() protoreflect.Message {
 // Deprecated: Use Gizmo.ProtoReflect.Descriptor instead.
 func (*Gizmo) Descriptor() ([]byte, []int) {
 	return file_widgets_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *Gizmo) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
 }
 
 func (x *Gizmo) GetId() string {
@@ -1169,13 +1168,11 @@ const file_widgets_proto_rawDesc = "" +
 	"\x8b\x01\n" +
 	"\x03sql\x12\bpostgres\x1a\x011\"wCASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END\n" +
 	"F\n" +
-	"\x03cel\x1a\x011\"<msg.category == 'premium' ? 'tier premium' : 'tier standard'\"\xb1\x03\n" +
-	"\x05Gizmo\x12\x17\n" +
-	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x18\n" +
-	"\x02id\x18\x02 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12\x1c\n" +
-	"\x05label\x18\x03 \x01(\tB\x06\x9a\xb5\x18\x02`\x01R\x05label\x123\n" +
-	"\bcategory\x18\x04 \x01(\tB\x17\x9a\xb5\x18\x13J\bstandardJ\apremiumR\bcategory:\xa1\x02\xeaA'\n" +
-	"\x15toy.example.com/Gizmo\x12\x0egizmos/{gizmo}\x9a\xb8\x18\xf2\x01\b\x02\x12\x06simple\x1a\xe5\x01\n" +
+	"\x03cel\x1a\x011\"<msg.category == 'premium' ? 'tier premium' : 'tier standard'\"\xee\x02\n" +
+	"\x05Gizmo\x12\x18\n" +
+	"\x02id\x18\x01 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12\x1c\n" +
+	"\x05label\x18\x02 \x01(\tB\x06\x9a\xb5\x18\x02`\x01R\x05label\x123\n" +
+	"\bcategory\x18\x03 \x01(\tB\x17\x9a\xb5\x18\x13J\bstandardJ\apremiumR\bcategory:\xf7\x01\x9a\xb8\x18\xf2\x01\b\x02\x12\x06simple\x1a\xe5\x01\n" +
 	"\n" +
 	"tier_label\x1a\xd6\x01\n" +
 	"\x8b\x01\n" +
