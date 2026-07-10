@@ -83,10 +83,11 @@ type ListOptions struct {
     PageSize    int    // generated repos default to 50 when <= 0
     PageToken   string // opaque; generated repos encode the next offset as base64
     ShowDeleted bool   // AIP-148: include soft-deleted resources in List (default false)
+    Search      string // free-text query for the `q` operator (see "Full-text search (q)")
 }
 ```
 
-`ListOptions` carries the resource-oriented list parameters for a `List` call. Generated repositories default `PageSize` to 50, encode the next offset as a base64 page token, and — for soft-delete resources — exclude deleted rows unless `ShowDeleted` is set.
+`ListOptions` carries the resource-oriented list parameters for a `List` call. Generated repositories default `PageSize` to 50, encode the next offset as a base64 page token, and — for soft-delete resources — exclude deleted rows unless `ShowDeleted` is set. `Search` is a no-op (the zero value) unless the resource declares a searchable surface; `MemoryRepository` ignores it.
 
 ## Filtering and ordering
 
@@ -125,6 +126,52 @@ On the **ent backend**, `protoc-gen-ent` emits the equivalent `var <Msg>EntColum
 ```go
 entrepo.FilterPredicate(opts.Filter, <Msg>EntColumns, <Msg>EntJSONColumns)
 ```
+
+## Full-text search (`q`)
+
+`ListOptions.Search` carries the AIP `q` collection operator: a free-text query matched against a
+resource's declared searchable surface (a `searchable` field option and/or a message-level
+`(infoblox.storage.v1.search)` option — see [Annotations → Full-text search](../../concepts/annotations/#full-text-search)).
+`protoc-gen-svc` detects a `string q` field on a List request by name, the same convention as
+`filter`/`order_by`, and maps it onto `Search` in the generated `stdList` handler. An empty `q` is a
+no-op. See [Add full-text search to a resource](../../how-to/model-and-persist/add-full-text-search/)
+for the end-to-end recipe.
+
+Both storage generators AND a full-text predicate onto the query after the AIP-160 filter `WHERE`,
+selecting the predicate from the runtime dialect:
+
+| Backend | PostgreSQL | Other (SQLite) |
+|---|---|---|
+| GORM | `to_tsvector('<text_config>', <vector>) @@ websearch_to_tsquery('<text_config>', ?)` (JIT), or `search_vector @@ websearch_to_tsquery('<text_config>', ?)` (INDEXED) | `<col1> LIKE '%'\|\|?\|\|'%' OR <col2> LIKE ...` — a case-insensitive contains over the portable sources |
+| ent | An equivalent `sql.P(...)` predicate ANDed with the parsed filter predicate | Same LIKE-contains fallback |
+
+The query term is always a bound parameter on every backend and dialect — never string-interpolated.
+
+A resource whose sources are all portable (plain `field` sources, or a `cel` source, which compiles
+to both a Postgres and a SQLite expression) gets a working SQLite fallback. A resource with a
+`sql/postgres` source and no `cel` alternate is Postgres-only: generating that resource for the
+SQLite backend fails loud instead of emitting broken SQL.
+
+### Full-text search migrations (`INDEXED`)
+
+A resource declaring `strategy: STRATEGY_INDEXED` gets, in addition to the predicate above, a
+generated migration pair under the module's `migrations/` directory:
+
+```
+9001_<table>_search_vector.up.sql    ALTER TABLE <table> ADD COLUMN search_vector tsvector
+                                      GENERATED ALWAYS AS (to_tsvector('<text_config>', <vector>)) STORED;
+9001_<table>_search_vector.down.sql  ALTER TABLE <table> DROP COLUMN IF EXISTS search_vector;
+9002_<table>_search_gin.up.sql       CREATE INDEX CONCURRENTLY <table>_search_gin ON <table> USING GIN (search_vector);
+9002_<table>_search_gin.down.sql     DROP INDEX CONCURRENTLY IF EXISTS <table>_search_gin;
+```
+
+The version numbers start at a fixed, reserved band (`9001`) rather than the next-free number on
+disk, well above a module's own hand-authored `0002+` migrations, so a generated file never
+collides with — or renumbers alongside — a hand-written one. Emission is idempotent: running
+`make generate` twice yields byte-identical files. The `CREATE INDEX CONCURRENTLY` statement is
+always the sole statement in its file, because Postgres rejects it inside a transaction block (see
+[Migrations](#migrations) below). The generated column and its index are Postgres-only; SQLite
+ignores these files and keeps the `LIKE` fallback above.
 
 ## Generated repository helpers
 

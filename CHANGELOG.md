@@ -10,6 +10,51 @@ under [History](#history).
 
 ## History
 
+### v0.60.0 — Full-text search (WS-041)
+
+A `q` collection operator for List, declared on the schema and generated across both storage
+backends: mark a field `searchable`, optionally add a message-level calculated source, and query
+it over the REST gateway with no hand-written search code.
+
+- **`searchable` field option (new).** `infoblox.field.v1.FieldOptions.searchable` includes a
+  plain `string`, `enum`, string-typed repeated, tags, or `Timestamp` field in a resource's search
+  vector. A `secret` or `INPUT_ONLY` field cannot be marked searchable — `make generate` fails loud
+  and names the field, because matching against a write-only or redacted value would leak it.
+- **`(infoblox.storage.v1.search)` message option (new).** Declares calculated sources beyond
+  field-flagged columns (`SearchSource`, either a `field` reference or a set of flavored `sql`/`cel`
+  expressions — `SearchExprSet`/`SearchExpr`), the materialization strategy
+  (`STRATEGY_JIT`/`STRATEGY_INDEXED`/reserved `STRATEGY_PROJECTED`), and the Postgres text-search
+  config. Both options ship in `infoblox.field.v1` v1.0.0-alpha.5 and `infoblox.storage.v1`
+  v1.0.0-alpha.2.
+- **`cel`→SQL compiler (new).** A `cel`-flavored source compiles to a Postgres expression and a
+  parallel SQLite expression from one type-checked AST, so a calculated value (an enum mapped to a
+  display label, for example) stays portable to the SQLite dev/test driver without a hand-written
+  second expression. A `sql/postgres` source with no `cel` alternate is Postgres-only and fails
+  loud when generated for the SQLite backend.
+- **`q` on List (new).** `persistence.ListOptions` gains `Search string`; `protoc-gen-svc` detects a
+  `string q` field on a List request (the same convention as `filter`/`order_by`) and maps it in
+  automatically. Both `protoc-gen-storage` (GORM) and `protoc-gen-ent` (ent) AND a full-text
+  predicate onto the query after the AIP-160 filter `WHERE` — `to_tsvector(...) @@
+  websearch_to_tsquery(...)` on Postgres, a case-insensitive `LIKE` contains on SQLite — with the
+  query term always a bound parameter. `q` composes with `filter`, `order_by`, and pagination in one
+  List call.
+- **`STRATEGY_INDEXED` (new).** A resource that outgrows query-time search declares
+  `strategy: STRATEGY_INDEXED` and gets a generated `search_vector` column
+  (`GENERATED ALWAYS AS (...) STORED`) plus a `CREATE INDEX CONCURRENTLY ... USING GIN` migration,
+  emitted as its own file so Postgres does not reject `CONCURRENTLY` inside a transaction. Emission
+  is idempotent and uses a reserved migration-version band so a generated file never collides with a
+  module's hand-authored migrations.
+- **`x-aip-search` OpenAPI extension (new).** The enriched OpenAPI spec adds a `q` query parameter
+  and an `x-aip-search` extension (searchable source names, strategy, text config) to a searchable
+  resource's List operation, parallel to `x-aip-pagination`.
+- **Docs.** [Add full-text search to a resource](https://github.com/infobloxopen/devedge-sdk/blob/main/docs/content/docs/how-to/model-and-persist/add-full-text-search.md),
+  the `Annotations` concept page, and the `persistence` reference now cover the annotations, the
+  three source flavors, choosing a strategy, and the generated migration files.
+
+`STRATEGY_PROJECTED` is reserved for a future cross-service/global search index and is not
+implemented in this release: declaring it is valid schema, but `make generate` fails loud rather
+than silently emitting a local predicate.
+
 ### v0.59.0 — Nested-resource parent enforcement, credential rotation, and DX fixes
 
 An issue-sweep release: a P1 authorization fix in generated CRUD, a credential
