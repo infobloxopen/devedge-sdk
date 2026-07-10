@@ -39,9 +39,17 @@ message User {
   string id           = 1;
   // account_id is the tenant partition and IMMUTABLE (a user cannot move tenant).
   string account_id   = 2 [(google.api.field_behavior) = IMMUTABLE];
-  // email is client-REQUIRED (explicit) and unique.
-  string email        = 3 [(google.api.field_behavior) = REQUIRED, (infoblox.field.v1.opts) = {unique: true}];
-  string display_name = 4;
+  // email is client-REQUIRED (explicit), unique, and field-flagged searchable
+  // (WS-041): included in the resource's full-text search vector. It is neither
+  // secret nor INPUT_ONLY, so searching it leaks nothing (FR-A3).
+  string email        = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (infoblox.field.v1.opts) = {unique: true, searchable: true}
+  ];
+  // display_name is field-flagged searchable (WS-041) too, so `q` matches across
+  // both columns (the vector unions them). Portable field sources only, so the
+  // resource degrades to a case-insensitive LIKE contains on SQLite (FR-B5).
+  string display_name = 4 [(infoblox.field.v1.opts) = {searchable: true}];
   string etag         = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
@@ -180,7 +188,14 @@ message ListAccountsResponse   { repeated Account accounts = 1; string next_page
 message CreateAccountRequest   { Account account = 1; }
 
 message GetUserRequest         { string id = 1; }
-message ListUsersRequest       { int32 page_size = 1; string page_token = 2; }
+message ListUsersRequest       {
+  int32 page_size = 1;
+  string page_token = 2;
+  // WS-041 full-text search (`q` collection operator): free-text query across the
+  // resource's searchable fields (email, display_name); mapped by the generated
+  // svc handler onto persistence.ListOptions.Search (FR-B2).
+  string q = 3;
+}
 message ListUsersResponse      { repeated User users = 1; string next_page_token = 2; }
 message CreateUserRequest      { User user = 1; }
 

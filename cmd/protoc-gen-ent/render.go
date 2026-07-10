@@ -98,6 +98,27 @@ type entMessageInfo struct {
 	// id-less Create mints a fresh id and an empty id is never persisted.
 	IdStrategy  fieldv1.IdOptions_Strategy
 	IdGenerator fieldv1.IdOptions_Generator
+	// Search carries the compiled full-text search surface (WS-041) when the
+	// resource declares one; nil for a non-searchable resource. Resolved via
+	// internal/aip.ResolveSearchConfig + cmd/internal/searchgen.Compile in main.go
+	// (the same shared resolver+compiler the GORM backend and the OpenAPI pass use,
+	// FR-A1/FM-5), so the ent `q` predicate cannot drift from the published contract.
+	Search *entSearchInfo
+}
+
+// entSearchInfo is the compiled full-text search surface embedded into a
+// generated ent repository's List_ (WS-041, FR-B4). The generated raw sql.P
+// predicate branches on the RUNTIME dialect (b.Dialect()): Postgres runs true FTS
+// over PostgresVector; a portable resource degrades to a case-insensitive LIKE
+// contains over SQLiteVector on any other engine; a resource carrying a
+// sql/postgres source (PostgresOnly) has no portable form and matches nothing on a
+// non-Postgres backend rather than emit wrong SQL (SD-4/FM-8). It mirrors the GORM
+// backend's searchInfo so both backends stay behaviorally identical.
+type entSearchInfo struct {
+	PostgresVector string // to_tsvector argument (Postgres FTS branch)
+	SQLiteVector   string // text concatenation for the SQLite LIKE fallback ("" when PostgresOnly)
+	PostgresOnly   bool   // true => no SQLite form; a non-Postgres backend matches nothing
+	TextConfig     string // Postgres text-search config (default "simple")
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -1325,6 +1346,13 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		b.WriteString("\n\t\"google.golang.org/grpc/codes\"\n")
 		b.WriteString("\t\"google.golang.org/grpc/status\"\n\n")
 	}
+	if msg.Search != nil {
+		// WS-041 full-text `q` predicate: the raw sql.P builder branches on the
+		// runtime dialect and binds the user term as an arg (FR-B4). dialect supplies
+		// the Postgres constant for the branch; sql supplies Selector/P/Builder.
+		b.WriteString("\t\"entgo.io/ent/dialect\"\n")
+		b.WriteString("\t\"entgo.io/ent/dialect/sql\"\n")
+	}
 	fmt.Fprintf(&b, "\tent %q\n", entImport)
 	// The field-predicate package is always needed: every Delete_ references it
 	// (ent<lower>.ID for hard delete, ent<lower>.DeleteTimeIsNil for soft delete),
@@ -1517,6 +1545,47 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	b.WriteString("\t\t\t\tif perr != nil {\n\t\t\t\t\treturn nil, \"\", perr\n\t\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\t\tif pred != nil {\n\t\t\t\t\tq = q.Where(entpredicate.%s(pred))\n\t\t\t\t}\n", model)
 	b.WriteString("\t\t\t}\n")
+	// WS-041 AIP `q` full-text search predicate, ANDed after the AIP-160 filter
+	// (SD-6). The user term is ALWAYS a bound parameter via the ent sql.Builder's
+	// Arg (never interpolated, FM-3). The predicate is a raw sql.P branching on the
+	// RUNTIME dialect (b.Dialect()) — so the SAME generated code runs against both
+	// SQLite (dev/test) and Postgres (prod): on Postgres a parameterized
+	// to_tsvector(...) @@ websearch_to_tsquery(...) (SD-5); on any other engine a
+	// case-insensitive LIKE contains over the portable vector (FR-B4/B5). A
+	// PostgresOnly resource (a sql/postgres source) has no portable form, so its
+	// non-Postgres branch matches nothing rather than emit wrong SQL (SD-4/FM-8).
+	if msg.Search != nil {
+		s := msg.Search
+		pgFrag := fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ", s.TextConfig, s.PostgresVector, s.TextConfig)
+		b.WriteString("\t\t\tif opts.Search != \"\" {\n")
+		b.WriteString("\t\t\t\tsearch := opts.Search\n")
+		fmt.Fprintf(&b, "\t\t\t\tq = q.Where(entpredicate.%s(func(sel *sql.Selector) {\n", model)
+		b.WriteString("\t\t\t\t\tsel.Where(sql.P(func(bld *sql.Builder) {\n")
+		b.WriteString("\t\t\t\t\t\tswitch bld.Dialect() {\n")
+		b.WriteString("\t\t\t\t\t\tcase dialect.Postgres:\n")
+		fmt.Fprintf(&b, "\t\t\t\t\t\t\tbld.WriteString(%q)\n", pgFrag)
+		b.WriteString("\t\t\t\t\t\t\tbld.Arg(search)\n")
+		b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\")\")\n")
+		b.WriteString("\t\t\t\t\t\tdefault:\n")
+		if s.PostgresOnly {
+			// A sql/postgres source has no portable SQLite form. Emit an always-false
+			// predicate (documented limitation): the resource is Postgres-only, so
+			// full-text search returns nothing on a non-Postgres backend instead of
+			// crashing on Postgres-only SQL. The Postgres branch above is the real one.
+			b.WriteString("\t\t\t\t\t\t\t// full-text search for this resource requires PostgreSQL (a sql/postgres\n")
+			b.WriteString("\t\t\t\t\t\t\t// source has no portable form); match nothing on a non-Postgres backend.\n")
+			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\"1 = 0\")\n")
+		} else {
+			ltFrag := fmt.Sprintf("lower(%s) LIKE '%%' || lower(", s.SQLiteVector)
+			fmt.Fprintf(&b, "\t\t\t\t\t\t\tbld.WriteString(%q)\n", ltFrag)
+			b.WriteString("\t\t\t\t\t\t\tbld.Arg(search)\n")
+			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\") || '%'\")\n")
+		}
+		b.WriteString("\t\t\t\t\t\t}\n")
+		b.WriteString("\t\t\t\t\t}))\n")
+		b.WriteString("\t\t\t\t}))\n")
+		b.WriteString("\t\t\t}\n")
+	}
 	b.WriteString("\t\t\tif opts.PageSize <= 0 {\n\t\t\t\topts.PageSize = 50\n\t\t\t}\n")
 	b.WriteString("\t\t\tif opts.PageSize > persistence.MaxPageSize {\n\t\t\t\topts.PageSize = persistence.MaxPageSize\n\t\t\t}\n")
 	b.WriteString("\t\t\toffset := 0\n\t\t\tif opts.PageToken != \"\" {\n\t\t\t\tfmt.Sscanf(opts.PageToken, \"%d\", &offset) //nolint:errcheck\n\t\t\t}\n")
