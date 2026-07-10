@@ -154,6 +154,10 @@ type methodInfo struct {
 	ListHasFilter      bool
 	ListHasOrderBy     bool
 	ListHasShowDeleted bool
+	// ListHasSearch reports a `string q` field on the List request (the AIP
+	// full-text search operator, WS-041 FR-B2); the handler maps req.GetQ() onto
+	// ListOptions.Search.
+	ListHasSearch bool
 	// BatchIDsField is the Go field name of the repeated-string key list on a
 	// BatchGet request (e.g. "Ids"), set only for stdBatchGet methods.
 	BatchIDsField string
@@ -528,6 +532,9 @@ func renderCRUDHandler(b *strings.Builder, svc serviceInfo) {
 			}
 			if m.ListHasShowDeleted {
 				b.WriteString("\t\tShowDeleted: req.GetShowDeleted(),\n")
+			}
+			if m.ListHasSearch {
+				b.WriteString("\t\tSearch: req.GetQ(),\n")
 			}
 			b.WriteString("\t})\n")
 			b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")

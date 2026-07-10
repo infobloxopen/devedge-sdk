@@ -18,6 +18,8 @@ require (
 	modernc.org/sqlite v1.52.0
 )
 
+require github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 // indirect
+
 require (
 	ariga.io/atlas v0.36.2-0.20250730182955-2c6300d0a3e1 // indirect
 	dario.cat/mergo v1.0.2 // indirect

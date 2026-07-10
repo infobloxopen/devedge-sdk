@@ -122,6 +122,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				mi.ListHasFilter = hasStringField(m.Input, "filter")
 				mi.ListHasOrderBy = hasStringField(m.Input, "order_by")
 				mi.ListHasShowDeleted = hasBoolField(m.Input, "show_deleted")
+				mi.ListHasSearch = hasStringField(m.Input, "q")
 			}
 			if mi.Std == stdCreate || mi.Std == stdUpdate {
 				mi.ResourceField = requestResourceField(m, svc.Resource)

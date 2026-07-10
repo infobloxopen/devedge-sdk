@@ -12,9 +12,12 @@
 //
 // Dependencies are deliberately light: only google.golang.org/protobuf,
 // the google.golang.org/genproto field_behavior/resource/resource_reference
-// annotations, the private infoblox.field.v1 options, and the SDK-owned
-// infoblox.ddd.v1 options — all already in the root module graph, so
-// scripts/check-graph-isolation.sh stays green.
+// annotations, the private infoblox.field.v1 + infoblox.storage.v1 options, and
+// the SDK-owned infoblox.ddd.v1 options — all pure protobuf bindings already in
+// the root module graph, so scripts/check-graph-isolation.sh stays green. The
+// heavy cel-go / SQL search-expression compiler is deliberately NOT here (it
+// lives in the codegen-only cmd/internal/searchgen); this package returns the
+// search surface raw (see search.go).
 package aip
 
 import (

@@ -58,6 +58,14 @@ type ListOptions struct {
 	// ShowDeleted includes soft-deleted resources in List results (AIP-148).
 	// When false (the zero value), soft-deleted resources are excluded.
 	ShowDeleted bool
+	// Search is the free-text query for the AIP `q` collection operator (WS-041,
+	// FR-B1). The empty string (the zero value) is a no-op — List behaves exactly
+	// as if no search were requested. A non-empty value asks the repository to
+	// restrict results to rows matching the full-text query; the generated
+	// repositories translate it into a backend full-text predicate (Postgres FTS,
+	// with a SQLite LIKE fallback) alongside Filter/OrderBy/paging. Repositories
+	// that do not implement search (e.g. MemoryRepository) ignore it.
+	Search string
 }
 
 // Repository is a generic CRUD seam for an entity T keyed by K. The methods
