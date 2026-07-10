@@ -83,6 +83,49 @@ message Widget {
   google.protobuf.Timestamp archived_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
+// Gizmo is the WS-041 INDEXED-strategy fixture (FR-C1/C2/C3): a searchable
+// resource whose search vector is materialized as a persisted `search_vector`
+// generated column + GIN index (emitted as a Postgres migration under migrations/)
+// rather than recomputed per query. `label` is a field-flagged searchable source;
+// `tier_label` is a message-level sql/postgres CASE source (the DDI map_zone_type
+// shape) with a portable `cel` alternate, so the persisted column exercises the
+// sql/postgres flavor (AC-8) while the resource stays SQLite-portable (the query-time
+// LIKE fallback stands on SQLite; INDEXED is a Postgres-only materialization, FR-C3).
+// It has no RPC surface — it is exercised directly through the generated repository.
+message Gizmo {
+  option (google.api.resource) = {
+    type: "toy.example.com/Gizmo"
+    pattern: "gizmos/{gizmo}"
+  };
+  option (infoblox.storage.v1.search) = {
+    strategy: STRATEGY_INDEXED
+    text_config: "simple"
+    sources {
+      name: "tier_label"
+      exprs {
+        expr {
+          flavor: "sql"
+          dialect: "postgres"
+          version: "1"
+          expr: "CASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END"
+        }
+        expr {
+          flavor: "cel"
+          version: "1"
+          expr: "msg.category == 'premium' ? 'tier premium' : 'tier standard'"
+        }
+      }
+    }
+  };
+
+  string name     = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string id       = 2 [(infoblox.field.v1.opts) = {id: {strategy: STRATEGY_USER_SETTABLE}}];
+  // label is field-flagged searchable (WS-041): included in the persisted vector.
+  string label    = 3 [(infoblox.field.v1.opts) = {searchable: true}];
+  // category is a string-backed enum feeding the tier_label CASE source.
+  string category = 4 [(infoblox.field.v1.opts) = {allowed_values: ["standard", "premium"]}];
+}
+
 message CreateWidgetRequest {
   Widget widget        = 1;
   string request_id    = 2; // AIP-155: idempotency key; empty = no dedup.

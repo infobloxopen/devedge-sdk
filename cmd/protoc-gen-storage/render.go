@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 )
@@ -259,6 +260,16 @@ type searchInfo struct {
 	SQLiteVector   string // text concatenation for the SQLite LIKE fallback ("" when PostgresOnly)
 	PostgresOnly   bool   // true => no SQLite form; non-Postgres backends fail loud
 	TextConfig     string // resolved Postgres text-search config (default "simple")
+	// Indexed selects the INDEXED strategy (SD-7, FR-C3): the Postgres List branch
+	// matches the persisted `search_vector` generated column
+	// (search_vector @@ websearch_to_tsquery(…)) instead of recomputing to_tsvector
+	// per query, and main.go emits the column+GIN migration. SQLite is unaffected
+	// (no persisted column; the LIKE fallback stands).
+	Indexed bool
+	// Table is the resource's backing table name, pinned by an emitted TableName()
+	// so the emitted migration's ALTER TABLE targets exactly the GORM table. Only
+	// set for an INDEXED resource.
+	Table string
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -902,6 +913,15 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 			b.WriteString("\tExpireTime sql.NullTime `gorm:\"column:expire_time;index\"`\n")
 		}
 		b.WriteString("}\n\n")
+
+		// WS-041 INDEXED: pin the GORM table name with an explicit TableName so the
+		// emitted search_vector migration's ALTER TABLE / CREATE INDEX target exactly
+		// this table (no reliance on GORM's default pluralizer, zero drift, FR-C2).
+		if msg.Search != nil && msg.Search.Indexed && msg.Search.Table != "" {
+			fmt.Fprintf(b, "// TableName pins the table backing the INDEXED full-text search_vector\n")
+			fmt.Fprintf(b, "// generated column + GIN index (WS-041, see migrations/).\n")
+			fmt.Fprintf(b, "func (%sModel) TableName() string { return %q }\n\n", model, msg.Search.Table)
+		}
 	}
 
 	pbType := fmt.Sprintf("*%s", msg.MessageName)
@@ -1194,7 +1214,15 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	// backend rather than emit wrong SQL (SD-4/FM-8).
 	if msg.Search != nil {
 		s := msg.Search
-		pgPred := fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ?)", s.TextConfig, s.PostgresVector, s.TextConfig)
+		// INDEXED matches the persisted generated column (search_vector); JIT
+		// recomputes the vector per query (SD-7, FR-C3). The user term is a bound
+		// parameter in both (FM-3).
+		var pgPred string
+		if s.Indexed {
+			pgPred = fmt.Sprintf("%s @@ websearch_to_tsquery('%s', ?)", searchgen.IndexColumn, s.TextConfig)
+		} else {
+			pgPred = fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ?)", s.TextConfig, s.PostgresVector, s.TextConfig)
+		}
 		b.WriteString("\tif opts.Search != \"\" {\n")
 		b.WriteString("\t\tswitch r.db.Dialector.Name() {\n")
 		b.WriteString("\t\tcase \"postgres\":\n")

@@ -705,3 +705,52 @@ func mustNotContain(t *testing.T, s, substr string) {
 		t.Errorf("expected output NOT to contain %q\n--- output ---\n%s", substr, s)
 	}
 }
+
+// TestRenderEntRepoAdapter_indexedSearchPredicate proves the WS-041 INDEXED ent
+// List predicate matches the PERSISTED search_vector generated column on Postgres
+// (FR-C3/FR-B4) rather than recomputing to_tsvector per query, while keeping the
+// SQLite LIKE fallback. The migration for the column is emitted by the co-running
+// protoc-gen-storage (it owns the table DDL), so ent only changes the query side.
+func TestRenderEntRepoAdapter_indexedSearchPredicate(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Gadget",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "label", SnakeName: "label", EntType: "String"},
+		},
+		Search: &entSearchInfo{
+			PostgresVector: `coalesce(CAST("label" AS text), '')`,
+			SQLiteVector:   `coalesce(CAST("label" AS text), '')`,
+			TextConfig:     "simple",
+			Indexed:        true,
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "gadgetv1", "github.com/example/gadgetd/gadgetv1")
+	// Postgres branch matches the persisted column, NOT an inline to_tsvector.
+	mustContain(t, out, `search_vector @@ websearch_to_tsquery('simple', `)
+	mustNotContain(t, out, `to_tsvector('simple', coalesce(CAST(\"label\" AS text), '')) @@`)
+	// SQLite fallback still stands (portable resource).
+	mustContain(t, out, `lower(coalesce(CAST(\"label\" AS text), '')) LIKE '%' || lower(`)
+}
+
+// TestRenderEntRepoAdapter_jitSearchPredicate proves the default JIT ent List
+// predicate still recomputes to_tsvector(<vector>) per query (unchanged by the
+// INDEXED work).
+func TestRenderEntRepoAdapter_jitSearchPredicate(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Gadget",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "label", SnakeName: "label", EntType: "String"},
+		},
+		Search: &entSearchInfo{
+			PostgresVector: `coalesce(CAST("label" AS text), '')`,
+			SQLiteVector:   `coalesce(CAST("label" AS text), '')`,
+			TextConfig:     "simple",
+			Indexed:        false,
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "gadgetv1", "github.com/example/gadgetd/gadgetv1")
+	mustContain(t, out, `to_tsvector('simple', coalesce(CAST(\"label\" AS text), '')) @@ websearch_to_tsquery('simple', `)
+	mustNotContain(t, out, `search_vector @@ websearch_to_tsquery`)
+}

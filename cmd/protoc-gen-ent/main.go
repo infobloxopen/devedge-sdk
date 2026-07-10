@@ -289,6 +289,7 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 					SQLiteVector:   compiled.SQLiteVector,
 					PostgresOnly:   compiled.PostgresOnly,
 					TextConfig:     compiled.TextConfig,
+					Indexed:        compiled.IsIndexed(),
 				}
 			}
 		}

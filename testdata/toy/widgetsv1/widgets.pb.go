@@ -181,6 +181,85 @@ func (x *Widget) GetArchivedTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// Gizmo is the WS-041 INDEXED-strategy fixture (FR-C1/C2/C3): a searchable
+// resource whose search vector is materialized as a persisted `search_vector`
+// generated column + GIN index (emitted as a Postgres migration under migrations/)
+// rather than recomputed per query. `label` is a field-flagged searchable source;
+// `tier_label` is a message-level sql/postgres CASE source (the DDI map_zone_type
+// shape) with a portable `cel` alternate, so the persisted column exercises the
+// sql/postgres flavor (AC-8) while the resource stays SQLite-portable (the query-time
+// LIKE fallback stands on SQLite; INDEXED is a Postgres-only materialization, FR-C3).
+// It has no RPC surface — it is exercised directly through the generated repository.
+type Gizmo struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id    string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	// label is field-flagged searchable (WS-041): included in the persisted vector.
+	Label string `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`
+	// category is a string-backed enum feeding the tier_label CASE source.
+	Category      string `protobuf:"bytes,4,opt,name=category,proto3" json:"category,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Gizmo) Reset() {
+	*x = Gizmo{}
+	mi := &file_widgets_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Gizmo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Gizmo) ProtoMessage() {}
+
+func (x *Gizmo) ProtoReflect() protoreflect.Message {
+	mi := &file_widgets_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Gizmo.ProtoReflect.Descriptor instead.
+func (*Gizmo) Descriptor() ([]byte, []int) {
+	return file_widgets_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Gizmo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Gizmo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Gizmo) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *Gizmo) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
+}
+
 type CreateWidgetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Widget        *Widget                `protobuf:"bytes,1,opt,name=widget,proto3" json:"widget,omitempty"`
@@ -192,7 +271,7 @@ type CreateWidgetRequest struct {
 
 func (x *CreateWidgetRequest) Reset() {
 	*x = CreateWidgetRequest{}
-	mi := &file_widgets_proto_msgTypes[1]
+	mi := &file_widgets_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -204,7 +283,7 @@ func (x *CreateWidgetRequest) String() string {
 func (*CreateWidgetRequest) ProtoMessage() {}
 
 func (x *CreateWidgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[1]
+	mi := &file_widgets_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,7 +296,7 @@ func (x *CreateWidgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateWidgetRequest.ProtoReflect.Descriptor instead.
 func (*CreateWidgetRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{1}
+	return file_widgets_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CreateWidgetRequest) GetWidget() *Widget {
@@ -252,7 +331,7 @@ type GetWidgetRequest struct {
 
 func (x *GetWidgetRequest) Reset() {
 	*x = GetWidgetRequest{}
-	mi := &file_widgets_proto_msgTypes[2]
+	mi := &file_widgets_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -264,7 +343,7 @@ func (x *GetWidgetRequest) String() string {
 func (*GetWidgetRequest) ProtoMessage() {}
 
 func (x *GetWidgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[2]
+	mi := &file_widgets_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -277,7 +356,7 @@ func (x *GetWidgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWidgetRequest.ProtoReflect.Descriptor instead.
 func (*GetWidgetRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{2}
+	return file_widgets_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetWidgetRequest) GetId() string {
@@ -311,7 +390,7 @@ type ListWidgetsRequest struct {
 
 func (x *ListWidgetsRequest) Reset() {
 	*x = ListWidgetsRequest{}
-	mi := &file_widgets_proto_msgTypes[3]
+	mi := &file_widgets_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -323,7 +402,7 @@ func (x *ListWidgetsRequest) String() string {
 func (*ListWidgetsRequest) ProtoMessage() {}
 
 func (x *ListWidgetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[3]
+	mi := &file_widgets_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -336,7 +415,7 @@ func (x *ListWidgetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWidgetsRequest.ProtoReflect.Descriptor instead.
 func (*ListWidgetsRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{3}
+	return file_widgets_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ListWidgetsRequest) GetPageSize() int32 {
@@ -384,7 +463,7 @@ type ListWidgetsResponse struct {
 
 func (x *ListWidgetsResponse) Reset() {
 	*x = ListWidgetsResponse{}
-	mi := &file_widgets_proto_msgTypes[4]
+	mi := &file_widgets_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -396,7 +475,7 @@ func (x *ListWidgetsResponse) String() string {
 func (*ListWidgetsResponse) ProtoMessage() {}
 
 func (x *ListWidgetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[4]
+	mi := &file_widgets_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -409,7 +488,7 @@ func (x *ListWidgetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWidgetsResponse.ProtoReflect.Descriptor instead.
 func (*ListWidgetsResponse) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{4}
+	return file_widgets_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListWidgetsResponse) GetWidgets() []*Widget {
@@ -436,7 +515,7 @@ type UpdateWidgetRequest struct {
 
 func (x *UpdateWidgetRequest) Reset() {
 	*x = UpdateWidgetRequest{}
-	mi := &file_widgets_proto_msgTypes[5]
+	mi := &file_widgets_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -448,7 +527,7 @@ func (x *UpdateWidgetRequest) String() string {
 func (*UpdateWidgetRequest) ProtoMessage() {}
 
 func (x *UpdateWidgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[5]
+	mi := &file_widgets_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -461,7 +540,7 @@ func (x *UpdateWidgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateWidgetRequest.ProtoReflect.Descriptor instead.
 func (*UpdateWidgetRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{5}
+	return file_widgets_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *UpdateWidgetRequest) GetWidget() *Widget {
@@ -487,7 +566,7 @@ type DeleteWidgetRequest struct {
 
 func (x *DeleteWidgetRequest) Reset() {
 	*x = DeleteWidgetRequest{}
-	mi := &file_widgets_proto_msgTypes[6]
+	mi := &file_widgets_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -499,7 +578,7 @@ func (x *DeleteWidgetRequest) String() string {
 func (*DeleteWidgetRequest) ProtoMessage() {}
 
 func (x *DeleteWidgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[6]
+	mi := &file_widgets_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -512,7 +591,7 @@ func (x *DeleteWidgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWidgetRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWidgetRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{6}
+	return file_widgets_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DeleteWidgetRequest) GetId() string {
@@ -530,7 +609,7 @@ type DeleteWidgetResponse struct {
 
 func (x *DeleteWidgetResponse) Reset() {
 	*x = DeleteWidgetResponse{}
-	mi := &file_widgets_proto_msgTypes[7]
+	mi := &file_widgets_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -542,7 +621,7 @@ func (x *DeleteWidgetResponse) String() string {
 func (*DeleteWidgetResponse) ProtoMessage() {}
 
 func (x *DeleteWidgetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[7]
+	mi := &file_widgets_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -555,7 +634,7 @@ func (x *DeleteWidgetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWidgetResponse.ProtoReflect.Descriptor instead.
 func (*DeleteWidgetResponse) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{7}
+	return file_widgets_proto_rawDescGZIP(), []int{8}
 }
 
 // AIP-136: custom method — archive a widget.
@@ -568,7 +647,7 @@ type ArchiveWidgetRequest struct {
 
 func (x *ArchiveWidgetRequest) Reset() {
 	*x = ArchiveWidgetRequest{}
-	mi := &file_widgets_proto_msgTypes[8]
+	mi := &file_widgets_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -580,7 +659,7 @@ func (x *ArchiveWidgetRequest) String() string {
 func (*ArchiveWidgetRequest) ProtoMessage() {}
 
 func (x *ArchiveWidgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[8]
+	mi := &file_widgets_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -593,7 +672,7 @@ func (x *ArchiveWidgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveWidgetRequest.ProtoReflect.Descriptor instead.
 func (*ArchiveWidgetRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{8}
+	return file_widgets_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ArchiveWidgetRequest) GetId() string {
@@ -612,7 +691,7 @@ type ArchiveWidgetResponse struct {
 
 func (x *ArchiveWidgetResponse) Reset() {
 	*x = ArchiveWidgetResponse{}
-	mi := &file_widgets_proto_msgTypes[9]
+	mi := &file_widgets_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -624,7 +703,7 @@ func (x *ArchiveWidgetResponse) String() string {
 func (*ArchiveWidgetResponse) ProtoMessage() {}
 
 func (x *ArchiveWidgetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[9]
+	mi := &file_widgets_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -637,7 +716,7 @@ func (x *ArchiveWidgetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveWidgetResponse.ProtoReflect.Descriptor instead.
 func (*ArchiveWidgetResponse) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{9}
+	return file_widgets_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ArchiveWidgetResponse) GetWidget() *Widget {
@@ -657,7 +736,7 @@ type BatchGetWidgetsRequest struct {
 
 func (x *BatchGetWidgetsRequest) Reset() {
 	*x = BatchGetWidgetsRequest{}
-	mi := &file_widgets_proto_msgTypes[10]
+	mi := &file_widgets_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -669,7 +748,7 @@ func (x *BatchGetWidgetsRequest) String() string {
 func (*BatchGetWidgetsRequest) ProtoMessage() {}
 
 func (x *BatchGetWidgetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[10]
+	mi := &file_widgets_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -682,7 +761,7 @@ func (x *BatchGetWidgetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchGetWidgetsRequest.ProtoReflect.Descriptor instead.
 func (*BatchGetWidgetsRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{10}
+	return file_widgets_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *BatchGetWidgetsRequest) GetIds() []string {
@@ -701,7 +780,7 @@ type BatchGetWidgetsResponse struct {
 
 func (x *BatchGetWidgetsResponse) Reset() {
 	*x = BatchGetWidgetsResponse{}
-	mi := &file_widgets_proto_msgTypes[11]
+	mi := &file_widgets_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +792,7 @@ func (x *BatchGetWidgetsResponse) String() string {
 func (*BatchGetWidgetsResponse) ProtoMessage() {}
 
 func (x *BatchGetWidgetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[11]
+	mi := &file_widgets_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +805,7 @@ func (x *BatchGetWidgetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchGetWidgetsResponse.ProtoReflect.Descriptor instead.
 func (*BatchGetWidgetsResponse) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{11}
+	return file_widgets_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *BatchGetWidgetsResponse) GetWidgets() []*Widget {
@@ -746,7 +825,7 @@ type BatchDeleteWidgetsRequest struct {
 
 func (x *BatchDeleteWidgetsRequest) Reset() {
 	*x = BatchDeleteWidgetsRequest{}
-	mi := &file_widgets_proto_msgTypes[12]
+	mi := &file_widgets_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -758,7 +837,7 @@ func (x *BatchDeleteWidgetsRequest) String() string {
 func (*BatchDeleteWidgetsRequest) ProtoMessage() {}
 
 func (x *BatchDeleteWidgetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[12]
+	mi := &file_widgets_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -771,7 +850,7 @@ func (x *BatchDeleteWidgetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchDeleteWidgetsRequest.ProtoReflect.Descriptor instead.
 func (*BatchDeleteWidgetsRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{12}
+	return file_widgets_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *BatchDeleteWidgetsRequest) GetIds() []string {
@@ -791,7 +870,7 @@ type BatchUpdateWidgetsRequest struct {
 
 func (x *BatchUpdateWidgetsRequest) Reset() {
 	*x = BatchUpdateWidgetsRequest{}
-	mi := &file_widgets_proto_msgTypes[13]
+	mi := &file_widgets_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -803,7 +882,7 @@ func (x *BatchUpdateWidgetsRequest) String() string {
 func (*BatchUpdateWidgetsRequest) ProtoMessage() {}
 
 func (x *BatchUpdateWidgetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[13]
+	mi := &file_widgets_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -816,7 +895,7 @@ func (x *BatchUpdateWidgetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchUpdateWidgetsRequest.ProtoReflect.Descriptor instead.
 func (*BatchUpdateWidgetsRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{13}
+	return file_widgets_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *BatchUpdateWidgetsRequest) GetRequests() []*UpdateWidgetRequest {
@@ -835,7 +914,7 @@ type BatchUpdateWidgetsResponse struct {
 
 func (x *BatchUpdateWidgetsResponse) Reset() {
 	*x = BatchUpdateWidgetsResponse{}
-	mi := &file_widgets_proto_msgTypes[14]
+	mi := &file_widgets_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +926,7 @@ func (x *BatchUpdateWidgetsResponse) String() string {
 func (*BatchUpdateWidgetsResponse) ProtoMessage() {}
 
 func (x *BatchUpdateWidgetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[14]
+	mi := &file_widgets_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +939,7 @@ func (x *BatchUpdateWidgetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchUpdateWidgetsResponse.ProtoReflect.Descriptor instead.
 func (*BatchUpdateWidgetsResponse) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{14}
+	return file_widgets_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *BatchUpdateWidgetsResponse) GetWidgets() []*Widget {
@@ -880,7 +959,7 @@ type ProcessWidgetRequest struct {
 
 func (x *ProcessWidgetRequest) Reset() {
 	*x = ProcessWidgetRequest{}
-	mi := &file_widgets_proto_msgTypes[15]
+	mi := &file_widgets_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -892,7 +971,7 @@ func (x *ProcessWidgetRequest) String() string {
 func (*ProcessWidgetRequest) ProtoMessage() {}
 
 func (x *ProcessWidgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[15]
+	mi := &file_widgets_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -905,7 +984,7 @@ func (x *ProcessWidgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessWidgetRequest.ProtoReflect.Descriptor instead.
 func (*ProcessWidgetRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{15}
+	return file_widgets_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ProcessWidgetRequest) GetId() string {
@@ -926,7 +1005,7 @@ type OperationStatus struct {
 
 func (x *OperationStatus) Reset() {
 	*x = OperationStatus{}
-	mi := &file_widgets_proto_msgTypes[16]
+	mi := &file_widgets_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -938,7 +1017,7 @@ func (x *OperationStatus) String() string {
 func (*OperationStatus) ProtoMessage() {}
 
 func (x *OperationStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[16]
+	mi := &file_widgets_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -951,7 +1030,7 @@ func (x *OperationStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationStatus.ProtoReflect.Descriptor instead.
 func (*OperationStatus) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{16}
+	return file_widgets_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *OperationStatus) GetName() string {
@@ -984,7 +1063,7 @@ type GetOperationStatusRequest struct {
 
 func (x *GetOperationStatusRequest) Reset() {
 	*x = GetOperationStatusRequest{}
-	mi := &file_widgets_proto_msgTypes[17]
+	mi := &file_widgets_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -996,7 +1075,7 @@ func (x *GetOperationStatusRequest) String() string {
 func (*GetOperationStatusRequest) ProtoMessage() {}
 
 func (x *GetOperationStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[17]
+	mi := &file_widgets_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1009,7 +1088,7 @@ func (x *GetOperationStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOperationStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetOperationStatusRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{17}
+	return file_widgets_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetOperationStatusRequest) GetName() string {
@@ -1029,7 +1108,7 @@ type CancelWidgetOperationRequest struct {
 
 func (x *CancelWidgetOperationRequest) Reset() {
 	*x = CancelWidgetOperationRequest{}
-	mi := &file_widgets_proto_msgTypes[18]
+	mi := &file_widgets_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +1120,7 @@ func (x *CancelWidgetOperationRequest) String() string {
 func (*CancelWidgetOperationRequest) ProtoMessage() {}
 
 func (x *CancelWidgetOperationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_widgets_proto_msgTypes[18]
+	mi := &file_widgets_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +1133,7 @@ func (x *CancelWidgetOperationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelWidgetOperationRequest.ProtoReflect.Descriptor instead.
 func (*CancelWidgetOperationRequest) Descriptor() ([]byte, []int) {
-	return file_widgets_proto_rawDescGZIP(), []int{18}
+	return file_widgets_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CancelWidgetOperationRequest) GetName() string {
@@ -1087,6 +1166,18 @@ const file_widgets_proto_rawDesc = "" +
 	"\rarchived_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\farchivedTime:\xa8\x02\xeaA*\n" +
 	"\x16toy.example.com/Widget\x12\x10widgets/{widget}\x9a\xb8\x18\xf6\x01\b\x01\x12\x06simple\x1a\xe9\x01\n" +
 	"\x0ecategory_label\x1a\xd6\x01\n" +
+	"\x8b\x01\n" +
+	"\x03sql\x12\bpostgres\x1a\x011\"wCASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END\n" +
+	"F\n" +
+	"\x03cel\x1a\x011\"<msg.category == 'premium' ? 'tier premium' : 'tier standard'\"\xb1\x03\n" +
+	"\x05Gizmo\x12\x17\n" +
+	"\x04name\x18\x01 \x01(\tB\x03\xe0A\x03R\x04name\x12\x18\n" +
+	"\x02id\x18\x02 \x01(\tB\b\x9a\xb5\x18\x04:\x02\b\x02R\x02id\x12\x1c\n" +
+	"\x05label\x18\x03 \x01(\tB\x06\x9a\xb5\x18\x02`\x01R\x05label\x123\n" +
+	"\bcategory\x18\x04 \x01(\tB\x17\x9a\xb5\x18\x13J\bstandardJ\apremiumR\bcategory:\xa1\x02\xeaA'\n" +
+	"\x15toy.example.com/Gizmo\x12\x0egizmos/{gizmo}\x9a\xb8\x18\xf2\x01\b\x02\x12\x06simple\x1a\xe5\x01\n" +
+	"\n" +
+	"tier_label\x1a\xd6\x01\n" +
 	"\x8b\x01\n" +
 	"\x03sql\x12\bpostgres\x1a\x011\"wCASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END\n" +
 	"F\n" +
@@ -1178,67 +1269,68 @@ func file_widgets_proto_rawDescGZIP() []byte {
 	return file_widgets_proto_rawDescData
 }
 
-var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_widgets_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_widgets_proto_goTypes = []any{
 	(*Widget)(nil),                       // 0: toy.v1.Widget
-	(*CreateWidgetRequest)(nil),          // 1: toy.v1.CreateWidgetRequest
-	(*GetWidgetRequest)(nil),             // 2: toy.v1.GetWidgetRequest
-	(*ListWidgetsRequest)(nil),           // 3: toy.v1.ListWidgetsRequest
-	(*ListWidgetsResponse)(nil),          // 4: toy.v1.ListWidgetsResponse
-	(*UpdateWidgetRequest)(nil),          // 5: toy.v1.UpdateWidgetRequest
-	(*DeleteWidgetRequest)(nil),          // 6: toy.v1.DeleteWidgetRequest
-	(*DeleteWidgetResponse)(nil),         // 7: toy.v1.DeleteWidgetResponse
-	(*ArchiveWidgetRequest)(nil),         // 8: toy.v1.ArchiveWidgetRequest
-	(*ArchiveWidgetResponse)(nil),        // 9: toy.v1.ArchiveWidgetResponse
-	(*BatchGetWidgetsRequest)(nil),       // 10: toy.v1.BatchGetWidgetsRequest
-	(*BatchGetWidgetsResponse)(nil),      // 11: toy.v1.BatchGetWidgetsResponse
-	(*BatchDeleteWidgetsRequest)(nil),    // 12: toy.v1.BatchDeleteWidgetsRequest
-	(*BatchUpdateWidgetsRequest)(nil),    // 13: toy.v1.BatchUpdateWidgetsRequest
-	(*BatchUpdateWidgetsResponse)(nil),   // 14: toy.v1.BatchUpdateWidgetsResponse
-	(*ProcessWidgetRequest)(nil),         // 15: toy.v1.ProcessWidgetRequest
-	(*OperationStatus)(nil),              // 16: toy.v1.OperationStatus
-	(*GetOperationStatusRequest)(nil),    // 17: toy.v1.GetOperationStatusRequest
-	(*CancelWidgetOperationRequest)(nil), // 18: toy.v1.CancelWidgetOperationRequest
-	(*timestamppb.Timestamp)(nil),        // 19: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),        // 20: google.protobuf.FieldMask
-	(*emptypb.Empty)(nil),                // 21: google.protobuf.Empty
+	(*Gizmo)(nil),                        // 1: toy.v1.Gizmo
+	(*CreateWidgetRequest)(nil),          // 2: toy.v1.CreateWidgetRequest
+	(*GetWidgetRequest)(nil),             // 3: toy.v1.GetWidgetRequest
+	(*ListWidgetsRequest)(nil),           // 4: toy.v1.ListWidgetsRequest
+	(*ListWidgetsResponse)(nil),          // 5: toy.v1.ListWidgetsResponse
+	(*UpdateWidgetRequest)(nil),          // 6: toy.v1.UpdateWidgetRequest
+	(*DeleteWidgetRequest)(nil),          // 7: toy.v1.DeleteWidgetRequest
+	(*DeleteWidgetResponse)(nil),         // 8: toy.v1.DeleteWidgetResponse
+	(*ArchiveWidgetRequest)(nil),         // 9: toy.v1.ArchiveWidgetRequest
+	(*ArchiveWidgetResponse)(nil),        // 10: toy.v1.ArchiveWidgetResponse
+	(*BatchGetWidgetsRequest)(nil),       // 11: toy.v1.BatchGetWidgetsRequest
+	(*BatchGetWidgetsResponse)(nil),      // 12: toy.v1.BatchGetWidgetsResponse
+	(*BatchDeleteWidgetsRequest)(nil),    // 13: toy.v1.BatchDeleteWidgetsRequest
+	(*BatchUpdateWidgetsRequest)(nil),    // 14: toy.v1.BatchUpdateWidgetsRequest
+	(*BatchUpdateWidgetsResponse)(nil),   // 15: toy.v1.BatchUpdateWidgetsResponse
+	(*ProcessWidgetRequest)(nil),         // 16: toy.v1.ProcessWidgetRequest
+	(*OperationStatus)(nil),              // 17: toy.v1.OperationStatus
+	(*GetOperationStatusRequest)(nil),    // 18: toy.v1.GetOperationStatusRequest
+	(*CancelWidgetOperationRequest)(nil), // 19: toy.v1.CancelWidgetOperationRequest
+	(*timestamppb.Timestamp)(nil),        // 20: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),        // 21: google.protobuf.FieldMask
+	(*emptypb.Empty)(nil),                // 22: google.protobuf.Empty
 }
 var file_widgets_proto_depIdxs = []int32{
-	19, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
-	19, // 1: toy.v1.Widget.archived_time:type_name -> google.protobuf.Timestamp
+	20, // 0: toy.v1.Widget.delete_time:type_name -> google.protobuf.Timestamp
+	20, // 1: toy.v1.Widget.archived_time:type_name -> google.protobuf.Timestamp
 	0,  // 2: toy.v1.CreateWidgetRequest.widget:type_name -> toy.v1.Widget
-	20, // 3: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
-	20, // 4: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
+	21, // 3: toy.v1.GetWidgetRequest.read_mask:type_name -> google.protobuf.FieldMask
+	21, // 4: toy.v1.ListWidgetsRequest.read_mask:type_name -> google.protobuf.FieldMask
 	0,  // 5: toy.v1.ListWidgetsResponse.widgets:type_name -> toy.v1.Widget
 	0,  // 6: toy.v1.UpdateWidgetRequest.widget:type_name -> toy.v1.Widget
 	0,  // 7: toy.v1.ArchiveWidgetResponse.widget:type_name -> toy.v1.Widget
 	0,  // 8: toy.v1.BatchGetWidgetsResponse.widgets:type_name -> toy.v1.Widget
-	5,  // 9: toy.v1.BatchUpdateWidgetsRequest.requests:type_name -> toy.v1.UpdateWidgetRequest
+	6,  // 9: toy.v1.BatchUpdateWidgetsRequest.requests:type_name -> toy.v1.UpdateWidgetRequest
 	0,  // 10: toy.v1.BatchUpdateWidgetsResponse.widgets:type_name -> toy.v1.Widget
-	1,  // 11: toy.v1.WidgetService.CreateWidget:input_type -> toy.v1.CreateWidgetRequest
-	2,  // 12: toy.v1.WidgetService.GetWidget:input_type -> toy.v1.GetWidgetRequest
-	3,  // 13: toy.v1.WidgetService.ListWidgets:input_type -> toy.v1.ListWidgetsRequest
-	5,  // 14: toy.v1.WidgetService.UpdateWidget:input_type -> toy.v1.UpdateWidgetRequest
-	6,  // 15: toy.v1.WidgetService.DeleteWidget:input_type -> toy.v1.DeleteWidgetRequest
-	8,  // 16: toy.v1.WidgetService.ArchiveWidget:input_type -> toy.v1.ArchiveWidgetRequest
-	10, // 17: toy.v1.WidgetService.BatchGetWidgets:input_type -> toy.v1.BatchGetWidgetsRequest
-	12, // 18: toy.v1.WidgetService.BatchDeleteWidgets:input_type -> toy.v1.BatchDeleteWidgetsRequest
-	13, // 19: toy.v1.WidgetService.BatchUpdateWidgets:input_type -> toy.v1.BatchUpdateWidgetsRequest
-	15, // 20: toy.v1.WidgetService.ProcessWidget:input_type -> toy.v1.ProcessWidgetRequest
-	17, // 21: toy.v1.WidgetService.GetOperationStatus:input_type -> toy.v1.GetOperationStatusRequest
-	18, // 22: toy.v1.WidgetService.CancelWidgetOperation:input_type -> toy.v1.CancelWidgetOperationRequest
+	2,  // 11: toy.v1.WidgetService.CreateWidget:input_type -> toy.v1.CreateWidgetRequest
+	3,  // 12: toy.v1.WidgetService.GetWidget:input_type -> toy.v1.GetWidgetRequest
+	4,  // 13: toy.v1.WidgetService.ListWidgets:input_type -> toy.v1.ListWidgetsRequest
+	6,  // 14: toy.v1.WidgetService.UpdateWidget:input_type -> toy.v1.UpdateWidgetRequest
+	7,  // 15: toy.v1.WidgetService.DeleteWidget:input_type -> toy.v1.DeleteWidgetRequest
+	9,  // 16: toy.v1.WidgetService.ArchiveWidget:input_type -> toy.v1.ArchiveWidgetRequest
+	11, // 17: toy.v1.WidgetService.BatchGetWidgets:input_type -> toy.v1.BatchGetWidgetsRequest
+	13, // 18: toy.v1.WidgetService.BatchDeleteWidgets:input_type -> toy.v1.BatchDeleteWidgetsRequest
+	14, // 19: toy.v1.WidgetService.BatchUpdateWidgets:input_type -> toy.v1.BatchUpdateWidgetsRequest
+	16, // 20: toy.v1.WidgetService.ProcessWidget:input_type -> toy.v1.ProcessWidgetRequest
+	18, // 21: toy.v1.WidgetService.GetOperationStatus:input_type -> toy.v1.GetOperationStatusRequest
+	19, // 22: toy.v1.WidgetService.CancelWidgetOperation:input_type -> toy.v1.CancelWidgetOperationRequest
 	0,  // 23: toy.v1.WidgetService.CreateWidget:output_type -> toy.v1.Widget
 	0,  // 24: toy.v1.WidgetService.GetWidget:output_type -> toy.v1.Widget
-	4,  // 25: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
+	5,  // 25: toy.v1.WidgetService.ListWidgets:output_type -> toy.v1.ListWidgetsResponse
 	0,  // 26: toy.v1.WidgetService.UpdateWidget:output_type -> toy.v1.Widget
-	7,  // 27: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
-	9,  // 28: toy.v1.WidgetService.ArchiveWidget:output_type -> toy.v1.ArchiveWidgetResponse
-	11, // 29: toy.v1.WidgetService.BatchGetWidgets:output_type -> toy.v1.BatchGetWidgetsResponse
-	21, // 30: toy.v1.WidgetService.BatchDeleteWidgets:output_type -> google.protobuf.Empty
-	14, // 31: toy.v1.WidgetService.BatchUpdateWidgets:output_type -> toy.v1.BatchUpdateWidgetsResponse
-	16, // 32: toy.v1.WidgetService.ProcessWidget:output_type -> toy.v1.OperationStatus
-	16, // 33: toy.v1.WidgetService.GetOperationStatus:output_type -> toy.v1.OperationStatus
-	16, // 34: toy.v1.WidgetService.CancelWidgetOperation:output_type -> toy.v1.OperationStatus
+	8,  // 27: toy.v1.WidgetService.DeleteWidget:output_type -> toy.v1.DeleteWidgetResponse
+	10, // 28: toy.v1.WidgetService.ArchiveWidget:output_type -> toy.v1.ArchiveWidgetResponse
+	12, // 29: toy.v1.WidgetService.BatchGetWidgets:output_type -> toy.v1.BatchGetWidgetsResponse
+	22, // 30: toy.v1.WidgetService.BatchDeleteWidgets:output_type -> google.protobuf.Empty
+	15, // 31: toy.v1.WidgetService.BatchUpdateWidgets:output_type -> toy.v1.BatchUpdateWidgetsResponse
+	17, // 32: toy.v1.WidgetService.ProcessWidget:output_type -> toy.v1.OperationStatus
+	17, // 33: toy.v1.WidgetService.GetOperationStatus:output_type -> toy.v1.OperationStatus
+	17, // 34: toy.v1.WidgetService.CancelWidgetOperation:output_type -> toy.v1.OperationStatus
 	23, // [23:35] is the sub-list for method output_type
 	11, // [11:23] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
@@ -1257,7 +1349,7 @@ func file_widgets_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_widgets_proto_rawDesc), len(file_widgets_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

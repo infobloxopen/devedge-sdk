@@ -56,7 +56,9 @@ const (
 // arguments for both backends plus the metadata a generator needs.
 type Compiled struct {
 	// PostgresVector is the argument passed to to_tsvector('<TextConfig>', …):
-	// every source fragment concatenated with " || ' ' || ".
+	// every source fragment concatenated with " || ' ' || ". For an INDEXED
+	// resource it is also the expression of the persisted generated column
+	// (BuildIndexedMigration).
 	PostgresVector string
 	// SQLiteVector is the parallel SQLite text concatenation used by the
 	// case-insensitive LIKE fallback. It is empty when PostgresOnly is true.
@@ -68,11 +70,21 @@ type Compiled struct {
 	// TextConfig is the resolved message-level Postgres text-search config
 	// (default "simple").
 	TextConfig string
+	// Strategy is the resolved materialization strategy (JIT default, or
+	// INDEXED). PROJECTED never reaches here — Compile fails loud on it (FR-A5).
+	// It selects the generated List predicate: JIT recomputes to_tsvector(…) per
+	// query; INDEXED matches the persisted search_vector column (SD-7, FR-C3).
+	Strategy aip.SearchStrategy
 	// SourceNames are the searchable source JSON names, in vector order — a
 	// field source's JSON name, an expression source's logical name — for the
 	// x-aip-search OpenAPI extension (FR-D1).
 	SourceNames []string
 }
+
+// IsIndexed reports whether the resource uses the persisted-column (INDEXED)
+// strategy, so a generator emits the search_vector migration + a persisted-column
+// List predicate rather than the JIT inline to_tsvector(…).
+func (c *Compiled) IsIndexed() bool { return c != nil && c.Strategy == aip.SearchIndexed }
 
 // Compile validates and compiles cfg (from aip.ResolveSearchConfig over md) for
 // the given target backend dialect. It returns (nil, nil) for a non-searchable
@@ -114,7 +126,7 @@ func Compile(cfg aip.SearchConfig, md protoreflect.MessageDescriptor, dialect st
 		return nil, nil // not a searchable resource — nothing to emit
 	}
 
-	out := &Compiled{TextConfig: cfg.TextConfig}
+	out := &Compiled{TextConfig: cfg.TextConfig, Strategy: cfg.Strategy}
 	if out.TextConfig == "" {
 		out.TextConfig = aip.DefaultTextConfig
 	}

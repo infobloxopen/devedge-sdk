@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 )
@@ -119,6 +120,12 @@ type entSearchInfo struct {
 	SQLiteVector   string // text concatenation for the SQLite LIKE fallback ("" when PostgresOnly)
 	PostgresOnly   bool   // true => no SQLite form; a non-Postgres backend matches nothing
 	TextConfig     string // Postgres text-search config (default "simple")
+	// Indexed selects the INDEXED strategy (SD-7, FR-C3): the Postgres branch
+	// matches the persisted `search_vector` generated column instead of recomputing
+	// to_tsvector per query. The column + GIN migration is emitted by the
+	// co-generating protoc-gen-storage (which owns the table DDL / name helpers via
+	// with_storage), so ent never double-emits it. SQLite is unaffected.
+	Indexed bool
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -1556,7 +1563,14 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	// non-Postgres branch matches nothing rather than emit wrong SQL (SD-4/FM-8).
 	if msg.Search != nil {
 		s := msg.Search
-		pgFrag := fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ", s.TextConfig, s.PostgresVector, s.TextConfig)
+		// INDEXED matches the persisted generated column (search_vector); JIT
+		// recomputes the vector per query (SD-7, FR-C3). Both bind the term (FM-3).
+		var pgFrag string
+		if s.Indexed {
+			pgFrag = fmt.Sprintf("%s @@ websearch_to_tsquery('%s', ", searchgen.IndexColumn, s.TextConfig)
+		} else {
+			pgFrag = fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ", s.TextConfig, s.PostgresVector, s.TextConfig)
+		}
 		b.WriteString("\t\t\tif opts.Search != \"\" {\n")
 		b.WriteString("\t\t\t\tsearch := opts.Search\n")
 		fmt.Fprintf(&b, "\t\t\t\tq = q.Where(entpredicate.%s(func(sel *sql.Selector) {\n", model)

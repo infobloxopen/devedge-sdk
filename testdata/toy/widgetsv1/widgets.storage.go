@@ -481,3 +481,332 @@ func (r *WidgetRepository) BatchDelete(ctx context.Context, keys []string) error
 
 // compile-time check.
 var _ persistence.BatchRepository[*Widget, string] = (*WidgetRepository)(nil)
+
+// GizmoModel is the GORM model for Gizmo.
+type GizmoModel struct {
+	ID        string `gorm:"primaryKey;type:varchar(36)"`
+	Label     string `gorm:"column:label"`
+	Category  string `gorm:"column:category"`
+	ETag      string `gorm:"column:etag"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TableName pins the table backing the INDEXED full-text search_vector
+// generated column + GIN index (WS-041, see migrations/).
+func (GizmoModel) TableName() string { return "gizmos" }
+
+func toModel_Gizmo(p *Gizmo) *GizmoModel {
+	if p == nil {
+		return nil
+	}
+	m := &GizmoModel{ID: p.Id}
+	m.Label = p.Label
+	m.Category = p.Category
+	return m
+}
+
+func fromModel_Gizmo(m *GizmoModel) *Gizmo {
+	if m == nil {
+		return nil
+	}
+	p := &Gizmo{Id: m.ID}
+	p.Name = FormatGizmoName(m.ID)
+	p.Label = m.Label
+	p.Category = m.Category
+	if FromModelGizmoCustom != nil {
+		FromModelGizmoCustom(m, p)
+	}
+	return p
+}
+
+// FromModelGizmoCustom, if set, runs at the end of fromModel_Gizmo to populate
+// fields the generator cannot derive (computed/derived values). Register it
+// from your own (regen-safe) file — e.g. in an init(); never assigned here.
+var FromModelGizmoCustom func(m *GizmoModel, p *Gizmo)
+
+// ToModelGizmoOnCreate, if set, runs in Create just before the database write,
+// to set columns the generator does not (e.g. a custom-encoded field).
+var ToModelGizmoOnCreate func(p *Gizmo, m *GizmoModel)
+
+// ToModelGizmoOnUpdate, if set, runs in Update just before the database write.
+var ToModelGizmoOnUpdate func(p *Gizmo, m *GizmoModel)
+
+// GizmoColumns maps proto field names to DB column names for safe filter/order_by parsing.
+var GizmoColumns = map[string]string{
+	"id":       "id",
+	"label":    "label",
+	"category": "category",
+}
+
+// GizmoNamePattern is the AIP-122 resource name pattern for Gizmo.
+const GizmoNamePattern = "gizmos/{gizmo}"
+
+// FormatGizmoName builds the resource name for the given ID.
+func FormatGizmoName(id string) string {
+	name, _ := resourcename.Format(GizmoNamePattern, map[string]string{"gizmo": id})
+	return name
+}
+
+// ParseGizmoName extracts the resource ID from the given name.
+func ParseGizmoName(name string) (string, error) {
+	return resourcename.IDFromName(GizmoNamePattern, name)
+}
+
+// GizmoRepository is a GORM-backed persistence.Repository for *Gizmo.
+type GizmoRepository struct {
+	db    *gorm.DB
+	idGen persistence.IDGenerator
+}
+
+// NewGizmoRepository creates a repository backed by db.
+func NewGizmoRepository(db *gorm.DB, opts ...persistence.RepoOption) *GizmoRepository {
+	cfg := persistence.NewRepoConfig(persistence.UUID7Generator(), opts...)
+	return &GizmoRepository{db: db, idGen: cfg.IDGenerator}
+}
+
+func (r *GizmoRepository) conn(ctx context.Context) *gorm.DB {
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return tx.WithContext(ctx)
+		}
+	}
+	return r.db.WithContext(ctx)
+}
+
+func (r *GizmoRepository) Get(ctx context.Context, key string) (*Gizmo, error) {
+	var m GizmoModel
+	if err := r.conn(ctx).Where("id = ?", key).First(&m).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, persistence.ErrNotFound
+		}
+		return nil, fmt.Errorf("get Gizmo: %w", err)
+	}
+	return fromModel_Gizmo(&m), nil
+}
+
+func (r *GizmoRepository) List(ctx context.Context, opts persistence.ListOptions) ([]*Gizmo, string, error) {
+	var models []GizmoModel
+	q := r.conn(ctx)
+	if opts.Filter != "" {
+		cond, err := filter.Parse(opts.Filter, GizmoColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
+		}
+		sql, args := cond.SQL()
+		q = q.Where(sql, args...)
+	}
+	if opts.Search != "" {
+		switch r.db.Dialector.Name() {
+		case "postgres":
+			q = q.Where("search_vector @@ websearch_to_tsquery('simple', ?)", opts.Search)
+		default:
+			q = q.Where("lower(coalesce(CAST(\"label\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%'", opts.Search)
+		}
+	}
+	if opts.OrderBy != "" {
+		clauses, err := filter.ParseOrderBy(opts.OrderBy, GizmoColumns)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid order_by: %v", err)
+		}
+		for _, c := range clauses {
+			q = q.Order(c.GORMExpr())
+		}
+	}
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > persistence.MaxPageSize {
+		pageSize = persistence.MaxPageSize
+	}
+	offset := 0
+	if opts.PageToken != "" {
+		if dec, err := base64.StdEncoding.DecodeString(opts.PageToken); err == nil {
+			offset, _ = strconv.Atoi(string(dec))
+		}
+	}
+	if err := q.Limit(pageSize).Offset(offset).Find(&models).Error; err != nil {
+		return nil, "", fmt.Errorf("list Gizmo: %w", err)
+	}
+	out := make([]*Gizmo, len(models))
+	for i := range models {
+		out[i] = fromModel_Gizmo(&models[i])
+	}
+	nextToken := ""
+	if len(models) == pageSize {
+		nextToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(offset + pageSize)))
+	}
+	return out, nextToken, nil
+}
+
+func (r *GizmoRepository) Create(ctx context.Context, entity *Gizmo) (*Gizmo, error) {
+	if entity.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	m := toModel_Gizmo(entity)
+	if ToModelGizmoOnCreate != nil {
+		ToModelGizmoOnCreate(entity, m)
+	}
+	if err := r.conn(ctx).Create(m).Error; err != nil {
+		// Map driver constraint violations to clean sentinels so callers see
+		// AlreadyExists/FailedPrecondition (not 500), and no SQL leaks to the client.
+		if ce := persistence.ConstraintError(err); ce != nil {
+			return nil, ce
+		}
+		return nil, fmt.Errorf("create Gizmo: %w", err)
+	}
+	return fromModel_Gizmo(m), nil
+}
+
+func (r *GizmoRepository) Update(ctx context.Context, key string, entity *Gizmo, fieldMask ...string) (*Gizmo, error) {
+	m := toModel_Gizmo(entity)
+	m.ID = key
+	if ToModelGizmoOnUpdate != nil {
+		ToModelGizmoOnUpdate(entity, m)
+	}
+	q := r.conn(ctx).Model(m).Where("id = ?", key)
+	if len(fieldMask) > 0 {
+		dbCols := make([]string, 0, len(fieldMask))
+		for _, f := range fieldMask {
+			col, ok := GizmoColumns[f]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument, "unknown field in update_mask: %q", f)
+			}
+			dbCols = append(dbCols, col)
+		}
+		// Select makes GORM write the named columns even when their value is
+		// the zero value (false, 0, ""); a bare struct Updates would skip them.
+		res := q.Select(dbCols).Updates(m)
+		if err := res.Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update Gizmo: %w", err)
+		}
+	} else {
+		// No field mask: full update of every writable column via a map, so
+		// zero values (false, 0, "") persist — a struct Updates skips zero fields
+		// and would silently drop "disable this" / "clear that" updates.
+		updates := map[string]interface{}{
+			"label":    m.Label,
+			"category": m.Category,
+		}
+		res := q.Updates(updates)
+		if err := res.Error; err != nil {
+			if ce := persistence.ConstraintError(err); ce != nil {
+				return nil, ce
+			}
+			return nil, fmt.Errorf("update Gizmo: %w", err)
+		}
+	}
+	return r.Get(ctx, key)
+}
+
+func (r *GizmoRepository) Delete(ctx context.Context, key string) error {
+	res := r.conn(ctx).Where("id = ?", key).Unscoped().Delete(&GizmoModel{})
+	if res.Error != nil {
+		return fmt.Errorf("delete Gizmo: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return persistence.ErrNotFound
+	}
+	return nil
+}
+
+func (r *GizmoRepository) Undelete(_ context.Context, _ string) (*Gizmo, error) {
+	return nil, persistence.ErrNotFound
+}
+
+func (r *GizmoRepository) BatchGet(ctx context.Context, keys []string) ([]*Gizmo, error) {
+	if len(keys) == 0 {
+		return []*Gizmo{}, nil
+	}
+	var models []GizmoModel
+	q := r.conn(ctx).Where("id IN ?", keys)
+	if err := q.Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("batch get Gizmo: %w", err)
+	}
+	byID := make(map[string]*Gizmo, len(models))
+	for i := range models {
+		byID[models[i].ID] = fromModel_Gizmo(&models[i])
+	}
+	out := make([]*Gizmo, 0, len(keys))
+	for _, k := range keys {
+		p, ok := byID[k]
+		if !ok {
+			return nil, persistence.ErrNotFound
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *GizmoRepository) BatchUpdate(ctx context.Context, items []persistence.BatchUpdateItem[*Gizmo, string]) ([]*Gizmo, error) {
+	if len(items) == 0 {
+		return []*Gizmo{}, nil
+	}
+	out := make([]*Gizmo, 0, len(items))
+	run := func(txRepo *GizmoRepository) error {
+		for _, it := range items {
+			updated, err := txRepo.Update(ctx, it.Key, it.Entity, it.FieldMask...)
+			if err != nil {
+				return err
+			}
+			out = append(out, updated)
+		}
+		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			if err := run(&GizmoRepository{db: tx}); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return run(&GizmoRepository{db: tx})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *GizmoRepository) BatchDelete(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	uniq := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	run := func(db *gorm.DB) error {
+		q := db.WithContext(ctx).Where("id IN ?", uniq)
+		res := q.Unscoped().Delete(&GizmoModel{})
+		if res.Error != nil {
+			return fmt.Errorf("batch delete Gizmo: %w", res.Error)
+		}
+		if res.RowsAffected != int64(len(uniq)) {
+			return persistence.ErrNotFound
+		}
+		return nil
+	}
+	if h, ok := persistence.TxFromContext(ctx); ok {
+		if tx, ok := h.(*gorm.DB); ok {
+			return run(tx)
+		}
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return run(tx)
+	})
+}
+
+// compile-time check.
+var _ persistence.BatchRepository[*Gizmo, string] = (*GizmoRepository)(nil)

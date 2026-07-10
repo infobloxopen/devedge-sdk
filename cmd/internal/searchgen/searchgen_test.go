@@ -7,6 +7,7 @@ import (
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
 	"github.com/infobloxopen/devedge-sdk/internal/aip"
+	apiannotations "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -30,16 +31,26 @@ import (
 //	  string             labeled      = 8;    // column_name = "lbl"
 //	  enum MType { M_TYPE_UNSPECIFIED = 0; PRIMARY = 1; SECONDARY = 2; }
 //	}
-func buildM(t *testing.T, mo *descriptorpb.MessageOptions, fieldOpts map[string]*fieldv1.FieldOptions) protoreflect.MessageDescriptor {
+func buildM(t *testing.T, mo *descriptorpb.MessageOptions, fieldOpts map[string]*fieldv1.FieldOptions, behaviors ...map[string]apiannotations.FieldBehavior) protoreflect.MessageDescriptor {
 	t.Helper()
 
+	var behavior map[string]apiannotations.FieldBehavior
+	if len(behaviors) > 0 {
+		behavior = behaviors[0]
+	}
 	opt := func(name string) *descriptorpb.FieldOptions {
 		fo := fieldOpts[name]
-		if fo == nil {
+		b, hasB := behavior[name]
+		if fo == nil && !hasB {
 			return nil
 		}
 		o := &descriptorpb.FieldOptions{}
-		proto.SetExtension(o, fieldv1.E_Opts, fo)
+		if fo != nil {
+			proto.SetExtension(o, fieldv1.E_Opts, fo)
+		}
+		if hasB {
+			proto.SetExtension(o, apiannotations.E_FieldBehavior, []apiannotations.FieldBehavior{b})
+		}
 		return o
 	}
 	str := func(name string, num int32) *descriptorpb.FieldDescriptorProto {
@@ -292,17 +303,25 @@ func TestCompile_FieldPlusCELPortable(t *testing.T) {
 
 func TestCompile_RejectRules(t *testing.T) {
 	tests := []struct {
-		name     string
-		mo       *descriptorpb.MessageOptions
-		fopts    map[string]*fieldv1.FieldOptions
-		dialect  string
-		wantPart string
+		name      string
+		mo        *descriptorpb.MessageOptions
+		fopts     map[string]*fieldv1.FieldOptions
+		behaviors map[string]apiannotations.FieldBehavior
+		dialect   string
+		wantPart  string
 	}{
 		{
 			name:     "secret searchable field",
 			fopts:    map[string]*fieldv1.FieldOptions{"token": {Searchable: true, Secret: true}},
 			dialect:  DialectPostgres,
 			wantPart: "secret",
+		},
+		{
+			name:      "INPUT_ONLY searchable field",
+			fopts:     map[string]*fieldv1.FieldOptions{"description": {Searchable: true}},
+			behaviors: map[string]apiannotations.FieldBehavior{"description": apiannotations.FieldBehavior_INPUT_ONLY},
+			dialect:   DialectPostgres,
+			wantPart:  "INPUT_ONLY",
 		},
 		{
 			name:     "non-textual searchable field",
@@ -352,7 +371,7 @@ func TestCompile_RejectRules(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			md := buildM(t, tc.mo, tc.fopts)
+			md := buildM(t, tc.mo, tc.fopts, tc.behaviors)
 			err := compileErr(t, md, tc.dialect)
 			if err == nil {
 				t.Fatalf("Compile: want error containing %q, got nil", tc.wantPart)
@@ -377,6 +396,76 @@ func TestCompile_NotSearchableIsNoOp(t *testing.T) {
 	if c != nil {
 		t.Errorf("Compile of a non-searchable resource = %+v, want nil", c)
 	}
+}
+
+// TestCompile_IndexedStrategy proves an INDEXED resource compiles, surfaces the
+// strategy (IsIndexed), and still yields the same PostgresVector the migration's
+// generated column and the JIT predicate share (FR-C2/C3).
+func TestCompile_IndexedStrategy(t *testing.T) {
+	sc := &storagev1.SearchConfig{Strategy: storagev1.SearchConfig_STRATEGY_INDEXED}
+	md := buildM(t, searchOpts(sc), map[string]*fieldv1.FieldOptions{"display_name": {Searchable: true}})
+	c := mustCompile(t, md, DialectPostgres)
+	if c.Strategy != aip.SearchIndexed {
+		t.Errorf("Strategy = %v, want INDEXED", c.Strategy)
+	}
+	if !c.IsIndexed() {
+		t.Error("IsIndexed() = false, want true for an INDEXED resource")
+	}
+	if c.PostgresVector != dnPG {
+		t.Errorf("PostgresVector = %q, want %q", c.PostgresVector, dnPG)
+	}
+}
+
+// TestBuildIndexedMigration proves the emitted migration file set (FR-C2, FM-6):
+// a versioned column up/down pair whose up ADDs a GENERATED … STORED tsvector, and
+// a CONCURRENTLY GIN index as the SOLE statement in its own up file (+ DROP down),
+// numbered columnVersion / columnVersion+1.
+func TestBuildIndexedMigration(t *testing.T) {
+	files := BuildIndexedMigration("gizmos", "simple", `coalesce("label", '')`, 9001)
+	if len(files) != 4 {
+		t.Fatalf("want 4 files, got %d", len(files))
+	}
+	byName := map[string]string{}
+	for _, f := range files {
+		byName[f.Name] = f.Body
+	}
+	colUp, ok := byName["9001_gizmos_search_vector.up.sql"]
+	if !ok {
+		t.Fatalf("missing column up file; got %v", keysOf(byName))
+	}
+	if !strings.Contains(colUp, "ADD COLUMN search_vector tsvector") ||
+		!strings.Contains(colUp, "GENERATED ALWAYS AS (to_tsvector('simple', coalesce(\"label\", ''))) STORED") {
+		t.Errorf("column up file lacks the GENERATED tsvector column:\n%s", colUp)
+	}
+	if _, ok := byName["9001_gizmos_search_vector.down.sql"]; !ok {
+		t.Error("missing column down file")
+	}
+	idxUp, ok := byName["9002_gizmos_search_gin.up.sql"]
+	if !ok {
+		t.Fatalf("missing index up file; got %v", keysOf(byName))
+	}
+	if !strings.Contains(idxUp, "CREATE INDEX CONCURRENTLY gizmos_search_gin ON gizmos USING GIN (search_vector)") {
+		t.Errorf("index up file lacks the CONCURRENTLY GIN index:\n%s", idxUp)
+	}
+	// FM-6: the index up file must carry exactly ONE SQL statement (one ';').
+	if n := strings.Count(idxUp, ";"); n != 1 {
+		t.Errorf("index up file must have exactly one statement, found %d ';':\n%s", n, idxUp)
+	}
+	idxDown, ok := byName["9002_gizmos_search_gin.down.sql"]
+	if !ok {
+		t.Fatal("missing index down file")
+	}
+	if !strings.Contains(idxDown, "DROP INDEX CONCURRENTLY IF EXISTS gizmos_search_gin") {
+		t.Errorf("index down file lacks DROP INDEX:\n%s", idxDown)
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 func TestCompile_UnsupportedTargetDialect(t *testing.T) {
