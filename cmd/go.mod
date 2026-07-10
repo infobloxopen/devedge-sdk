@@ -17,6 +17,7 @@ go 1.25.5
 
 require (
 	github.com/getkin/kin-openapi v0.140.0
+	github.com/google/cel-go v0.24.1
 	github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4
 	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.1
@@ -28,6 +29,8 @@ require (
 )
 
 require (
+	cel.dev/expr v0.25.1 // indirect
+	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/go-openapi/jsonpointer v0.22.5 // indirect
 	github.com/go-openapi/swag/jsonname v0.25.5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -37,7 +40,9 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/stoewer/go-strcase v1.2.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
+	golang.org/x/exp v0.0.0-20230515195305-f3d0a9c9a5cc // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
