@@ -29,24 +29,35 @@ it over the REST gateway with no hand-written search code.
 - **`cel`→SQL compiler (new).** A `cel`-flavored source compiles to a Postgres expression and a
   parallel SQLite expression from one type-checked AST, so a calculated value (an enum mapped to a
   display label, for example) stays portable to the SQLite dev/test driver without a hand-written
-  second expression. A `sql/postgres` source with no `cel` alternate is Postgres-only and fails
-  loud when generated for the SQLite backend.
+  second expression. A `sql/postgres` source with no `cel` alternate is Postgres-only: it generates
+  without error on every backend, but fails at runtime — not at generation time — when queried over
+  a non-Postgres connection (`codes.Unimplemented` on GORM; the ent backend instead matches zero
+  rows).
 - **`q` on List (new).** `persistence.ListOptions` gains `Search string`; `protoc-gen-svc` detects a
-  `string q` field on a List request (the same convention as `filter`/`order_by`) and maps it in
-  automatically. Both `protoc-gen-storage` (GORM) and `protoc-gen-ent` (ent) AND a full-text
-  predicate onto the query after the AIP-160 filter `WHERE` — `to_tsvector(...) @@
-  websearch_to_tsquery(...)` on Postgres, a case-insensitive `LIKE` contains on SQLite — with the
-  query term always a bound parameter. `q` composes with `filter`, `order_by`, and pagination in one
-  List call.
+  `string q` field on a List request (the same convention as `filter`/`order_by`, each wired
+  independently) and maps it in automatically. Both `protoc-gen-storage` (GORM) and `protoc-gen-ent`
+  (ent) AND a full-text predicate onto the query after the AIP-160 filter `WHERE` —
+  `to_tsvector(...) @@ websearch_to_tsquery(...)` on Postgres, a single case-insensitive `LIKE`
+  contains over every source concatenated into one string on SQLite (a dev-only approximation, not
+  equivalent to Postgres full-text semantics) — with the query term always a bound parameter. An
+  empty or whitespace-only `q` is a no-op, returning every row. `q` composes with `filter`,
+  `order_by`, and pagination in one List call, provided the request declares those fields too.
 - **`STRATEGY_INDEXED` (new).** A resource that outgrows query-time search declares
   `strategy: STRATEGY_INDEXED` and gets a generated `search_vector` column
   (`GENERATED ALWAYS AS (...) STORED`) plus a `CREATE INDEX CONCURRENTLY ... USING GIN` migration,
   emitted as its own file so Postgres does not reject `CONCURRENTLY` inside a transaction. Emission
   is idempotent and uses a reserved migration-version band so a generated file never collides with a
-  module's hand-authored migrations.
+  module's hand-authored migrations. The scaffold's `make sync-migrations` target (a prerequisite of
+  `build`/`test`/`run`) copies the generated files from buf's git-ignored output directory into the
+  module's committed, embedded migrations directory; running `de generate` directly requires a
+  manual `make sync-migrations` afterward.
 - **`x-aip-search` OpenAPI extension (new).** The enriched OpenAPI spec adds a `q` query parameter
   and an `x-aip-search` extension (searchable source names, strategy, text config) to a searchable
   resource's List operation, parallel to `x-aip-pagination`.
+- **Toolchain prerequisite.** `searchable` and `(infoblox.storage.v1.search)` are additive schema
+  options: an older `de`/toolchain generates a resource carrying them without error, but silently
+  ignores both, emitting no `q` predicate and no migration. Full-text search requires the v0.60.0
+  toolchain or later.
 - **Docs.** [Add full-text search to a resource](https://github.com/infobloxopen/devedge-sdk/blob/main/docs/content/docs/how-to/model-and-persist/add-full-text-search.md),
   the `Annotations` concept page, and the `persistence` reference now cover the annotations, the
   three source flavors, choosing a strategy, and the generated migration files.

@@ -17,6 +17,10 @@ assumes you already have a [modeled resource](../model-a-resource/) with an `id`
 ## Prerequisites
 
 - A resource message with an `id` field (see [Model a Resource](../model-a-resource/)).
+- The v0.60.0 devedge-sdk toolchain or later. `searchable` and `(infoblox.storage.v1.search)` are
+  additive schema options: an older `de`/toolchain parses and generates the resource without
+  error, but silently ignores them — no `q` predicate and no migration is emitted. Confirm your
+  toolchain is on v0.60.0 or later before following this guide.
 - PostgreSQL to exercise true full-text matching. A resource whose sources are all portable also
   runs on the SQLite dev/test driver — see [SQLite and `sql`-flavor sources](#sqlite-and-sql-flavor-sources)
   below.
@@ -44,6 +48,12 @@ message User {
   string display_name = 4 [(infoblox.field.v1.opts) = {searchable: true}];
 }
 ```
+
+On PostgreSQL, a searchable field's `@` and `.` characters are normalized to spaces before
+indexing — `alice@acme.com` tokenizes as `alice`, `acme`, and `com` — so an email or hostname field
+matches on its parts, not only on the whole value. This normalization applies to a field-flagged or
+`field`-referenced source only; it does not apply to a `sql`/`cel` calculated source, and the
+SQLite fallback (below) does not normalize at all.
 
 {{< callout type="warning" >}}
 **A `secret` or `INPUT_ONLY` field cannot be searchable.** Matching against a write-only or
@@ -183,10 +193,23 @@ a local predicate. It is reserved for a future cross-service search index.
 make generate
 ```
 
-For a `STRATEGY_INDEXED` resource, `make generate` also writes a migration pair under the module's
-`migrations/` directory: an `ALTER TABLE ... ADD COLUMN search_vector ... GENERATED ALWAYS AS (...) STORED`
-and a `CREATE INDEX CONCURRENTLY ... USING GIN (search_vector)` in its own file (Postgres cannot run
-`CONCURRENTLY` inside a transaction). Review and apply them the same way as any other migration:
+For a `STRATEGY_INDEXED` resource, `make generate` also emits a migration pair: an
+`ALTER TABLE ... ADD COLUMN search_vector ... GENERATED ALWAYS AS (...) STORED` and a
+`CREATE INDEX CONCURRENTLY ... USING GIN (search_vector)` in its own file (Postgres cannot run
+`CONCURRENTLY` inside a transaction).
+
+{{< callout type="warning" >}}
+**The generated files land under `gen/migrations/`, not the module's committed migrations.**
+`gen/migrations/` is git-ignored and is not the directory the module embeds. The scaffold's
+`make sync-migrations` target — wired as a prerequisite of `make build`, `make test`, and
+`make run` — copies the generated files into the committed, embedded `module/migrations/`
+directory, where `//go:embed migrations` and the host migrator can find them. If you invoke
+`de generate` directly instead of through `make`, run `make sync-migrations` (or `make build`)
+afterward. Skip this step and an `INDEXED` resource fails at runtime with
+`column "search_vector" does not exist`.
+{{< /callout >}}
+
+Once synced, review and apply the files the same way as any other migration:
 
 ```sh
 de migrate lint
@@ -217,7 +240,8 @@ Call it as a query parameter over the REST gateway:
 curl -s 'localhost:8080/v1/widgets?q=acme'
 ```
 
-An empty `q` is a no-op — List behaves exactly as if no search were requested.
+An empty or whitespace-only `q` is a no-op — List behaves exactly as if no search were requested
+and returns every row that the other List parameters allow.
 
 ## Combine `q` with `filter` and `order_by`
 
@@ -231,17 +255,50 @@ curl -s 'localhost:8080/v1/widgets?q=acme&filter=category="premium"&order_by=cre
 This returns only rows that match the free-text query **and** the filter, ordered by
 `create_time`. No operator is dropped when you combine all three.
 
+{{< callout type="warning" >}}
+**`q`, `filter`, and `order_by` are three independent, opt-in request fields.** `protoc-gen-svc`
+wires each one only when the List request message declares a same-named `string` field — adding
+`q` does not automatically add `filter` or `order_by`, and vice versa. To compose all three, the
+request must declare all three:
+
+```proto {filename="widgets.proto"}
+message ListWidgetsRequest {
+  int32  page_size  = 1;
+  string page_token = 2;
+  string filter     = 4;
+  string order_by   = 6;
+  string q          = 5;
+}
+```
+{{< /callout >}}
+
 ## SQLite and `sql`-flavor sources
 
 A resource whose sources are all portable — plain `field` sources, or a `cel` source, which
 compiles to a SQLite expression as well as a Postgres one — also works on the SQLite driver used
-for fast local tests. There, `q` degrades to a case-insensitive `LIKE '%term%'` contains, ORed
-across the portable columns, instead of a true full-text match.
+for fast local tests. There, `q` degrades to a single case-insensitive `LIKE` contains: every
+portable source is concatenated into **one string** with a literal space between sources, and the
+whole concatenation is matched against the term. This is not a per-column `OR` — a match is not
+required to fall within a single source; it can span the boundary between two concatenated
+sources.
 
 {{< callout type="warning" >}}
-**A `sql/postgres` source with no `cel` alternate is Postgres-only.** `make generate` fails loud
-when generating that resource for the SQLite backend, instead of emitting Postgres-only SQL that
-would crash at runtime. Add a `cel` expression alongside the `sql` one (as shown in
+**The SQLite fallback is a dev-only approximation, not full-text search.** Its matching semantics
+differ materially from PostgreSQL's: no stopword removal, no stemming, matches occur mid-word (a
+substring match, not a token match), and a query can match across the seam between two
+concatenated sources. A search that matches on SQLite — or the order it returns — can differ from
+the same search on PostgreSQL, and vice versa. Validate search behavior against PostgreSQL before
+deploying; do not treat a SQLite result set as a preview of production search results.
+{{< /callout >}}
+
+{{< callout type="warning" >}}
+**A `sql/postgres` source with no `cel` alternate is Postgres-only.** This is a runtime
+constraint, not a build-time one: the resource generates without error on every backend. When List
+runs against a non-Postgres connection, the generated predicate returns a gRPC `Unimplemented`
+error — "full-text search for `<Resource>` requires PostgreSQL" — instead of running broken SQL.
+(The ent backend's non-Postgres branch instead matches zero rows rather than returning an error;
+see [Persistence reference → Full-text search (`q`)](../../../reference/persistence/#full-text-search-q)
+for the exact predicate per backend.) Add a `cel` expression alongside the `sql` one (as shown in
 [The `cel` source](#the-cel-source-portable) above) to keep the resource portable.
 {{< /callout >}}
 

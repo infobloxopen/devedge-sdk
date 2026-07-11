@@ -220,7 +220,9 @@ message Widget {
     sources: [
       { name: "category_label", exprs: { expr: [
         { flavor: "sql", dialect: "postgres", version: "1",
-          expr: "CASE category WHEN 'premium' THEN 'tier premium deluxe' ELSE 'tier none' END" }
+          expr: "CASE category WHEN 'premium' THEN 'tier premium deluxe' ELSE 'tier none' END" },
+        { flavor: "cel", version: "1",
+          expr: "msg.category == 'premium' ? 'tier premium' : 'tier none'" }
       ]}}
     ]
   };
@@ -228,6 +230,9 @@ message Widget {
   string category      = 4 [(infoblox.field.v1.opts) = {allowed_values: ["standard", "premium"]}];
 }
 ```
+
+The `cel` expression alongside the `sql` one keeps `category_label` portable to the SQLite
+dev/test driver — see the warning below.
 
 | Field (`FieldOptions`) | Number | Meaning |
 |---|---|---|
@@ -259,7 +264,7 @@ sources beyond field-flagged columns.
 | Field | Number | Meaning |
 |---|---|---|
 | `name` | 1 | Logical name for diagnostics and the `x-aip-search` OpenAPI extension. |
-| `field` | 2 | (oneof `from`) References an existing message field by name — a portable source. |
+| `field` | 2 | (oneof `from`) References an existing message field by name — a portable source. On PostgreSQL, the field's `@` and `.` characters are normalized to spaces before indexing (`alice@acme.com` tokenizes as `alice acme com`); the SQLite fallback does not apply this normalization. |
 | `exprs` | 3 | (oneof `from`) A `SearchExprSet` of flavored, calculated expressions. |
 | `text_config` | 4 | Overrides the message-level `text_config` for this source only. |
 
@@ -276,8 +281,9 @@ sources beyond field-flagged columns.
 {{< callout type="warning" >}}
 **A `sql` expression is Postgres-only unless paired with a `cel` expression in the same source.**
 `cel` compiles to both a Postgres and a SQLite expression, so it is the portable choice for a
-calculated value; a `sql`-only source makes the whole resource fail loud when generated for the
-SQLite backend. See [Add full-text search to a resource → SQLite and `sql`-flavor sources](../../how-to/model-and-persist/add-full-text-search/#sqlite-and-sql-flavor-sources).
+calculated value. A `sql`-only source generates without error on every backend, but fails at
+**runtime**, not at generation time: querying it over a non-Postgres connection returns
+`Unimplemented` instead of running broken SQL. See [Add full-text search to a resource → SQLite and `sql`-flavor sources](../../how-to/model-and-persist/add-full-text-search/#sqlite-and-sql-flavor-sources).
 {{< /callout >}}
 
 ## Aggregate boundaries
