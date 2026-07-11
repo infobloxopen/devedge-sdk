@@ -3,6 +3,7 @@
 package migrate
 
 import (
+	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/dialect/sql/schema"
 	"entgo.io/ent/schema/field"
 )
@@ -72,6 +73,32 @@ var (
 		Name:       "idem_markers",
 		Columns:    IdemMarkersColumns,
 		PrimaryKey: []*schema.Column{IdemMarkersColumns[0]},
+	}
+	// IdempotencyKeysColumns holds the columns for the "idempotency_keys" table.
+	IdempotencyKeysColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "account_id", Type: field.TypeString, Default: ""},
+		{Name: "method", Type: field.TypeString, Default: ""},
+		{Name: "request_id", Type: field.TypeString, Default: ""},
+		{Name: "status", Type: field.TypeString, Default: ""},
+		{Name: "response_type", Type: field.TypeString, Nullable: true, Default: ""},
+		{Name: "response", Type: field.TypeBytes, Nullable: true},
+		{Name: "fingerprint", Type: field.TypeString, Nullable: true, Default: ""},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "expires_at", Type: field.TypeTime},
+	}
+	// IdempotencyKeysTable holds the schema information for the "idempotency_keys" table.
+	IdempotencyKeysTable = &schema.Table{
+		Name:       "idempotency_keys",
+		Columns:    IdempotencyKeysColumns,
+		PrimaryKey: []*schema.Column{IdempotencyKeysColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "idempotencykey_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{IdempotencyKeysColumns[9]},
+			},
+		},
 	}
 	// MembershipsColumns holds the columns for the "memberships" table.
 	MembershipsColumns = []*schema.Column{
@@ -181,6 +208,7 @@ var (
 		APIKeysTable,
 		GroupsTable,
 		IdemMarkersTable,
+		IdempotencyKeysTable,
 		MembershipsTable,
 		OutboxesTable,
 		OutboxCursorsTable,
@@ -190,5 +218,8 @@ var (
 )
 
 func init() {
+	IdempotencyKeysTable.Annotation = &entsql.Annotation{
+		Table: "idempotency_keys",
+	}
 	MembershipsTable.ForeignKeys[0].RefTable = GroupsTable
 }

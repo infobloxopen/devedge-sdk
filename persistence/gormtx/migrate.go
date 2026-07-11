@@ -93,6 +93,38 @@ type MigrateOptions struct {
 	// e.g. SQLite — the dev/test single-process path needs no cross-host fence).
 	// On Postgres it should stay false.
 	SkipAdvisoryLock bool
+	// IdempotencyPartitions opts the durable idempotency_keys table into PostgreSQL HASH
+	// partitioning by its full primary key (WS-043 Increment 3, DD-3): 0/unset keeps the
+	// plain baseline table (byte-for-byte unchanged); n>0 creates the table hash-
+	// partitioned into n leaves at migrate time (before AutoMigrate), PG-only. It fails
+	// loud if the table already exists non-partitioned. It has an effect only when
+	// IdempotencyKeyRow is in FrameworkModels and the dialect is postgres; it is the
+	// mechanism the host's migrate callback drives from
+	// servicekit.DurableIdempotencyConfig.PartitionCount.
+	IdempotencyPartitions int
+}
+
+// framework models carry the durable idempotency_keys table.
+func hasIdempotencyKeyModel(models []any) bool {
+	for _, m := range models {
+		if _, ok := m.(*IdempotencyKeyRow); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutIdempotencyKeyModel returns models minus *IdempotencyKeyRow — used when the hash-
+// partition step already created idempotency_keys, so AutoMigrate must not touch it.
+func withoutIdempotencyKeyModel(models []any) []any {
+	out := make([]any, 0, len(models))
+	for _, m := range models {
+		if _, ok := m.(*IdempotencyKeyRow); ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // MigrateModule runs one module's migration under the host's discipline (WS-012 §5.4):
@@ -128,9 +160,17 @@ func MigrateModule(ctx context.Context, db *gorm.DB, opts MigrateOptions) error 
 		defer unlock()
 	}
 
-	// (2) ensure the module schema exists (Postgres schema isolation).
+	// (2) ensure the module schema exists (Postgres schema isolation). The schema name is
+	// validated + PG-quoted via quoteIdent (NOT Go %q, which does not escape an embedded
+	// double-quote the way PostgreSQL identifier quoting requires) so a hand-built or
+	// preferred-schema namespace can never inject DDL — consistent with the WS-043 perf
+	// DDL below.
 	if ns.Schema != "" && dialect == "postgres" {
-		if err := db.WithContext(ctx).Exec(fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %q", ns.Schema)).Error; err != nil {
+		qs, qerr := quoteIdent(ns.Schema)
+		if qerr != nil {
+			return fmt.Errorf("gormtx: module %q: %w", ns.ModuleID, qerr)
+		}
+		if err := db.WithContext(ctx).Exec("CREATE SCHEMA IF NOT EXISTS " + qs).Error; err != nil {
 			return fmt.Errorf("gormtx: create schema %q for module %q: %w", ns.Schema, ns.ModuleID, err)
 		}
 	}
@@ -145,8 +185,33 @@ func MigrateModule(ctx context.Context, db *gorm.DB, opts MigrateOptions) error 
 	if err := migrateDomain(ctx, db, opts.DomainModels); err != nil {
 		return err
 	}
-	if err := migrateFramework(ctx, db, ns, opts.FrameworkModels); err != nil {
+	// (3a) OPT-IN durable-idempotency hash partitioning (WS-043 DD-3): create the
+	// idempotency_keys table hash-partitioned BEFORE AutoMigrate. When it runs it fully
+	// materializes the table (columns, PK, expires_at index, tuned leaves), so
+	// IdempotencyKeyRow is DROPPED from the AutoMigrate set below — AutoMigrate must not
+	// touch a partitioned table (it could try to recreate the propagated index and fail).
+	// PG-only + create-time + fail-loud if the table already exists non-partitioned.
+	// Skipped when not opted in (n=0), on a non-Postgres dialect, or when idempotency_keys
+	// is not being migrated.
+	tuneIdempotency := dialect == "postgres" && hasIdempotencyKeyModel(opts.FrameworkModels)
+	frameworkModels := opts.FrameworkModels
+	if opts.IdempotencyPartitions > 0 && dialect == "postgres" && hasIdempotencyKeyModel(opts.FrameworkModels) {
+		if err := EnsureIdempotencyKeysPartitioned(ctx, db, ns, opts.IdempotencyPartitions); err != nil {
+			return err
+		}
+		frameworkModels = withoutIdempotencyKeyModel(opts.FrameworkModels)
+	}
+	if err := migrateFramework(ctx, db, ns, frameworkModels); err != nil {
 		return err
+	}
+	// (3b) tune the (now-materialized) idempotency_keys table for its hot-UPDATE + high-
+	// turnover workload (WS-043 DD-1): PG-only, idempotent storage/autovacuum params, off
+	// the drift-gated baseline. Tunes the plain table or, when partitioned, each leaf.
+	// No-op on SQLite/other and when idempotency_keys is absent.
+	if tuneIdempotency {
+		if err := TuneIdempotencyKeys(ctx, db, ns); err != nil {
+			return err
+		}
 	}
 
 	// (4) stamp the module's own migration table so the module records its state in

@@ -6,6 +6,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/account"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/apikey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/group"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/idempotencykey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outboxcursor"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/schema"
@@ -45,6 +46,32 @@ func init() {
 	groupDescAccountID := groupMixinFields0[0].Descriptor()
 	// group.AccountIDValidator is a validator for the "account_id" field. It is called by the builders before save.
 	group.AccountIDValidator = groupDescAccountID.Validators[0].(func(string) error)
+	idempotencykeyFields := schema.IdempotencyKey{}.Fields()
+	_ = idempotencykeyFields
+	// idempotencykeyDescAccountID is the schema descriptor for account_id field.
+	idempotencykeyDescAccountID := idempotencykeyFields[1].Descriptor()
+	// idempotencykey.DefaultAccountID holds the default value on creation for the account_id field.
+	idempotencykey.DefaultAccountID = idempotencykeyDescAccountID.Default.(string)
+	// idempotencykeyDescMethod is the schema descriptor for method field.
+	idempotencykeyDescMethod := idempotencykeyFields[2].Descriptor()
+	// idempotencykey.DefaultMethod holds the default value on creation for the method field.
+	idempotencykey.DefaultMethod = idempotencykeyDescMethod.Default.(string)
+	// idempotencykeyDescRequestID is the schema descriptor for request_id field.
+	idempotencykeyDescRequestID := idempotencykeyFields[3].Descriptor()
+	// idempotencykey.DefaultRequestID holds the default value on creation for the request_id field.
+	idempotencykey.DefaultRequestID = idempotencykeyDescRequestID.Default.(string)
+	// idempotencykeyDescStatus is the schema descriptor for status field.
+	idempotencykeyDescStatus := idempotencykeyFields[4].Descriptor()
+	// idempotencykey.DefaultStatus holds the default value on creation for the status field.
+	idempotencykey.DefaultStatus = idempotencykeyDescStatus.Default.(string)
+	// idempotencykeyDescResponseType is the schema descriptor for response_type field.
+	idempotencykeyDescResponseType := idempotencykeyFields[5].Descriptor()
+	// idempotencykey.DefaultResponseType holds the default value on creation for the response_type field.
+	idempotencykey.DefaultResponseType = idempotencykeyDescResponseType.Default.(string)
+	// idempotencykeyDescFingerprint is the schema descriptor for fingerprint field.
+	idempotencykeyDescFingerprint := idempotencykeyFields[7].Descriptor()
+	// idempotencykey.DefaultFingerprint holds the default value on creation for the fingerprint field.
+	idempotencykey.DefaultFingerprint = idempotencykeyDescFingerprint.Default.(string)
 	membershipMixin := schema.Membership{}.Mixin()
 	membershipMixinInters0 := membershipMixin[0].Interceptors()
 	membership.Interceptors[0] = membershipMixinInters0[0]

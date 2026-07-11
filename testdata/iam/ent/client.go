@@ -19,6 +19,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/apikey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/group"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/idemmarker"
+	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/idempotencykey"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/membership"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outbox"
 	"github.com/infobloxopen/devedge-sdk/testdata/iam/ent/outboxcursor"
@@ -39,6 +40,8 @@ type Client struct {
 	Group *GroupClient
 	// IdemMarker is the client for interacting with the IdemMarker builders.
 	IdemMarker *IdemMarkerClient
+	// IdempotencyKey is the client for interacting with the IdempotencyKey builders.
+	IdempotencyKey *IdempotencyKeyClient
 	// Membership is the client for interacting with the Membership builders.
 	Membership *MembershipClient
 	// Outbox is the client for interacting with the Outbox builders.
@@ -64,6 +67,7 @@ func (c *Client) init() {
 	c.ApiKey = NewApiKeyClient(c.config)
 	c.Group = NewGroupClient(c.config)
 	c.IdemMarker = NewIdemMarkerClient(c.config)
+	c.IdempotencyKey = NewIdempotencyKeyClient(c.config)
 	c.Membership = NewMembershipClient(c.config)
 	c.Outbox = NewOutboxClient(c.config)
 	c.OutboxCursor = NewOutboxCursorClient(c.config)
@@ -165,6 +169,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ApiKey:           NewApiKeyClient(cfg),
 		Group:            NewGroupClient(cfg),
 		IdemMarker:       NewIdemMarkerClient(cfg),
+		IdempotencyKey:   NewIdempotencyKeyClient(cfg),
 		Membership:       NewMembershipClient(cfg),
 		Outbox:           NewOutboxClient(cfg),
 		OutboxCursor:     NewOutboxCursorClient(cfg),
@@ -193,6 +198,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ApiKey:           NewApiKeyClient(cfg),
 		Group:            NewGroupClient(cfg),
 		IdemMarker:       NewIdemMarkerClient(cfg),
+		IdempotencyKey:   NewIdempotencyKeyClient(cfg),
 		Membership:       NewMembershipClient(cfg),
 		Outbox:           NewOutboxClient(cfg),
 		OutboxCursor:     NewOutboxCursorClient(cfg),
@@ -227,8 +233,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.Membership, c.Outbox,
-		c.OutboxCursor, c.OutboxDeadLetter, c.User,
+		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.IdempotencyKey, c.Membership,
+		c.Outbox, c.OutboxCursor, c.OutboxDeadLetter, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -238,8 +244,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.Membership, c.Outbox,
-		c.OutboxCursor, c.OutboxDeadLetter, c.User,
+		c.Account, c.ApiKey, c.Group, c.IdemMarker, c.IdempotencyKey, c.Membership,
+		c.Outbox, c.OutboxCursor, c.OutboxDeadLetter, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -256,6 +262,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Group.mutate(ctx, m)
 	case *IdemMarkerMutation:
 		return c.IdemMarker.mutate(ctx, m)
+	case *IdempotencyKeyMutation:
+		return c.IdempotencyKey.mutate(ctx, m)
 	case *MembershipMutation:
 		return c.Membership.mutate(ctx, m)
 	case *OutboxMutation:
@@ -821,6 +829,139 @@ func (c *IdemMarkerClient) mutate(ctx context.Context, m *IdemMarkerMutation) (V
 		return (&IdemMarkerDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown IdemMarker mutation op: %q", m.Op())
+	}
+}
+
+// IdempotencyKeyClient is a client for the IdempotencyKey schema.
+type IdempotencyKeyClient struct {
+	config
+}
+
+// NewIdempotencyKeyClient returns a client for the IdempotencyKey from the given config.
+func NewIdempotencyKeyClient(c config) *IdempotencyKeyClient {
+	return &IdempotencyKeyClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `idempotencykey.Hooks(f(g(h())))`.
+func (c *IdempotencyKeyClient) Use(hooks ...Hook) {
+	c.hooks.IdempotencyKey = append(c.hooks.IdempotencyKey, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `idempotencykey.Intercept(f(g(h())))`.
+func (c *IdempotencyKeyClient) Intercept(interceptors ...Interceptor) {
+	c.inters.IdempotencyKey = append(c.inters.IdempotencyKey, interceptors...)
+}
+
+// Create returns a builder for creating a IdempotencyKey entity.
+func (c *IdempotencyKeyClient) Create() *IdempotencyKeyCreate {
+	mutation := newIdempotencyKeyMutation(c.config, OpCreate)
+	return &IdempotencyKeyCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of IdempotencyKey entities.
+func (c *IdempotencyKeyClient) CreateBulk(builders ...*IdempotencyKeyCreate) *IdempotencyKeyCreateBulk {
+	return &IdempotencyKeyCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *IdempotencyKeyClient) MapCreateBulk(slice any, setFunc func(*IdempotencyKeyCreate, int)) *IdempotencyKeyCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &IdempotencyKeyCreateBulk{err: fmt.Errorf("calling to IdempotencyKeyClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*IdempotencyKeyCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &IdempotencyKeyCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for IdempotencyKey.
+func (c *IdempotencyKeyClient) Update() *IdempotencyKeyUpdate {
+	mutation := newIdempotencyKeyMutation(c.config, OpUpdate)
+	return &IdempotencyKeyUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *IdempotencyKeyClient) UpdateOne(_m *IdempotencyKey) *IdempotencyKeyUpdateOne {
+	mutation := newIdempotencyKeyMutation(c.config, OpUpdateOne, withIdempotencyKey(_m))
+	return &IdempotencyKeyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *IdempotencyKeyClient) UpdateOneID(id string) *IdempotencyKeyUpdateOne {
+	mutation := newIdempotencyKeyMutation(c.config, OpUpdateOne, withIdempotencyKeyID(id))
+	return &IdempotencyKeyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for IdempotencyKey.
+func (c *IdempotencyKeyClient) Delete() *IdempotencyKeyDelete {
+	mutation := newIdempotencyKeyMutation(c.config, OpDelete)
+	return &IdempotencyKeyDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *IdempotencyKeyClient) DeleteOne(_m *IdempotencyKey) *IdempotencyKeyDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *IdempotencyKeyClient) DeleteOneID(id string) *IdempotencyKeyDeleteOne {
+	builder := c.Delete().Where(idempotencykey.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &IdempotencyKeyDeleteOne{builder}
+}
+
+// Query returns a query builder for IdempotencyKey.
+func (c *IdempotencyKeyClient) Query() *IdempotencyKeyQuery {
+	return &IdempotencyKeyQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeIdempotencyKey},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a IdempotencyKey entity by its id.
+func (c *IdempotencyKeyClient) Get(ctx context.Context, id string) (*IdempotencyKey, error) {
+	return c.Query().Where(idempotencykey.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *IdempotencyKeyClient) GetX(ctx context.Context, id string) *IdempotencyKey {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *IdempotencyKeyClient) Hooks() []Hook {
+	return c.hooks.IdempotencyKey
+}
+
+// Interceptors returns the client interceptors.
+func (c *IdempotencyKeyClient) Interceptors() []Interceptor {
+	return c.inters.IdempotencyKey
+}
+
+func (c *IdempotencyKeyClient) mutate(ctx context.Context, m *IdempotencyKeyMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&IdempotencyKeyCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&IdempotencyKeyUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&IdempotencyKeyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&IdempotencyKeyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown IdempotencyKey mutation op: %q", m.Op())
 	}
 }
 
@@ -1511,11 +1652,11 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Account, ApiKey, Group, IdemMarker, Membership, Outbox, OutboxCursor,
-		OutboxDeadLetter, User []ent.Hook
+		Account, ApiKey, Group, IdemMarker, IdempotencyKey, Membership, Outbox,
+		OutboxCursor, OutboxDeadLetter, User []ent.Hook
 	}
 	inters struct {
-		Account, ApiKey, Group, IdemMarker, Membership, Outbox, OutboxCursor,
-		OutboxDeadLetter, User []ent.Interceptor
+		Account, ApiKey, Group, IdemMarker, IdempotencyKey, Membership, Outbox,
+		OutboxCursor, OutboxDeadLetter, User []ent.Interceptor
 	}
 )

@@ -18,6 +18,9 @@ type Group func(*sql.Selector)
 // IdemMarker is the predicate function for idemmarker builders.
 type IdemMarker func(*sql.Selector)
 
+// IdempotencyKey is the predicate function for idempotencykey builders.
+type IdempotencyKey func(*sql.Selector)
+
 // Membership is the predicate function for membership builders.
 type Membership func(*sql.Selector)
 
