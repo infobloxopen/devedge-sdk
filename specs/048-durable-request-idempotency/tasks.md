@@ -40,3 +40,24 @@ See spec.md "Increment 2" for full ACs/FMs. Tasks T12–T18 (Deliverable A = ser
 host-scheduled GC; Deliverable B = reserve→remote→complete saga). All `[C]` except T16/T18 `[S]`.
 Hardening loops: (1) independent security review, (2) correctness review of the diff; every defect
 fixed gets a regression test.
+
+## Increment 3 (v0.64.0) — ent parity + hot-table performance
+
+See spec.md "Increment 3" for full ACs/FMs. Framework layer unchanged (interface-only; no shared
+store; no `*sql.Tx` seam). Deliverable C = ent-backed `EntDurableDedupStore` (generic function-field
+store in `entrepo`, closures bind the ent tx via `TxFromContext`; encoded-`id` PK because ent has no
+composite PK / no raw-SQL access). Deliverable D = PG table tuning (off the drift-gated baseline),
+batched partition-safe GC, opt-in hash partitioning by the full PK (exactly-once preserved; never
+time-partitioned; create-time fail-loud-if-plain; SQLite/default byte-for-byte unaffected).
+
+- **T19 [C]** entrepo `EntDurableDedupStore` + logic. (DC-1, DC-4)
+- **T20 [C]** iam fixture ent schema + closure wiring + `ent generate`. (DC-2, DC-3)
+- **T21 [C]** gormtx `TuneIdempotencyKeys` + `EnsureIdempotencyKeysPartitioned` + batched `GC`. (DD-1..3)
+- **T22 [C]** gormtx `MigrateOptions.IdempotencyPartitions` + `MigrateModule` wiring. (DD-3, DD-4)
+- **T23 [S]** servicekit `DurableIdempotencyConfig.PartitionCount`. (DD-4)
+- **T24 [C]** gorm+ent SQLite parity + PG-gated partition/tuning tests. (AC-C*, AC-D*)
+- **T25 [S]** vet/test/build-gowork-off/check-migration-baseline; CHANGELOG; v0.64.0 release.
+
+Hardening loops: (1) security review (injection via identifiers, exactly-once under partitioning,
+cross-tenant), (2) correctness review of the diff (gorm↔ent parity, batched-GC bounds, partition
+routing). Every defect fixed gets a regression test.

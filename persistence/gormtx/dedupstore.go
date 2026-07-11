@@ -53,9 +53,10 @@ const idempotencyKeysBaseTable = "idempotency_keys"
 // with the same *gorm.DB the handler's GormTxRunner uses so Claim/Complete bind to
 // the handler's transaction. It satisfies middleware.DurableIdempotencyStore.
 type GormDurableDedupStore struct {
-	db    *gorm.DB
-	table string
-	now   func() time.Time
+	db      *gorm.DB
+	table   string
+	now     func() time.Time
+	gcBatch int
 }
 
 // DurableDedupOption configures a GormDurableDedupStore.
@@ -73,9 +74,20 @@ func WithDurableDedupClock(now func() time.Time) DurableDedupOption {
 	return func(s *GormDurableDedupStore) { s.now = now }
 }
 
+// WithDurableDedupGCBatch overrides the batch size the chunked GC deletes per round-trip
+// (default [defaultGCBatchSize]). A non-positive value keeps the default. Smaller batches
+// hold locks for less time on a huge expired backlog at the cost of more round-trips.
+func WithDurableDedupGCBatch(n int) DurableDedupOption {
+	return func(s *GormDurableDedupStore) {
+		if n > 0 {
+			s.gcBatch = n
+		}
+	}
+}
+
 // NewGormDurableDedupStore returns a GORM-backed durable idempotency store over db.
 func NewGormDurableDedupStore(db *gorm.DB, opts ...DurableDedupOption) *GormDurableDedupStore {
-	s := &GormDurableDedupStore{db: db, table: idempotencyKeysBaseTable, now: time.Now}
+	s := &GormDurableDedupStore{db: db, table: idempotencyKeysBaseTable, now: time.Now, gcBatch: defaultGCBatchSize}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -214,14 +226,35 @@ func (s *GormDurableDedupStore) Abandon(ctx context.Context, key persistence.Ide
 	return res.RowsAffected > 0, nil
 }
 
-// GC deletes records whose expiry is at or before now, returning the count removed.
+// GC deletes records whose expiry is at or before now, returning the total removed. It
+// deletes in bounded CHUNKS — DELETE ... WHERE (account_id, method, request_id) IN
+// (SELECT the same keys ... LIMIT batch) — looping until a chunk removes fewer than the
+// batch (i.e. the backlog is drained), so a large expired backlog never becomes one giant
+// table-locking DELETE. The PK-tuple subquery is partition-safe (it matches by the full
+// primary key, which is also the hash-partition key) and index-driven. A mid-loop error
+// returns the count deleted so far plus the error.
 func (s *GormDurableDedupStore) GC(ctx context.Context, now time.Time) (int64, error) {
-	res := s.db.WithContext(ctx).Table(s.table).
-		Where("expires_at <= ?", now).Delete(&IdempotencyKeyRow{})
-	if res.Error != nil {
-		return 0, fmt.Errorf("gormtx: idempotency gc: %w", res.Error)
+	batch := s.gcBatch
+	if batch <= 0 {
+		batch = defaultGCBatchSize
 	}
-	return res.RowsAffected, nil
+	var total int64
+	for {
+		sub := s.db.WithContext(ctx).Table(s.table).
+			Select("account_id", "method", "request_id").
+			Where("expires_at <= ?", now).
+			Limit(batch)
+		res := s.db.WithContext(ctx).Table(s.table).
+			Where("(account_id, method, request_id) IN (?)", sub).
+			Delete(&IdempotencyKeyRow{})
+		if res.Error != nil {
+			return total, fmt.Errorf("gormtx: idempotency gc: %w", res.Error)
+		}
+		total += res.RowsAffected
+		if res.RowsAffected < int64(batch) {
+			return total, nil
+		}
+	}
 }
 
 // take reads one row by its composite key.

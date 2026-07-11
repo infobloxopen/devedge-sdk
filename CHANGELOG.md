@@ -10,6 +10,42 @@ under [History](#history).
 
 ## History
 
+### v0.64.0 — Durable idempotency: ent backend + hot-table performance (WS-043)
+
+Additive — no API removed; zero-config services, the plain `idempotency_keys` table, and SQLite/dev
+behavior are byte-for-byte unchanged. The framework layer is untouched: the `middleware`
+interceptors still only CALL `DurableIdempotencyStore`; there is no shared/generic store and no new
+`*sql.Tx`-on-context seam. Each backend adapter supplies its own implementation bound to its own
+transaction handle via `persistence.TxFromContext`.
+
+- **ent-backed durable store (`persistence/entrepo.EntDurableDedupStore`).** Closes the gap that only
+  the GORM backend had a durable, exactly-once store. It is a generic function-field adapter (the
+  same shape as `entrepo.EntRepository`): `entrepo` owns the claim/reclaim/replay + batched-GC logic,
+  and a service wires thin closures to its generated ent client, binding to the on-ctx `*ent.Tx` via
+  `persistence.TxFromContext` (see the `testdata/iam` reference wiring). Because ent 0.14 has no
+  composite primary key and exposes no raw-SQL accessor on a transaction, the ent-backed table uses a
+  single `id` primary key that encodes the full key (`account_id\x00method\x00request_id`) — id
+  uniqueness ≡ tenant/method/request_id uniqueness, so exactly-once is preserved and `account_id`
+  stays a real (RLS-coverable) column. Semantics are on par with the GORM store (a concurrent fresh
+  duplicate racing the insert returns 409 and the client's retry replays via the fast path).
+- **Hot-table tuning (`gormtx.TuneIdempotencyKeys`).** A PostgreSQL-only, idempotent
+  `ALTER TABLE … SET (…)` applied in the host migration path (`MigrateModule`, after AutoMigrate) —
+  `fillfactor=80` (keeps the per-request `Complete` UPDATE HOT-eligible) plus aggressive per-table and
+  `toast.*` autovacuum. It is kept OFF the Atlas-generated `0001` baseline (the drift gate regenerates
+  0001 from the GORM models). No-op on SQLite/other.
+- **Batched GC.** Each store's `GC(ctx, now)` now deletes in bounded chunks (a PK-tuple `IN`-subquery
+  loop until a chunk is short) instead of one unbounded `DELETE`, so a large expired backlog never
+  becomes one giant table-locking delete. Signature unchanged (the servicekit GC ticker is unaffected);
+  batch size configurable via `WithDurableDedupGCBatch` / `WithEntDurableDedupGCBatch`.
+- **Opt-in HASH partitioning (`gormtx.EnsureIdempotencyKeysPartitioned` + `MigrateOptions.IdempotencyPartitions`
+  + `servicekit.DurableIdempotencyConfig.PartitionCount`).** A PostgreSQL-only, create-time path that
+  builds `idempotency_keys` `PARTITION BY HASH (account_id, method, request_id)` into N storage-tuned
+  leaves. The partition key is the FULL primary key, so per-partition uniqueness ≡ global uniqueness
+  and exactly-once is preserved (`ON CONFLICT` + reclaim route correctly); it is never time-partitioned.
+  It fails loud if `idempotency_keys` already exists non-partitioned (never dropped — it may hold
+  durable responses). `PartitionCount = 0`/unset (the default) keeps the plain table; SQLite/dev is
+  unaffected. All partition/table identifiers are validated + quoted; no input is concatenated into DDL.
+
 ### v0.63.0 — Durable idempotency follow-ups: servicekit auto-wiring, host-scheduled GC, remote-effect saga (WS-043)
 
 Delivers the two deferred follow-ups documented in v0.62.0 (spec 048). Additive — no API is removed;

@@ -62,6 +62,17 @@ type DurableIdempotencyConfig struct {
 	// DisableGC turns OFF the host-scheduled sweep (e.g. when an external cron owns
 	// retention). Records still read as absent once expired; the table just grows.
 	DisableGC bool
+	// PartitionCount opts the durable idempotency_keys table into PostgreSQL HASH
+	// partitioning by its full primary key (WS-043 Increment 3, DD-3), for a hot, high-
+	// turnover table on a large deployment. 0/unset (the default) keeps the plain,
+	// non-partitioned table — byte-for-byte unchanged, and unaffected on SQLite/dev.
+	//
+	// servicekit stays ORM-free, so this is the host-declared KNOB: the module's migrate
+	// callback (which imports gormtx) reads it and passes it to
+	// gormtx.MigrateOptions.IdempotencyPartitions, which creates the table hash-partitioned
+	// at migrate time (create-time only; fails loud if the table already exists
+	// non-partitioned). It is a PostgreSQL-only performance path; leave it 0 elsewhere.
+	PartitionCount int
 }
 
 // DurableIdempotencyRegistration is what a module hands the host from Register via

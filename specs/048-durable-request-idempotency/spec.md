@@ -286,3 +286,159 @@ Two independent reviews (security + correctness). Each fix has a regression test
 - **Cleared (no change):** no cross-tenant/cross-method leak (key carries verified tenant + method
   end-to-end); no injection (parameterized queries; request_id capped; table name from namespace, not
   input); `inMemTx` sentinel unspoofable (unexported); GC panic contained + `done` always closed.
+
+---
+
+# Increment 3 — ent backend parity + hot-table performance (v0.64.0)
+
+Two independent deliverables, both inside the single-service lane. The **framework layer is
+unchanged**: `middleware.DurableIdempotencyStore`, `DurableDeduplicateUnary`/`DurableReserveUnary`,
+and `DurableDedup` still only CALL the interface — no shared/generic store, no persistence/ORM/SQL,
+and **no new `*sql.Tx`-on-context seam** (`persistence.TxFromContext` stays the only tx handle).
+Each backend adapter supplies its OWN implementation bound to ITS OWN transaction handle.
+
+## Deliverable C — ent-backed durable store (close the ent gap)
+
+**Problem.** Only the GORM backend (`gormtx.GormDurableDedupStore`) implements
+`DurableIdempotencyStore`. An ent-backed service (`persistence/entrepo`) has **no durable store**, so
+it cannot enable exactly-once idempotency at all.
+
+### Design decisions (C)
+
+- **DC-1 — Generic store in `entrepo`, function-field adapter (mirrors `entrepo.EntRepository`).**
+  Add `entrepo.EntDurableDedupStore` implementing `middleware.DurableIdempotencyStore`. entrepo owns
+  the exactly-once LOGIC (claim → conflict → expired-row reclaim → replay decision; batched GC loop);
+  the service wires thin closures that execute one statement each against its **generated ent client**,
+  binding to the on-ctx `*ent.Tx` via `persistence.TxFromContext` — exactly like `EntOutboxStore`/
+  `EntIdempotencyStore` bind, and like `EntRepository` takes `CreateFn`/`GetFn` closures. Because the
+  logic lives once in entrepo, the ent path is **structurally identical** to gormtx (parity by
+  construction), and the framework still just calls the interface.
+- **DC-2 — ent cannot express a composite natural PK.** ent 0.14 entities always have a single `id`
+  (verified: even join tables use one `id`), and `*ent.Tx`/`*ent.Client` expose **no** raw-SQL /
+  `dialect.ExecQuerier` accessor (verified by probe) — so the ent store cannot reuse the composite-PK
+  `idempotency_keys` DDL nor run raw SQL on the ent tx. The ent-backed table therefore uses a **single
+  `id` PK that encodes the full key** (`account_id\x00method\x00request_id`, the proven `IdemMarker`
+  trick) with `account_id`/`method`/`request_id`/`status`/`response_type`/`response`/`fingerprint`/
+  `created_at`/`expires_at` as columns. `id` uniqueness ≡ composite uniqueness ⇒ **exactly-once
+  preserved**; `account_id` stays a real column so WS-029 RLS still covers it.
+- **DC-3 — Reference wiring in the iam fixture.** A hand-written ent schema
+  (`testdata/iam/ent/schema/idempotency_key.go`) + the closure wiring
+  (`testdata/iam/iamv1/dedup_store.go`) prove the ent path end-to-end and are the copy-paste reference
+  (ent framework stores are hand-written per repo convention). ent owns this table via `Schema.Create`;
+  it is NOT in the migrate baseline.
+- **DC-4 — Batched GC on the ent path** uses the same PK-tuple / id-in-subquery chunked delete as
+  gormtx (see DD-2), via a `GCDelete(now, limit)` closure the store loops.
+
+### Acceptance criteria (C)
+
+- **AC-C1** An ent-backed service that wires `entrepo.EntDurableDedupStore` + its `EntTxRunner` gets
+  durable, exactly-once idempotency end-to-end: verbatim replay across a fresh request, atomic
+  rollback with the ent handler's effect, 409 on a committed `in_progress`, fingerprint reject,
+  TTL/expiry-reclaim — **identical semantics to gormtx** (parity test suite runs against both).
+- **AC-C2** Two concurrent fresh requests with the same key execute the ent handler exactly once
+  (loser blocks then replays), verified under `-race`.
+- **AC-C3** A `request_id` reused across tenants/methods never collides on the ent path (the encoded
+  `id` carries both).
+- **AC-C4** Batched GC removes expired ent rows in bounded chunks and returns the total.
+
+### Failure modes (C)
+
+- **FM-C1** A closure invoked outside `Atomically` (no `*ent.Tx` on ctx) for a write must fail loud
+  (the ent client resolves the base client, and Claim/Complete require the tx) — mirrors gormtx.
+- **FM-C2** Non-proto response, over-length request_id, empty/validate_only pass-through: handled in
+  the interceptor (unchanged), identical on the ent path.
+
+## Deliverable D — keep the hot `idempotency_keys` table fast
+
+**Problem.** The per-request `Complete` UPDATE and the growing set of short-lived rows make
+`idempotency_keys` a hot, churny table. Left plain it bloats (dead tuples from expiry + `Complete`
+rewrites) and GC's single unbounded `DELETE` can lock/spike under load.
+
+### Design decisions (D)
+
+- **DD-1 — PG table tuning, off the drift-gated baseline.** A PG-only, idempotent
+  `gormtx.TuneIdempotencyKeys(ctx, db, ns)` sets `fillfactor=80` + aggressive per-table AND `toast.*`
+  autovacuum via `ALTER TABLE … SET (…)`. `fillfactor<100` keeps the `Complete` UPDATE (status/
+  response_type/response — none indexed) **HOT-eligible** (no regression). It runs in the **host
+  migration path** (`gormtx.MigrateModule`, after AutoMigrate, when `IdempotencyKeyRow` is migrated and
+  the dialect is postgres), **never** in the Atlas-generated `0001` baseline (the drift gate
+  regenerates 0001 from the GORM models and would fail on hand-added storage params). It is engine-
+  level (Postgres), shared across ORM backends. No-op on SQLite/other. On a partitioned table it tunes
+  each leaf partition.
+- **DD-2 — Batched GC (per store).** Each store's `GC(ctx, now)` replaces the single unbounded DELETE
+  with a chunked loop `DELETE … WHERE (pk) IN (SELECT pk … WHERE expires_at<=$1 LIMIT $batch)` until a
+  batch returns `< batch` rows; it returns the total deleted. The PK-tuple subquery is **partition-
+  safe** (matches by the full key, valid across hash partitions) and index-friendly. The signature is
+  unchanged (the servicekit GC ticker keeps calling it). Default batch 1000.
+- **DD-3 — Hash partitioning by key (opt-in, PG-only, non-partitioned default).**
+  `gormtx.EnsureIdempotencyKeysPartitioned(ctx, db, ns, n)` creates `idempotency_keys`
+  `PARTITION BY HASH (account_id, method, request_id)` into `n` partitions, each (plus the parent's
+  propagated `expires_at` index) storage-tuned as in DD-1. **INVARIANTS:** the partition key is the
+  **full PK**, so per-partition uniqueness ≡ **global uniqueness** ⇒ `ON CONFLICT (account_id, method,
+  request_id) DO NOTHING` and the reclaim `UPDATE` route to exactly one partition and preserve
+  exactly-once. It is **create-time only**: if `idempotency_keys` already exists **non-partitioned** it
+  **fails loud** (never dropped — it may hold durable responses); if already partitioned it is an
+  idempotent no-op (ensures the `n` partitions). It runs BEFORE AutoMigrate in `MigrateModule` (when
+  `IdempotencyPartitions>0`), so AutoMigrate then finds the table present and no-ops it. **Never
+  time-partition** (a within-TTL duplicate straddling a boundary would land in a fresh empty partition
+  and re-execute — breaks exactly-once). `n` is validated (1..8192); partition identifiers are the
+  namespace-qualified base table + an integer index only (no input concatenation). SQLite/dev and
+  non-opted-in services stay on the plain table, **byte-for-byte unaffected**.
+- **DD-4 — Opt-in wiring.** `n` flows through `servicekit.DurableIdempotencyConfig.PartitionCount`
+  (host opt-in; `0`/unset = off) and `gormtx.MigrateOptions.IdempotencyPartitions` (the mechanism the
+  host's migrate callback passes). servicekit stays ORM-free (it exposes the knob; the module's
+  migrate callback calls `gormtx.MigrateModule`). `middleware.DurableDedup` is NOT given a partition
+  field — the interceptor never creates tables, so that would be inert config; partitioning is a
+  migration-time concern only.
+
+### Acceptance criteria (D)
+
+- **AC-D1** After `MigrateModule` on Postgres with `IdempotencyKeyRow` migrated, `idempotency_keys`
+  carries `fillfactor=80` + the autovacuum + `toast.*` params (queried from `pg_class.reloptions`).
+  Re-running is a no-op. On SQLite it is a no-op. (PG-gated + SQLite.)
+- **AC-D2** `GC` deletes expired rows in bounded chunks and returns the exact total; a store with
+  `> batch` expired rows is fully cleared in multiple chunks. (gorm SQLite + ent SQLite + PG-gated.)
+- **AC-D3** With `PartitionCount = n > 0` on a fresh PG DB, `idempotency_keys` is created hash-
+  partitioned into `n` leaves; a claim + `ON CONFLICT DO NOTHING` + reclaim on the same key are
+  correct (exactly-once), and two distinct keys hash into (possibly different) partitions with no
+  cross-partition duplicate. Each leaf carries the storage params. (PG-gated.)
+- **AC-D4** Requesting partitioning when `idempotency_keys` already exists **non-partitioned** fails
+  loud with a clear message and does NOT drop or alter the table. (PG-gated.)
+- **AC-D5** With `PartitionCount = 0`/unset, the table, its DDL, and every code path are unchanged
+  (drift gate green; the plain-table tests pass exactly as before). SQLite is unaffected by all of D.
+
+### Failure modes (D)
+
+- **FM-D1** Tuning/partitioning on a non-Postgres dialect → clean no-op (SQLite dev) or a clear
+  "postgres only" error for the explicit partition call — never a half-applied table.
+- **FM-D2** `n` out of range (≤0 handled as off; > max) → fail loud before any DDL.
+- **FM-D3** Batched GC on a huge expired backlog → bounded per-chunk work, never one giant DELETE;
+  a mid-loop error returns the count deleted so far + the error.
+- **FM-D4** `MigrateModule` partition step fails loud (e.g. plain table already present) → the whole
+  migration fails; no AutoMigrate runs against a half-made table.
+
+### Tasks (increment 3)
+
+- **T19 [C]** `persistence/entrepo`: `EntDurableDedupStore` (function-field generic store) implementing
+  `middleware.DurableIdempotencyStore` with claim/reclaim/replay + batched GC logic. (DC-1, DC-4, AC-C*)
+- **T20 [C]** iam fixture: ent schema `IdempotencyKey` (encoded-id PK + columns) + closure wiring in
+  `dedup_store.go`; `ent generate`. (DC-2, DC-3)
+- **T21 [C]** `persistence/gormtx`: `TuneIdempotencyKeys` (PG-only, plain + per-partition, idempotent);
+  `EnsureIdempotencyKeysPartitioned` (create-time hash partitioning, fail-loud-if-plain, validated n);
+  batched `GormDurableDedupStore.GC`. (DD-1, DD-2, DD-3)
+- **T22 [C]** `persistence/gormtx`: `MigrateOptions.IdempotencyPartitions`; `MigrateModule` runs the
+  partition step (before AutoMigrate) + tuning step (after) PG-only when `IdempotencyKeyRow` migrated. (DD-3, DD-4)
+- **T23 [S]** `servicekit`: `DurableIdempotencyConfig.PartitionCount` (documented host opt-in → the
+  module's migrate callback passes it to `MigrateModule`). (DD-4)
+- **T24 [C]** Tests: gorm+ent SQLite parity (exactly-once, replay, 409, fingerprint, TTL, batched GC,
+  non-partitioned default unchanged, tuning/partition no-op on SQLite); PG-gated (storage params
+  applied, hash-partition create + routing + global uniqueness + ON CONFLICT on the partitioned table,
+  fail-loud-if-plain). Every hardening defect gets a regression test.
+- **T25 [S]** `make vet` / `test` / `build-gowork-off` / `check-migration-baseline` (stays green);
+  CHANGELOG; synchronized v0.64.0 release.
+
+### Hardening loops (increment 3) — findings + fixes
+
+Two independent reviews (security + correctness) of the diff. Every fix gets a regression test.
+Scrutinize: exactly-once surviving hash partitioning; every raw-SQL statement fully parameterized with
+table/partition identifiers validated (never concatenated from input); gorm↔ent parity.
