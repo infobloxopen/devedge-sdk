@@ -188,18 +188,33 @@ func TestPG_Indexed_GINUsed(t *testing.T) {
 	db := openGizmoPG(t)
 	seedGizmos(t, widgetsv1.NewGizmoRepository(db))
 
+	// Force the tiny-fixture planner off a seq scan so the GIN index shows as the
+	// chosen access path. The SET and the EXPLAIN must be TWO separate commands on
+	// one session: sending "SET ...; EXPLAIN ... ?" as a single parameterized query
+	// is rejected under the extended (prepared-statement) protocol — Postgres forbids
+	// multiple commands in one prepared statement (SQLSTATE 42601). A transaction
+	// pins both to the same connection, so SET LOCAL applies to the EXPLAIN.
 	var plan strings.Builder
-	rows, err := db.Raw("SET enable_seqscan=off; EXPLAIN (COSTS OFF) SELECT id FROM gizmos WHERE search_vector @@ websearch_to_tsquery('simple', ?)", "premium").Rows()
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SET LOCAL enable_seqscan=off").Error; err != nil {
+			return err
+		}
+		rows, err := tx.Raw("EXPLAIN (COSTS OFF) SELECT id FROM gizmos WHERE search_vector @@ websearch_to_tsquery('simple', ?)", "premium").Rows()
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return err
+			}
+			plan.WriteString(line + "\n")
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		t.Fatalf("EXPLAIN: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatalf("scan plan: %v", err)
-		}
-		plan.WriteString(line + "\n")
 	}
 	if !strings.Contains(plan.String(), "gizmos_search_gin") {
 		t.Fatalf("EXPLAIN plan does not use the GIN index gizmos_search_gin:\n%s", plan.String())
