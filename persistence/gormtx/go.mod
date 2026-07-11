@@ -14,7 +14,7 @@ module github.com/infobloxopen/devedge-sdk/persistence/gormtx
 go 1.25.5
 
 require (
-	github.com/infobloxopen/devedge-sdk v0.61.0
+	github.com/infobloxopen/devedge-sdk v0.61.1
 	google.golang.org/grpc v1.81.1
 	gorm.io/gorm v1.31.2
 	modernc.org/sqlite v1.52.0
