@@ -23,6 +23,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
