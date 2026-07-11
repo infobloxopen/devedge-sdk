@@ -33,3 +33,10 @@ Tags: `[S]` mechanical, `[C]` complex/design-bearing. Each task cites the AC/FM 
 Hardening loops (post-implement): (1) security — cross-tenant replay, in-flight abuse, fingerprint
 bypass, injection via request_id/method; (2) correctness/DX — race semantics, RLS interaction,
 API ergonomics.
+
+## Increment 2 (v0.63.0) — deferred follow-ups
+
+See spec.md "Increment 2" for full ACs/FMs. Tasks T12–T18 (Deliverable A = servicekit auto-wiring +
+host-scheduled GC; Deliverable B = reserve→remote→complete saga). All `[C]` except T16/T18 `[S]`.
+Hardening loops: (1) independent security review, (2) correctness review of the diff; every defect
+fixed gets a regression test.

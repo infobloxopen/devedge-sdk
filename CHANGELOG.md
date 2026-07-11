@@ -10,6 +10,34 @@ under [History](#history).
 
 ## History
 
+### v0.63.0 — Durable idempotency follow-ups: servicekit auto-wiring, host-scheduled GC, remote-effect saga (WS-043)
+
+Delivers the two deferred follow-ups documented in v0.62.0 (spec 048). Additive — no API is removed;
+zero-config services and the existing `server.Config.DurableDedup` wiring are unchanged.
+
+- **servicekit auto-wiring (`HostConfig.DurableIdempotency` + `App.EnableDurableIdempotency`).** A
+  composed service enables durable idempotency without hand-building `server.Config.DurableDedup`:
+  the host opts in via `HostConfig.DurableIdempotency`, and each module supplies its namespaced store
+  + tx via `App.EnableDurableIdempotency` (the same shape as an event consumer). The host installs a
+  method-routing holder so a multi-module host with per-module `idempotency_keys` tables is correct;
+  a module with no DB falls back to a correct in-process store (durable idempotency never forces a DB).
+- **Host-scheduled GC (security-review fix).** When durable idempotency is enabled, the host runs a
+  periodic `Store.GC` sweep tied to the host lifecycle (`GCInterval`, default 15m; `DisableGC` to opt
+  out), closing the unbounded-retention gap where `Store.GC` was never scheduled.
+- **Fail-loud on un-migrated table.** At boot the host probes each registered store; if durable
+  idempotency is enabled but `idempotency_keys` is not migrated, the host fails loudly (naming
+  `gormtx.RequestIdempotencyMigrationModels()`) instead of erroring per request.
+- **Remote-effect saga path (`DurableDedup.Mode: DurableModeReserve` / `middleware.DurableReserveUnary`).**
+  A new durable mode for handlers whose effect is a REMOTE call: it reserves (claims + commits) an
+  `in_progress` record, runs the handler OUTSIDE any transaction, then completes it in a second short
+  transaction — so no DB connection or claim row lock is held across the remote call. A handler error
+  releases the reservation (immediate retry re-executes; the remote is idempotent by `request_id`); a
+  Complete failure leaves the reservation `in_progress` (documented gap — recovery via TTL + remote
+  idempotency). No schema change: reuses `idempotency_keys` and the existing 409 branch.
+- **`DurableIdempotencyStore.Abandon` (new interface method).** A guarded DELETE (only `in_progress`
+  rows — never a completed response) backing the saga release-on-error path. Implemented by
+  `gormtx.GormDurableDedupStore`.
+
 ### v0.62.0 — Durable, exactly-once request idempotency (WS-043)
 
 Upgrades the best-effort AIP-155 request deduplication (spec 023) to a durable, tenant-scoped,

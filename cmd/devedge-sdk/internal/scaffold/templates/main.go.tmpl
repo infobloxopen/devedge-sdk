@@ -117,6 +117,10 @@ func moduleMigrate(db *gorm.DB, dsn string) servicekit.MigrationRunner {
 				&{{.GoPkg}}.{{.Resource}}Model{},
 				&{{.GoPkg}}.{{.Member}}Model{},
 			},
+			// To ENABLE durable, exactly-once request idempotency (WS-043), append the
+			// idempotency_keys framework table here and set HostConfig.DurableIdempotency
+			// in runHost (below) + call app.EnableDurableIdempotency from the module:
+			//   FrameworkModels: append(gormtx.MigrationModelsFor(true, true), gormtx.RequestIdempotencyMigrationModels()...),
 			FrameworkModels:  gormtx.MigrationModelsFor(true /*outbox*/, true /*idempotency*/),
 			SkipAdvisoryLock: db.Dialector.Name() != "postgres",
 		})
@@ -235,6 +239,14 @@ func runHost(ctx context.Context, authorizer authz.Authorizer, grpcAddr, httpAdd
 		PrincipalFunc: grpcauthz.DevPrincipalFunc(),
 		Logger:        slog.Default(),
 		Context:       ctx,
+		// To opt into durable, exactly-once request idempotency (WS-043), set:
+		//   DurableIdempotency: &servicekit.DurableIdempotencyConfig{}, // + append
+		// gormtx.RequestIdempotencyMigrationModels() to moduleMigrate's FrameworkModels,
+		// and call app.EnableDurableIdempotency(servicekit.DurableIdempotencyRegistration{
+		//   Store: gormtx.NewGormDurableDedupStore(db, gormtx.WithDurableDedupNamespace(app.DB...)),
+		//   Tx:    gormtx.NewGormTxRunner(db),
+		// }) from the module's Register. Use Mode: servicekit.IdempotencyReserve for a
+		// remote-effect (reserve→remote→complete) handler.
 	})
 }
 {{- else}}
