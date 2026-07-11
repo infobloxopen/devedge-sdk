@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/infobloxopen/devedge-sdk/authn"
 	"github.com/infobloxopen/devedge-sdk/authz"
@@ -15,6 +16,7 @@ import (
 	"github.com/infobloxopen/devedge-sdk/config"
 	"github.com/infobloxopen/devedge-sdk/events"
 	"github.com/infobloxopen/devedge-sdk/health"
+	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/server"
 )
 
@@ -103,6 +105,15 @@ type HostConfig struct {
 	// none and has no FailurePolicies entry. Empty defaults to FailHost (a module
 	// failure fails the host fast — the conservative, standalone-friendly default).
 	DefaultFailurePolicy FailurePolicy
+
+	// DurableIdempotency opts the host into the durable, exactly-once request-
+	// idempotency path (WS-043 / F048). nil leaves the best-effort in-memory
+	// DeduplicateUnary default unchanged. When set, Run installs a late-bound host
+	// holder as server.Config.DurableDedup, each module supplies its namespaced store +
+	// tx via App.EnableDurableIdempotency, the host runs a periodic GC sweep, and boot
+	// fails loudly if a registered module's idempotency_keys table is not migrated. A
+	// module with no DB is fine — the host falls back to a correct in-process store.
+	DurableIdempotency *DurableIdempotencyConfig
 }
 
 // DatabaseConfig is the shared-database declaration a composed host owns (WS-012 P2):
@@ -141,6 +152,34 @@ type hostState struct {
 
 	mu   sync.Mutex
 	jobs []backgroundJob
+
+	// idemEnabled reports whether the host opted into durable idempotency
+	// (HostConfig.DurableIdempotency != nil); idemRegs collects the per-module
+	// registrations from App.EnableDurableIdempotency during Register.
+	idemEnabled bool
+	idemRegs    []durableIdemRegistration
+}
+
+// registerDurableIdempotency records a module's durable idempotency store + tx so the
+// host wires them into the shared holder. Called from App.EnableDurableIdempotency.
+// It fails loud when the host did not opt in, when a field is nil, or on a second
+// call for the same module.
+func (h *hostState) registerDurableIdempotency(moduleID string, reg DurableIdempotencyRegistration) error {
+	if !h.idemEnabled {
+		return fmt.Errorf("servicekit: module %q called EnableDurableIdempotency but HostConfig.DurableIdempotency is not set (opt in at the host)", moduleID)
+	}
+	if reg.Store == nil || reg.Tx == nil {
+		return fmt.Errorf("servicekit: module %q EnableDurableIdempotency: Store and Tx are both required", moduleID)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.idemRegs {
+		if r.moduleID == moduleID {
+			return fmt.Errorf("servicekit: module %q already enabled durable idempotency (once per module)", moduleID)
+		}
+	}
+	h.idemRegs = append(h.idemRegs, durableIdemRegistration{moduleID: moduleID, store: reg.Store, tx: reg.Tx})
+	return nil
 }
 
 // backgroundJob is a supervised job the host runs for a module.
@@ -221,7 +260,7 @@ func Run(hc HostConfig) error {
 
 	// Step 3: the ONE shared server. Modules contribute their rules/methods/gateway
 	// onto it; the union completeness gate runs at Serve.
-	srv, err := server.New(server.Config{
+	serverCfg := server.Config{
 		GRPCAddr:      grpcAddr,
 		HTTPAddr:      hc.HTTPAddr,
 		HTTPHandlers:  hc.HTTPHandlers,
@@ -229,7 +268,24 @@ func Run(hc HostConfig) error {
 		PrincipalFunc: hc.PrincipalFunc,
 		Authenticator: hc.Authenticator,
 		Logger:        logger,
-	})
+	}
+	// Durable idempotency (DA-3): install a late-bound host holder as DurableDedup so
+	// the interceptor chain is built now but the per-module stores/txs are supplied
+	// during Register below. The holder is a valid (non-nil) Store + Tx at New; it is
+	// only CALLED once requests arrive (post-Serve), by which time it is populated.
+	var idemHolder *hostDurableDedup
+	if hc.DurableIdempotency != nil {
+		idemHolder = newHostDurableDedup()
+		serverCfg.DurableDedup = &middleware.DurableDedup{
+			Store:              idemHolder,
+			Tx:                 idemHolder,
+			TTL:                hc.DurableIdempotency.TTL,
+			DisableFingerprint: hc.DurableIdempotency.DisableFingerprint,
+			MaxResponseBytes:   hc.DurableIdempotency.MaxResponseBytes,
+			Mode:               hc.DurableIdempotency.Mode,
+		}
+	}
+	srv, err := server.New(serverCfg)
 	if err != nil {
 		return err
 	}
@@ -257,7 +313,7 @@ func Run(hc HostConfig) error {
 		return policies[moduleID]
 	})
 
-	host := &hostState{events: eventReg, sup: sup}
+	host := &hostState{events: eventReg, sup: sup, idemEnabled: hc.DurableIdempotency != nil}
 
 	// Step 4: per module — allocate namespace, migrate (host-run, advisory-locked),
 	// then Register inside the module's panic boundary, in slice order.
@@ -301,6 +357,33 @@ func Run(hc HostConfig) error {
 		}
 	}
 
+	// Step 4d: durable idempotency — resolve the holder's routing from the descriptors
+	// + the module registrations, fail loud if a registered store is not migrated, and
+	// start the host-scheduled GC sweep tied to the host lifecycle (DA-3/DA-5/DA-6).
+	var idemGCDone chan struct{}
+	if idemHolder != nil {
+		idemHolder.build(hc.Modules, host.idemRegs)
+		// A mixed host — some modules opted in, others did not — silently downgrades the
+		// unregistered modules to non-durable, per-pod idempotency. Surface it loudly.
+		if missing := idemHolder.unregisteredModules(hc.Modules); len(missing) > 0 {
+			logger.Warn("servicekit: durable idempotency is enabled but some modules did not call EnableDurableIdempotency; their methods are NOT durably idempotent (they use the in-process fallback)", "modules", missing)
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), 5*time.Second)
+		verr := idemHolder.verifyMigrated(probeCtx)
+		cancelProbe()
+		if verr != nil {
+			return verr
+		}
+		if !hc.DurableIdempotency.DisableGC {
+			interval := hc.DurableIdempotency.GCInterval
+			if interval <= 0 {
+				interval = DefaultIdempotencyGCInterval
+			}
+			idemGCDone = make(chan struct{})
+			go runIdempotencyGC(ctx, idemHolder, interval, logger, idemGCDone)
+		}
+	}
+
 	// Step 5: start the host-owned dispatchers (exactly one relay + one consumer per
 	// module outbox — no double-start) and the supervised background jobs, each in its
 	// module's bulkhead. These run until ctx is cancelled (host shutdown or a FailHost
@@ -309,10 +392,22 @@ func Run(hc HostConfig) error {
 	host.startJobs(ctx, sup)
 
 	// Step 7 (deferred): on return, close the shared bus + wait for supervised
-	// goroutines so shutdown is clean (no leaked relay/consumer/job goroutines).
+	// goroutines (and the idempotency GC sweep) so shutdown is clean (no leaked
+	// relay/consumer/job/GC goroutines).
+	//
+	// Cancel the host context FIRST: the GC sweep (and supervised goroutines) only exit
+	// on ctx.Done(), so if Serve returns an error while the parent ctx is still live
+	// (e.g. a port-bind failure or a fail-closed boot gate — neither cancels ctx), the
+	// subsequent waits would block forever. failHost(nil) is idempotent with the
+	// early-registered `defer failHost(nil)`, and the context.Cause check below has
+	// already run, so this cannot alter the returned error.
 	defer func() {
+		failHost(nil)
 		eventReg.closeBus()
 		sup.wait()
+		if idemGCDone != nil {
+			<-idemGCDone
+		}
 	}()
 
 	// Step 6: serve. server.Serve runs the EXISTING fail-closed union gate over the
@@ -326,6 +421,36 @@ func Run(hc HostConfig) error {
 		return cause
 	}
 	return nil
+}
+
+// runIdempotencyGC is the host-scheduled durable-idempotency sweep (DA-5): it calls
+// store.GC on interval until ctx is cancelled, then closes done so Run's shutdown
+// waits for it. A panic is contained + logged (a GC bug never crashes the host); a
+// sweep error is logged and retried on the next tick. Retention only grows if this
+// stops, so it logs loudly on exit-by-panic.
+func runIdempotencyGC(ctx context.Context, store middleware.DurableIdempotencyStore, interval time.Duration, logger *slog.Logger, done chan<- struct{}) {
+	defer close(done)
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("servicekit: idempotency GC panicked; sweep stopped (retention will grow)", "panic", r)
+		}
+	}()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			n, err := store.GC(ctx, now)
+			switch {
+			case err != nil && ctx.Err() == nil:
+				logger.Warn("servicekit: idempotency GC sweep failed", "err", err)
+			case n > 0:
+				logger.Debug("servicekit: idempotency GC swept expired records", "count", n)
+			}
+		}
+	}
 }
 
 // startJobs starts every registered background job under its module's bulkhead.

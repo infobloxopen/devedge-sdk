@@ -338,6 +338,22 @@ func (a *App) Subscribe(cfg ConsumerConfig, handlers ...EventHandler) error {
 	return a.host.events.registerConsumer(a.moduleID, cfg, handlers...)
 }
 
+// EnableDurableIdempotency turns on the durable, exactly-once request-idempotency path
+// for this module's methods (WS-043 / F048). It mirrors [App.Subscribe]: the module
+// supplies its NAMESPACED store + tx runner (built from its [DatabaseNamespace] — e.g.
+// gormtx.NewGormDurableDedupStore(db, gormtx.WithDurableDedupNamespace(ns)) plus its
+// GormTxRunner over the same db), and the HOST wires them into the shared server's
+// durable dedup interceptor and runs the periodic GC sweep. servicekit stays ORM-free,
+// so only the module names its concrete backend.
+//
+// It requires the host to have opted in via [HostConfig.DurableIdempotency]; calling
+// it otherwise (or with a nil Store/Tx, or twice) is a fail-loud error. Call it once
+// from Register. A module that has no DB simply does NOT call it — the host falls back
+// to a correct in-process store, so durable idempotency never forces a DB.
+func (a *App) EnableDurableIdempotency(reg DurableIdempotencyRegistration) error {
+	return a.host.registerDurableIdempotency(a.moduleID, reg)
+}
+
 // RegisterBackgroundJob registers a supervised background job the HOST runs for this
 // module (proposal §5.9). The host runs fn in the module's bulkhead: a panic or error
 // is contained, attributed to the module, and routed through its [FailurePolicy]

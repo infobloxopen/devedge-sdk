@@ -48,10 +48,11 @@ func (fakeTxRunner) Atomically(ctx context.Context, fn func(context.Context) err
 // fakeDurableStore is an in-memory middleware.DurableIdempotencyStore for
 // interceptor tests. It records every Claim so a test can assert tenant scoping.
 type fakeDurableStore struct {
-	mu        sync.Mutex
-	m         map[string]persistence.IdempotencyRecord
-	claimed   []persistence.IdempotencyKey
-	lookupErr error
+	mu          sync.Mutex
+	m           map[string]persistence.IdempotencyRecord
+	claimed     []persistence.IdempotencyKey
+	lookupErr   error
+	completeErr error // when set, Complete fails (exercises the reserve Complete-gap)
 }
 
 func newFakeStore() *fakeDurableStore {
@@ -86,12 +87,26 @@ func (f *fakeDurableStore) Claim(_ context.Context, key persistence.IdempotencyK
 func (f *fakeDurableStore) Complete(_ context.Context, key persistence.IdempotencyKey, rtype string, resp []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.completeErr != nil {
+		return f.completeErr
+	}
 	rec := f.m[fakeKey(key)] // preserves the fingerprint set at Claim
 	rec.Status = persistence.StatusCompleted
 	rec.ResponseType = rtype
 	rec.Response = resp
 	f.m[fakeKey(key)] = rec
 	return nil
+}
+
+func (f *fakeDurableStore) Abandon(_ context.Context, key persistence.IdempotencyKey) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec, ok := f.m[fakeKey(key)]
+	if !ok || rec.Status != persistence.StatusInProgress {
+		return false, nil // guarded: never deletes a completed record
+	}
+	delete(f.m, fakeKey(key))
+	return true, nil
 }
 
 func (f *fakeDurableStore) GC(context.Context, time.Time) (int64, error) { return 0, nil }

@@ -231,10 +231,10 @@ Behavior:
   re-executes.
 - **Fingerprint (default on).** Reusing a key with a *different* request body is rejected
   `InvalidArgument`. Set `DisableFingerprint` to turn this off.
-- **Retention + GC.** Records expire after the TTL (default 24h) and expired records read as absent —
-  but they are **not** deleted automatically. Schedule a periodic sweep yourself, e.g. a ticker
-  calling `store.GC(ctx, time.Now())` (the store is behind the seam; the host owns the schedule, as
-  it does the outbox relay).
+- **Retention + GC.** Records expire after the TTL (default 24h) and expired records read as absent.
+  A [servicekit](#servicekit-auto-wiring) host sweeps them automatically on a schedule; a hand-built
+  `server.Config` owns the schedule itself, e.g. a ticker calling `store.GC(ctx, time.Now())` (the
+  store is behind the seam, as the outbox relay is).
 
 Requirements and cautions:
 
@@ -254,6 +254,66 @@ Requirements and cautions:
 - The store assumes **READ COMMITTED** isolation (the default). The `idempotency_keys` table carries
   `account_id`, so WS-029 row-level security covers it with the same tenant GUC. `validate_only=true`
   and an empty `request_id` bypass idempotency entirely.
+
+### servicekit auto-wiring
+
+A [`servicekit`](/docs/concepts/composable-services/) host wires the durable path for you and runs the
+GC sweep — you never hand-build `server.Config.DurableDedup`. Opt in on the host and have the module
+supply its namespaced store + tx (the same shape as an event consumer):
+
+```go
+// host: opt in (nil leaves the best-effort in-memory default unchanged)
+servicekit.Run(servicekit.HostConfig{
+    Modules:            []servicekit.Module{ /* ... */ },
+    DurableIdempotency: &servicekit.DurableIdempotencyConfig{
+        // TTL / DisableFingerprint / MaxResponseBytes as above; GCInterval defaults
+        // to 15m (set DisableGC to turn the sweep off). Mode: servicekit.IdempotencyReserve
+        // selects the saga path below.
+    },
+})
+
+// module Register: supply the namespaced store + tx
+func (m *myModule) Register(ctx context.Context, app *servicekit.App) error {
+    // ... register the service ...
+    return app.EnableDurableIdempotency(servicekit.DurableIdempotencyRegistration{
+        Store: gormtx.NewGormDurableDedupStore(m.db, gormtx.WithDurableDedupNamespace(ns)),
+        Tx:    gormtx.NewGormTxRunner(m.db),
+    })
+}
+```
+
+Also append `gormtx.RequestIdempotencyMigrationModels()` to the host migration's framework models. If
+durable idempotency is enabled but that table is not migrated, the host **fails loudly at boot** (it
+names the missing migration) rather than per request. A module with no database simply does not call
+`EnableDurableIdempotency` — the host falls back to a correct in-process store, so enabling durable
+idempotency never forces a database.
+
+### Remote-effect handlers: the reserve→remote→complete saga
+
+The transactional path above runs the handler *inside* the claim transaction — correct for a **local
+DB effect**, wrong for a **remote effect** (it would hold a DB connection and the claim row lock across
+the remote call). For a handler whose effect is a remote call, use the reserve mode
+(`DurableDedup.Mode: middleware.DurableModeReserve`, or `servicekit.IdempotencyReserve`), which holds
+**no transaction across the handler**:
+
+1. **Reserve** — claim + commit an `in_progress` record in its own short transaction, then release it.
+2. **Remote effect** — the handler runs OUTSIDE any transaction and performs the side effect, passing
+   the same `request_id` to the remote system so the **remote** is idempotent.
+3. **Complete** — transition the record to `completed` with the stored response in a second short
+   transaction.
+
+Retry/failure semantics: a duplicate observing the committed `in_progress` reservation gets
+`AlreadyExists` (409); a `completed` duplicate replays verbatim. A **handler error releases** the
+reservation (so an immediate retry re-executes — safe because the remote is idempotent by
+`request_id`). If the handler **succeeds but Complete fails** (the "remote succeeded, record lost"
+gap), the reservation is **left `in_progress`**: a duplicate within TTL gets 409, and after TTL a retry
+re-executes and the remote dedups. The remote MUST be idempotent for recovery to be safe. Set the TTL
+**shorter** than the local default for faster gap recovery, but keep it **longer than the maximum
+remote-call latency** — `Abandon` (the handler-error release) is guarded by `status = in_progress`, not
+by the claim instance, so a TTL shorter than the remote call lets a reservation expire mid-flight, get
+reclaimed by a retry, and then be deleted by the original's late error (a harmless, remote-idempotent
+re-drive). The mode is host-wide (one interceptor per server), so pick it by the service's dominant
+effect.
 
 ## Chain placement
 

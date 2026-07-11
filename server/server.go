@@ -386,7 +386,15 @@ func New(cfg Config) (*Server, error) {
 	// inside the handler's transaction), else the best-effort in-memory path. Both
 	// occupy the same chain position, right before the handler.
 	if cfg.DurableDedup != nil {
-		chain = append(chain, middleware.DurableDeduplicateUnary(*cfg.DurableDedup))
+		switch cfg.DurableDedup.Mode {
+		case middleware.DurableModeReserve:
+			// Reserve→remote→complete saga path (remote-effect handlers): no DB tx is
+			// held across the handler.
+			chain = append(chain, middleware.DurableReserveUnary(*cfg.DurableDedup))
+		default:
+			// Transactional path (local DB effect): claim/handler/complete in one tx.
+			chain = append(chain, middleware.DurableDeduplicateUnary(*cfg.DurableDedup))
+		}
 	} else {
 		chain = append(chain, middleware.DeduplicateUnary(cfg.DeduplicationStore))
 	}

@@ -199,6 +199,21 @@ func (s *GormDurableDedupStore) Complete(ctx context.Context, key persistence.Id
 	return nil
 }
 
+// Abandon deletes key's in_progress reservation inside the ctx transaction (the
+// reserve→remote→complete saga release-on-error path). It is GUARDED to status =
+// in_progress so it can NEVER delete a completed record — a durable response is never
+// erased. It returns whether a row was deleted.
+func (s *GormDurableDedupStore) Abandon(ctx context.Context, key persistence.IdempotencyKey) (bool, error) {
+	res := s.conn(ctx).Table(s.table).
+		Where("account_id = ? AND method = ? AND request_id = ? AND status = ?",
+			key.Tenant, key.Method, key.RequestID, string(persistence.StatusInProgress)).
+		Delete(&IdempotencyKeyRow{})
+	if res.Error != nil {
+		return false, fmt.Errorf("gormtx: idempotency abandon: %w", res.Error)
+	}
+	return res.RowsAffected > 0, nil
+}
+
 // GC deletes records whose expiry is at or before now, returning the count removed.
 func (s *GormDurableDedupStore) GC(ctx context.Context, now time.Time) (int64, error) {
 	res := s.db.WithContext(ctx).Table(s.table).
