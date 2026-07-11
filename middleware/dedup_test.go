@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/infobloxopen/devedge-sdk/authz"
 	mw "github.com/infobloxopen/devedge-sdk/middleware"
 )
 
@@ -24,8 +25,8 @@ type dedupValidateReq struct {
 	validateOnly bool
 }
 
-func (r *dedupValidateReq) GetRequestId() string    { return r.requestID }
-func (r *dedupValidateReq) GetValidateOnly() bool   { return r.validateOnly }
+func (r *dedupValidateReq) GetRequestId() string  { return r.requestID }
+func (r *dedupValidateReq) GetValidateOnly() bool { return r.validateOnly }
 
 // noIDReq has no GetRequestId method.
 type noIDReq struct{}
@@ -199,5 +200,55 @@ func TestDeduplicateUnary_NoRequestIDInterface_PassesThrough(t *testing.T) {
 
 	if calls != 2 {
 		t.Fatalf("expected handler called twice for req without GetRequestId, got %d", calls)
+	}
+}
+
+// TestDeduplicateUnary_TenantScopedKey_NoCrossTenantReplay is the regression test
+// for the cross-tenant confidentiality leak of a bare request_id key: two tenants
+// choosing the SAME request_id for the SAME method on the SAME pod must NOT share a
+// cached response. The key is scoped to the verified tenant (WS-043 D2).
+func TestDeduplicateUnary_TenantScopedKey_NoCrossTenantReplay(t *testing.T) {
+	store := mw.NewMemoryDeduplicationStore(time.Minute)
+	intc := mw.DeduplicateUnary(store)
+	info := &grpc.UnaryServerInfo{FullMethod: "/test.v1.Svc/Create"}
+
+	handler := func(ctx context.Context, req any) (any, error) {
+		p, _ := mw.PrincipalFromContext(ctx)
+		return "resp-for-" + p.Tenant, nil
+	}
+	ctxA := mw.WithPrincipal(context.Background(), authz.Principal{Tenant: "A"})
+	ctxB := mw.WithPrincipal(context.Background(), authz.Principal{Tenant: "B"})
+
+	rA, _ := intc(ctxA, &dedupReq{requestID: "shared"}, info, handler)
+	rB, _ := intc(ctxB, &dedupReq{requestID: "shared"}, info, handler)
+
+	if rA != "resp-for-A" {
+		t.Fatalf("tenant A got %v", rA)
+	}
+	if rB != "resp-for-B" {
+		t.Fatalf("cross-tenant replay: tenant B reusing tenant A's request_id got %v (expected its own response)", rB)
+	}
+
+	// A genuine same-tenant, same-id retry still dedupes.
+	rA2, _ := intc(ctxA, &dedupReq{requestID: "shared"}, info, handler)
+	if rA2 != "resp-for-A" {
+		t.Fatalf("same-tenant retry must replay tenant A's response, got %v", rA2)
+	}
+}
+
+// TestDeduplicateUnary_MethodScopedKey_NoCrossMethodCollision proves a request_id
+// reused across two DIFFERENT methods does not alias — each method executes.
+func TestDeduplicateUnary_MethodScopedKey_NoCrossMethodCollision(t *testing.T) {
+	store := mw.NewMemoryDeduplicationStore(time.Minute)
+	intc := mw.DeduplicateUnary(store)
+	calls := 0
+	handler := func(ctx context.Context, req any) (any, error) { calls++; return "r", nil }
+	create := &grpc.UnaryServerInfo{FullMethod: "/test.v1.Svc/Create"}
+	update := &grpc.UnaryServerInfo{FullMethod: "/test.v1.Svc/Update"}
+
+	intc(context.Background(), &dedupReq{requestID: "same"}, create, handler)
+	intc(context.Background(), &dedupReq{requestID: "same"}, update, handler)
+	if calls != 2 {
+		t.Fatalf("a request_id reused across methods must not collide, got %d handler calls", calls)
 	}
 }

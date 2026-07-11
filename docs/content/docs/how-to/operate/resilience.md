@@ -181,6 +181,59 @@ func (a *gobreakerAdapter) Execute(ctx context.Context, fn func() (any, error)) 
 }
 ```
 
+## Request idempotency
+
+A mutation that carries an AIP-155 `request_id` is deduplicated so a retry does not double-apply.
+The SDK offers two levels, both scoped to the **verified tenant** and the **method** — a `request_id`
+one tenant chooses can never replay another tenant's response, and the same id on two methods does
+not collide.
+
+### Best-effort (default)
+
+With no extra configuration, `DeduplicateUnary` caches the response in an in-process
+`MemoryDeduplicationStore` (10-minute TTL) keyed by `(tenant, method, request_id)`. It is a
+convenience, not a guarantee: the cache is per-pod, the response is stored *after* the handler
+returns (so a crash between the commit and the cache re-executes on retry), and concurrent
+duplicates are not coalesced.
+
+### Durable, exactly-once (opt-in)
+
+For exactly-once retries — "I got a timeout, I retry, I want the *original* result" — set
+`server.Config.DurableDedup`. The idempotency record is **claimed and completed inside the handler's
+own transaction**, so a committed effect always has a retrievable response:
+
+```go
+db := // your *gorm.DB
+srv, _ := server.New(server.Config{
+    GRPCAddr: ":9090",
+    DurableDedup: &middleware.DurableDedup{
+        Store:       gormtx.NewGormDurableDedupStore(db),
+        Tx:          gormtx.NewGormTxRunner(db),
+        // TTL defaults to 24h; Fingerprint defaults to false (set true to reject a
+        // key reused with a different request body).
+    },
+})
+```
+
+Behavior:
+
+- **Completed replay.** A retry with the same key returns the stored response **verbatim** — the same
+  server-generated id and etag — and does **not** run the handler again, even after a restart or on
+  another pod (the record is in the `idempotency_keys` table).
+- **In-flight duplicate.** A duplicate that arrives while the original is still running gets
+  `AlreadyExists` (HTTP 409), not a second execution.
+- **Errors are never cached.** A handler error rolls the claim back with the effect, so the retry
+  re-executes.
+- **Fingerprint (optional).** With `Fingerprint: true`, reusing a key with a *different* request body
+  is rejected `InvalidArgument`.
+- **Retention + GC.** Records expire after the TTL (default 24h). Call `Store.GC(ctx, time.Now())`
+  periodically to sweep expired rows; expired records are already treated as absent on read.
+
+The store requires a `persistence.TxRunner` and its `*gorm.DB` (the same one the generated
+repositories use) so the claim, the domain write, and the completion commit atomically. The
+`idempotency_keys` table carries `account_id`, so WS-029 row-level security covers it with the same
+tenant GUC. `validate_only=true` and an empty `request_id` bypass idempotency entirely.
+
 ## Chain placement
 
 The resilience interceptors occupy fixed positions in the default unary chain:

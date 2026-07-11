@@ -46,8 +46,9 @@ require (
 	github.com/googleapis/go-gorm-spanner v1.8.6 // indirect
 	github.com/googleapis/go-sql-spanner v1.17.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.3 // indirect
-	github.com/infobloxopen/devedge-sdk v0.48.0 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 // indirect
+	github.com/infobloxopen/devedge-sdk v0.61.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.9.2 // indirect
@@ -85,7 +86,7 @@ require (
 	gorm.io/driver/postgres v1.5.11 // indirect
 	gorm.io/driver/sqlite v1.6.0 // indirect
 	gorm.io/driver/sqlserver v1.5.4 // indirect
-	gorm.io/gorm v1.31.1 // indirect
+	gorm.io/gorm v1.31.2 // indirect
 )
 
 replace github.com/infobloxopen/devedge-sdk/persistence/gormtx => ../../gormtx

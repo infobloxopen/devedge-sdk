@@ -20,3 +20,7 @@ DROP INDEX "idx_outbox_account_id";
 DROP TABLE "outbox";
 -- reverse: create "idempotency_markers" table
 DROP TABLE "idempotency_markers";
+-- reverse: create index "idx_idempotency_keys_expires_at" to table: "idempotency_keys"
+DROP INDEX "idx_idempotency_keys_expires_at";
+-- reverse: create "idempotency_keys" table
+DROP TABLE "idempotency_keys";
