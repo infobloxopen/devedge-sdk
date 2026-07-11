@@ -22,6 +22,18 @@ type systemContextKey struct{}
 // (e.g. the event consumer, which injects the tenant explicitly via
 // WithTenantID). Returns "" when no tenant is established — callers on a
 // tenant-scoped resource must fail closed.
+//
+// NOT AN AUTHORIZATION / CONFIDENTIALITY BOUNDARY ON ITS OWN (SEC-042-01). The
+// header fallback is a client-SETTABLE value: when NO authn/authz stage runs to
+// establish a verified principal, this returns whatever "account-id" the caller
+// sent. That is correct for its purpose — routing/cell selection and injecting a
+// trusted tenant on non-gRPC paths (the event consumer) — but it means
+// TenantIDFromContext MUST NOT be the sole basis of a tenant/confidentiality
+// fence unless the chain includes an Authenticator (or otherwise guarantees a
+// verified principal). A generated repository relies on the authz interceptor
+// running ahead of it; a bespoke consumer that fences tenant data without an
+// Authenticator is exposed to a spoofed header and should use [VerifiedTenantID]
+// for the confidentiality decision instead.
 func TenantIDFromContext(ctx context.Context) string {
 	if p, ok := PrincipalFromContext(ctx); ok {
 		return p.Tenant
@@ -30,6 +42,25 @@ func TenantIDFromContext(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// VerifiedTenantID returns the tenant of the VERIFIED principal on ctx and true,
+// or "" and false when no verified principal is present. Unlike
+// [TenantIDFromContext] it NEVER falls back to the client-settable "account-id"
+// header, so it is the safe basis for a tenant/confidentiality decision: it is
+// authoritative only when an authn/authz stage established the principal (via
+// WithPrincipal). A caller enforcing a tenant fence WITHOUT relying on the
+// generated repository's authz-gated scoping (e.g. a bespoke query path, a
+// horizontal ility consumer, an export endpoint) should gate on this — a false
+// return means "no verified tenant; fail closed" and must NOT be widened by the
+// header. A principal present but carrying an empty Tenant returns "" and true:
+// the identity is verified, the tenant is genuinely unset (fail closed on a
+// tenant-scoped resource) — distinct from the false "no principal at all" case.
+func VerifiedTenantID(ctx context.Context) (string, bool) {
+	if p, ok := PrincipalFromContext(ctx); ok {
+		return p.Tenant, true
+	}
+	return "", false
 }
 
 // WithTenantID injects tenantID directly into ctx. Intended for tests and

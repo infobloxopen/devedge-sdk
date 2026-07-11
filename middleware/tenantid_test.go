@@ -79,6 +79,47 @@ func TestTenantID_PrincipalWithoutTenantDoesNotFallBackToHeader(t *testing.T) {
 	}
 }
 
+// SEC-042-01 regression: the verified accessor is header-blind. With only the
+// client-settable "account-id" header set (via WithTenantID / TenantIDUnary) and
+// NO verified principal, VerifiedTenantID must return "", false — a fence built
+// on it fails closed rather than trusting the spoofable header. (TenantIDFromContext
+// still returns the header value "b" as a routing convenience — asserted separately.)
+func TestVerifiedTenantID_HeaderOnlyReturnsFalse(t *testing.T) {
+	ctx := mw.WithTenantID(context.Background(), "b") // spoofable routing header, no principal
+	if got, ok := mw.VerifiedTenantID(ctx); ok || got != "" {
+		t.Fatalf("header-only must not be a verified tenant: got (%q, %v), want (%q, %v)", got, ok, "", false)
+	}
+	// The routing accessor still surfaces the header (unchanged behaviour).
+	if got := mw.TenantIDFromContext(ctx); got != "b" {
+		t.Fatalf("TenantIDFromContext routing fallback: want %q, got %q", "b", got)
+	}
+}
+
+// A verified principal yields its tenant from VerifiedTenantID, and the header is
+// irrelevant to the verified answer.
+func TestVerifiedTenantID_PrincipalTenant(t *testing.T) {
+	ctx := mw.WithTenantID(context.Background(), "b") // spoofed header must not matter
+	ctx = mw.WithPrincipal(ctx, authz.Principal{Subject: "u", Tenant: "a"})
+	if got, ok := mw.VerifiedTenantID(ctx); !ok || got != "a" {
+		t.Fatalf("verified principal tenant: got (%q, %v), want (%q, %v)", got, ok, "a", true)
+	}
+}
+
+// A verified principal with no tenant returns ("", true): identity is verified but
+// the tenant is genuinely unset (fail closed), distinct from the "no principal" case.
+func TestVerifiedTenantID_PrincipalWithoutTenant(t *testing.T) {
+	ctx := mw.WithPrincipal(context.Background(), authz.Principal{Subject: "u"}) // no Tenant
+	if got, ok := mw.VerifiedTenantID(ctx); !ok || got != "" {
+		t.Fatalf("verified principal without tenant: got (%q, %v), want (%q, %v)", got, ok, "", true)
+	}
+}
+
+func TestVerifiedTenantID_NoPrincipalNoHeader(t *testing.T) {
+	if got, ok := mw.VerifiedTenantID(context.Background()); ok || got != "" {
+		t.Fatalf("bare context: got (%q, %v), want (%q, %v)", got, ok, "", false)
+	}
+}
+
 func TestSystemContext(t *testing.T) {
 	if mw.IsSystemContext(context.Background()) {
 		t.Fatal("bare context must not be a system context")

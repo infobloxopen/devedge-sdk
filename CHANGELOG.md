@@ -10,6 +10,35 @@ under [History](#history).
 
 ## History
 
+### v0.61.1 — Tenant-seam hardening (WS-042)
+
+Two multi-tenancy seams surfaced by the WS-042 security pentest, hardened for every consumer.
+No API is removed or changed; a verified-tenant accessor is added and the change feed's tenant is
+made strictly envelope-authoritative.
+
+- **Change-feed tenant is always envelope-authoritative, never payload-derived (SEC-042-03).**
+  `events.ChangeEventFromEvent` now assigns `ChangeEvent.Tenant` from the `Event` envelope's
+  `AccountID` UNCONDITIONALLY, instead of only when `AccountID` was non-empty. Previously an
+  `Event` with an empty `AccountID` kept the tenant decoded from the opaque payload, so a producer
+  emitting a raw event with `AccountID: ""` and a forged payload `{"tenant":"victim"}` decoded to
+  `Tenant: "victim"`. Now an empty envelope tenant CLEARS the payload value, so the change decodes
+  to an empty tenant and the consumer's fail-closed handling applies. Legitimate tenantless changes
+  (a resource with `ChangeFeedOptions.AllowMissingTenant`, e.g. system bootstrap / global
+  resources) are unaffected — they carry `AccountID: ""` and correctly decode to an empty tenant.
+- **`middleware.VerifiedTenantID(ctx) (string, bool)` (new).** Returns the tenant of the VERIFIED
+  principal on context and `true`, or `""`/`false` when no verified principal is present. Unlike
+  `TenantIDFromContext` it NEVER falls back to the client-settable `account-id` header, so it is the
+  safe basis for a tenant/confidentiality decision on a path that does not rely on the generated
+  repository's authz-gated scoping.
+- **`TenantIDFromContext` documented as a routing convenience, not an authz boundary (SEC-042-01).**
+  Its `account-id` header fallback is client-settable and, absent a verified principal, returns
+  whatever the caller sent. The behaviour is unchanged (the event consumer and cell routing rely on
+  it), but the godoc now states plainly that it MUST NOT back a tenant fence without an
+  `Authenticator` in the chain — use `VerifiedTenantID` for confidentiality decisions. The fallback
+  is deliberately NOT gated: it shares one context key with the trusted `WithTenantID` injection the
+  event consumer uses, so gating on "an authn interceptor ran" cannot be done without breaking that
+  legitimate tenantless path.
+
 ### v0.61.0 — Full-text search (WS-041)
 
 A `q` collection operator for List, declared on the schema and generated across both storage
