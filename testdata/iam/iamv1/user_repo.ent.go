@@ -4,6 +4,7 @@ package iamv1
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -90,8 +91,7 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 					q = q.Where(entpredicate.User(pred))
 				}
 			}
-			if opts.Search != "" {
-				search := opts.Search
+			if search := strings.TrimSpace(opts.Search); search != "" {
 				q = q.Where(entpredicate.User(func(sel *sql.Selector) {
 					sel.Where(sql.P(func(bld *sql.Builder) {
 						switch bld.Dialect() {

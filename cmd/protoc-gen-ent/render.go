@@ -1317,6 +1317,11 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n")
 	b.WriteString("\t\"fmt\"\n")
+	if msg.Search != nil {
+		// The generated List strings.TrimSpace()s the q term so a whitespace-only q is
+		// a no-op (FR-B1).
+		b.WriteString("\t\"strings\"\n")
+	}
 	if soft {
 		b.WriteString("\t\"time\"\n")
 	}
@@ -1571,8 +1576,11 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		} else {
 			pgFrag = fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ", s.TextConfig, s.PostgresVector, s.TextConfig)
 		}
-		b.WriteString("\t\t\tif opts.Search != \"\" {\n")
-		b.WriteString("\t\t\t\tsearch := opts.Search\n")
+		// A whitespace-only q is a no-op, identical to an empty q (FR-B1): trim the
+		// term first and skip the predicate when nothing is left, so `q="   "` returns
+		// all rows instead of running a real, zero-matching query. The trimmed term is
+		// what the predicate binds (still a bound arg, FM-3).
+		b.WriteString("\t\t\tif search := strings.TrimSpace(opts.Search); search != \"\" {\n")
 		fmt.Fprintf(&b, "\t\t\t\tq = q.Where(entpredicate.%s(func(sel *sql.Selector) {\n", model)
 		b.WriteString("\t\t\t\t\tsel.Where(sql.P(func(bld *sql.Builder) {\n")
 		b.WriteString("\t\t\t\t\t\tswitch bld.Dialect() {\n")

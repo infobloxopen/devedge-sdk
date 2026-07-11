@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -171,12 +172,12 @@ func (r *WidgetRepository) List(ctx context.Context, opts persistence.ListOption
 		sql, args := cond.SQL()
 		q = q.Where(sql, args...)
 	}
-	if opts.Search != "" {
+	if search := strings.TrimSpace(opts.Search); search != "" {
 		switch r.db.Dialector.Name() {
 		case "postgres":
-			q = q.Where("to_tsvector('simple', replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ') || ' ' || (CASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END)) @@ websearch_to_tsquery('simple', ?)", opts.Search)
+			q = q.Where("to_tsvector('simple', replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ') || ' ' || (CASE category WHEN 'premium' THEN 'tier premium deluxe' WHEN 'standard' THEN 'tier standard basic' ELSE 'tier none' END)) @@ websearch_to_tsquery('simple', ?)", search)
 		default:
-			q = q.Where("lower(coalesce(CAST(\"display_name\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(opts.Search))
+			q = q.Where("lower(coalesce(CAST(\"display_name\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(search))
 		}
 	}
 	if opts.OrderBy != "" {
@@ -581,12 +582,12 @@ func (r *GizmoRepository) List(ctx context.Context, opts persistence.ListOptions
 		sql, args := cond.SQL()
 		q = q.Where(sql, args...)
 	}
-	if opts.Search != "" {
+	if search := strings.TrimSpace(opts.Search); search != "" {
 		switch r.db.Dialector.Name() {
 		case "postgres":
-			q = q.Where("search_vector @@ websearch_to_tsquery('simple', ?)", opts.Search)
+			q = q.Where("search_vector @@ websearch_to_tsquery('simple', ?)", search)
 		default:
-			q = q.Where("lower(coalesce(CAST(\"label\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(opts.Search))
+			q = q.Where("lower(coalesce(CAST(\"label\" AS text), '') || ' ' || CASE WHEN (\"category\" = 'premium') THEN 'tier premium' ELSE 'tier standard' END) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(search))
 		}
 	}
 	if opts.OrderBy != "" {

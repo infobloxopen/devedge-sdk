@@ -140,6 +140,36 @@ func TestSearch_Ent_SQLite_QComposesWithFilter(t *testing.T) {
 	}
 }
 
+// TestSearch_Ent_SQLite_WhitespaceQIsNoOp proves the WS-041 F5 fix on the ent
+// backend: a whitespace-only q is a no-op identical to an empty q (FR-B1), not a
+// real zero-matching query. The generated ent List_ now strings.TrimSpace()s the
+// term and skips the predicate when nothing is left.
+func TestSearch_Ent_SQLite_WhitespaceQIsNoOp(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:iam_search_ws?mode=memory&cache=shared&_pragma=foreign_keys(1)", enttest.WithOptions())
+	defer client.Close()
+	repo := iamv1.NewUserEntRepository(client)
+	ctx := tenantCtx("tenant1")
+	seedSearchUsers(t, ctx, repo)
+
+	empty, _, err := repo.List(ctx, persistence.ListOptions{Search: ""})
+	if err != nil {
+		t.Fatalf("List(q=\"\"): %v", err)
+	}
+	if len(empty) != len(searchUsers) {
+		t.Fatalf("empty q should return all %d rows, got %d", len(searchUsers), len(empty))
+	}
+	for _, ws := range []string{" ", "   ", "\t", " \t\n "} {
+		got, _, err := repo.List(ctx, persistence.ListOptions{Search: ws})
+		if err != nil {
+			t.Fatalf("List(q=%q): %v", ws, err)
+		}
+		if !eqUserIDs(userIDSet(got), userIDSet(empty)) {
+			t.Errorf("whitespace-only q=%q must be a no-op like empty q: got %v, want %v",
+				ws, userIDSet(got), userIDSet(empty))
+		}
+	}
+}
+
 // TestSearch_Ent_Postgres_QIsTrueFTS proves the ent `q` predicate does REAL
 // Postgres full-text search (FR-B4, AC-1 PG) over a testcontainers postgres:16 —
 // the Postgres branch of the generated sql.P (to_tsvector @@ websearch_to_tsquery).

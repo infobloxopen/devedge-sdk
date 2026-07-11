@@ -117,6 +117,44 @@ func TestSearch_SQLite_QOverGeneratedService(t *testing.T) {
 	}
 }
 
+// TestSearch_SQLite_WhitespaceQIsNoOp proves the WS-041 F5 fix: a whitespace-only q
+// is a no-op identical to an empty q (FR-B1), NOT a real zero-matching query. Before
+// the fix the generated List guarded on `opts.Search != ""`, so q="   " ran the FTS
+// predicate against a blank term and returned nothing while an empty q returned all
+// rows. The generated List now strings.TrimSpace()s the term and skips the predicate
+// when nothing is left, so both return every row.
+func TestSearch_SQLite_WhitespaceQIsNoOp(t *testing.T) {
+	db := openWidgetDB(t)
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	repo := widgetsv1.NewWidgetRepository(db, secret.NewDev(make([]byte, 32)))
+	seedSearchWidgets(t, repo)
+	ctx := context.Background()
+
+	// The baseline: an empty q returns all rows.
+	empty, _, err := repo.List(ctx, persistence.ListOptions{Search: "", PageSize: 100})
+	if err != nil {
+		t.Fatalf("List(q=\"\"): %v", err)
+	}
+	if len(empty) != 3 {
+		t.Fatalf("empty q should return all 3 rows, got %d", len(empty))
+	}
+
+	// A whitespace-only q must behave identically to the empty q — all rows, not the
+	// zero rows a blank FTS/LIKE term would match.
+	for _, ws := range []string{" ", "   ", "\t", " \t\n "} {
+		got, _, err := repo.List(ctx, persistence.ListOptions{Search: ws, PageSize: 100})
+		if err != nil {
+			t.Fatalf("List(q=%q): %v", ws, err)
+		}
+		if !eqIDs(idSet(got), idSet(empty)) {
+			t.Errorf("whitespace-only q=%q must be a no-op like empty q: got %v, want %v",
+				ws, idSet(got), idSet(empty))
+		}
+	}
+}
+
 // TestSearch_SQLite_QComposesWithFilter proves AC-2 on the SQLite fast path: the
 // `q` predicate is ANDed with the AIP-160 filter in the generated GORM List, so
 // q=acme & filter=category="premium" returns only the row matching BOTH — no

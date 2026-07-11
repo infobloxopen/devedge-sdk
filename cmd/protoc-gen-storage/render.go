@@ -578,6 +578,17 @@ func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByNam
 	}
 	withTags := hasTagsFields(messages)
 
+	// withSearch gates the strings import: the generated List for a searchable
+	// resource strings.TrimSpace()s the q term so a whitespace-only q is a no-op
+	// (FR-B1). Only imported when at least one message declares search.
+	withSearch := false
+	for _, msg := range messages {
+		if msg.Search != nil {
+			withSearch = true
+			break
+		}
+	}
+
 	// Determine if any message needs the middleware import. It is used ONLY for
 	// tenant scoping (middleware.TenantIDFromContext, always gated by hasTenant);
 	// a secret field alone does not use it (secret handling uses the secret
@@ -598,6 +609,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByNam
 	b.WriteString("\t\"encoding/base64\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	b.WriteString("\t\"strconv\"\n")
+	if withSearch {
+		b.WriteString("\t\"strings\"\n")
+	}
 	b.WriteString("\t\"time\"\n\n")
 	b.WriteString("\t\"gorm.io/gorm\"\n")
 	if withSoftDelete || withExpireTime {
@@ -1223,10 +1237,14 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 		} else {
 			pgPred = fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ?)", s.TextConfig, s.PostgresVector, s.TextConfig)
 		}
-		b.WriteString("\tif opts.Search != \"\" {\n")
+		// A whitespace-only q is a no-op, identical to an empty q (FR-B1): trim the
+		// term first and skip the predicate when nothing is left, so `q="   "` returns
+		// all rows instead of running a real, zero-matching query. The trimmed term is
+		// what the predicate binds (still a bound parameter, FM-3).
+		b.WriteString("\tif search := strings.TrimSpace(opts.Search); search != \"\" {\n")
 		b.WriteString("\t\tswitch r.db.Dialector.Name() {\n")
 		b.WriteString("\t\tcase \"postgres\":\n")
-		fmt.Fprintf(b, "\t\t\tq = q.Where(%q, opts.Search)\n", pgPred)
+		fmt.Fprintf(b, "\t\t\tq = q.Where(%q, search)\n", pgPred)
 		b.WriteString("\t\tdefault:\n")
 		if s.PostgresOnly {
 			fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.Unimplemented, %q)\n",
@@ -1236,7 +1254,7 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 			// an ESCAPE '\' clause so its LIKE metacharacters (% _ \) are LITERAL, not
 			// wildcards (SEC-041-01). It stays a bound parameter (FM-3).
 			ltPred := fmt.Sprintf("lower(%s) LIKE '%%' || lower(?) || '%%' ESCAPE '\\'", s.SQLiteVector)
-			fmt.Fprintf(b, "\t\t\tq = q.Where(%q, persistence.EscapeLikePattern(opts.Search))\n", ltPred)
+			fmt.Fprintf(b, "\t\t\tq = q.Where(%q, persistence.EscapeLikePattern(search))\n", ltPred)
 		}
 		b.WriteString("\t\t}\n")
 		b.WriteString("\t}\n")

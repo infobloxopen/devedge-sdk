@@ -21,7 +21,35 @@
 # ever missing (a checkout before `de sync` ran), run `de sync` to (re)write it.
 -include .devedge/make/devedge.mk
 
-.PHONY: run api-lint api-breaking api-release slo
+.PHONY: run api-lint api-breaking api-release slo sync-migrations
+
+# Full-text search migrations (WS-041). An INDEXED searchable resource makes
+# `de generate` emit a persisted `search_vector` generated column + a GIN index as
+# SQL migrations. buf writes them under gen/migrations/ — which is GIT-IGNORED and is
+# NOT the dir this module embeds/applies (module/migrations/, committed). So before we
+# build, test, or run, sync those generated files into the committed, embedded
+# migrations dir so `//go:embed migrations` picks them up and the host migrator applies
+# them (otherwise an INDEXED resource hits `column "search_vector" does not exist` at
+# runtime). These are prerequisite-only lines (no recipe): they MERGE the dependency
+# into the .devedge/make/devedge.mk build/test recipes without overriding them.
+build test: sync-migrations
+
+# sync-migrations copies the generator-emitted FTS migrations from the git-ignored
+# gen/migrations/ into the committed, embedded module migrations dir. Generated files
+# use the reserved 9001+ version band — far above your hand-authored 0002+ migrations —
+# so this only ever refreshes the generated files; it never clobbers a migration you
+# wrote and never deletes anything. Idempotent (content-compared) and a no-op when there
+# is nothing to sync, so it is safe to run on every build. If you invoke `de generate`
+# directly (not via `make`), run `make sync-migrations` afterward.
+sync-migrations:
+	@if [ -d gen/migrations ]; then \
+		mkdir -p module/migrations; \
+		for f in gen/migrations/*.sql; do \
+			[ -e "$$f" ] || continue; \
+			dst="module/migrations/$$(basename "$$f")"; \
+			cmp -s "$$f" "$$dst" 2>/dev/null || { cp "$$f" "$$dst"; echo "sync-migrations: $$dst"; }; \
+		done; \
+	fi
 
 # slo regenerates slo.yaml (the service's reliability targets, WS-025) from the
 # enriched OpenAPI, picking up any custom methods beyond the standard CRUD. The
@@ -41,7 +69,7 @@ slo:
 # code change), e.g. `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 make run`.
 # With no endpoint set the exporter no-ops, so this runs with zero overhead.
 # gen/ is git-ignored — run `de generate` first on a fresh clone.
-run:
+run: sync-migrations
 	go run ./cmd/{{.BinName}}
 
 # apx governs the PUBLIC proto surface. Run these locally BEFORE pushing — CI runs
