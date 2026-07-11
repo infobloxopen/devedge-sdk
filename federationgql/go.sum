@@ -1,4 +1,4 @@
 github.com/graphql-go/graphql v0.8.1 h1:p7/Ou/WpmulocJeEx7wjQy611rtXGQaAcXGqanuMMgc=
 github.com/graphql-go/graphql v0.8.1/go.mod h1:nKiHzRM0qopJEwCITUuIsxk9PlVlwIiiI8pnJEhordQ=
-github.com/infobloxopen/devedge-sdk v0.63.0 h1:3eZPG7d0QneCeuJpfcR5mwo3GgUKGHS82TbXu+ggZoU=
-github.com/infobloxopen/devedge-sdk v0.63.0/go.mod h1:wwf7NBuGXNd8/R9nOs/brw557tfC/46BmuCp8Ryax48=
+github.com/infobloxopen/devedge-sdk v0.64.0 h1:FRAtHxUZoq32KwUmE/5yhbYQKFfYCu8ODsugBkkRc8w=
+github.com/infobloxopen/devedge-sdk v0.64.0/go.mod h1:wwf7NBuGXNd8/R9nOs/brw557tfC/46BmuCp8Ryax48=
