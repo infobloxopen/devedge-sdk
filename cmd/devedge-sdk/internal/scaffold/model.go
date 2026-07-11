@@ -28,7 +28,7 @@ const (
 // this constant only ever sets the INITIAL pin — but a stale value would still
 // pin a new project to an old SDK, so keep it aligned with the latest released
 // SDK tag (bump on every release).
-const fallbackSDKVersion = "v0.63.0"
+const fallbackSDKVersion = "v0.64.0"
 
 // deInstallVersion pins the devedge `de` CLI a generated project installs — the
 // hermetic build authority its Makefile shim and CI delegate to (WS-023). `de`

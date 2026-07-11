@@ -15,7 +15,7 @@ go 1.25.5
 
 require (
 	entgo.io/ent v0.14.6
-	github.com/infobloxopen/devedge-sdk v0.63.0
+	github.com/infobloxopen/devedge-sdk v0.64.0
 	google.golang.org/grpc v1.81.1
 )
 
