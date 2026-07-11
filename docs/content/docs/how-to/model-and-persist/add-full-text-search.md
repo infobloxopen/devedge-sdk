@@ -295,10 +295,10 @@ deploying; do not treat a SQLite result set as a preview of production search re
 **A `sql/postgres` source with no `cel` alternate is Postgres-only.** This is a runtime
 constraint, not a build-time one: the resource generates without error on every backend. When List
 runs against a non-Postgres connection, the generated predicate returns a gRPC `Unimplemented`
-error — "full-text search for `<Resource>` requires PostgreSQL" — instead of running broken SQL.
-(The ent backend's non-Postgres branch instead matches zero rows rather than returning an error;
-see [Persistence reference → Full-text search (`q`)](../../../reference/persistence/#full-text-search-q)
-for the exact predicate per backend.) Add a `cel` expression alongside the `sql` one (as shown in
+error — "full-text search for `<Resource>` requires PostgreSQL" — instead of running broken SQL or
+silently matching zero rows. Both backends fail loud identically; see
+[Persistence reference → Full-text search (`q`)](../../../reference/persistence/#full-text-search-q)
+for the exact predicate per backend. Add a `cel` expression alongside the `sql` one (as shown in
 [The `cel` source](#the-cel-source-portable) above) to keep the resource portable.
 {{< /callout >}}
 

@@ -31,8 +31,8 @@ it over the REST gateway with no hand-written search code.
   display label, for example) stays portable to the SQLite dev/test driver without a hand-written
   second expression. A `sql/postgres` source with no `cel` alternate is Postgres-only: it generates
   without error on every backend, but fails at runtime — not at generation time — when queried over
-  a non-Postgres connection (`codes.Unimplemented` on GORM; the ent backend instead matches zero
-  rows).
+  a non-Postgres connection. Both backends fail loud identically: `codes.Unimplemented`
+  ("full-text search for `<Resource>` requires PostgreSQL").
 - **`q` on List (new).** `persistence.ListOptions` gains `Search string`; `protoc-gen-svc` detects a
   `string q` field on a List request (the same convention as `filter`/`order_by`, each wired
   independently) and maps it in automatically. Both `protoc-gen-storage` (GORM) and `protoc-gen-ent`

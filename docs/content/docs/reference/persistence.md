@@ -170,10 +170,10 @@ A resource whose sources are all portable (plain `field` sources, or a `cel` sou
 to both a Postgres and a SQLite expression) gets a working SQLite fallback. A resource with a
 `sql/postgres` source and no `cel` alternate is Postgres-only: it generates without error on every
 backend — this is a **runtime**, not a build-time, constraint. The generated predicate branches on
-the connection's runtime dialect, and the non-Postgres branch fails at query time: the GORM backend
-returns `codes.Unimplemented` ("full-text search for `<Resource>` requires PostgreSQL"), while the
-ent backend's non-Postgres branch instead emits an always-false predicate, so `List` succeeds but
-matches zero rows rather than returning an error.
+the connection's runtime dialect, and the non-Postgres branch fails at query time: both backends
+return `codes.Unimplemented` ("full-text search for `<Resource>` requires PostgreSQL") — the GORM
+backend from the generated `List`, and the ent backend from a runtime dialect check ahead of the
+query — rather than silently matching zero rows.
 
 ### Full-text search migrations (`INDEXED`)
 

@@ -754,3 +754,43 @@ func TestRenderEntRepoAdapter_jitSearchPredicate(t *testing.T) {
 	mustContain(t, out, `to_tsvector('simple', coalesce(CAST(\"label\" AS text), '')) @@ websearch_to_tsquery('simple', `)
 	mustNotContain(t, out, `search_vector @@ websearch_to_tsquery`)
 }
+
+// TestRenderEntRepoAdapter_postgresOnlySearchFailsLoud proves the WS-041
+// consistency fix: a PostgresOnly searchable resource (a sql/postgres source with
+// no portable field/cel alternate — SQLiteVector is empty) must FAIL LOUD with
+// codes.Unimplemented on a non-Postgres runtime dialect, exactly like the GORM
+// backend, instead of the old always-false "1 = 0" predicate that silently
+// matched zero rows. The check runs from the runtime dialect (sel.Dialect())
+// before any SQL is built for the term, and searchErr — not the ent-mangled
+// selector error — is what List_ returns.
+func TestRenderEntRepoAdapter_postgresOnlySearchFailsLoud(t *testing.T) {
+	msg := entMessageInfo{
+		MessageName: "Gadget",
+		Fields: []entFieldInfo{
+			{Name: "id", SnakeName: "id", EntType: "String", IsID: true},
+			{Name: "label", SnakeName: "label", EntType: "String"},
+		},
+		Search: &entSearchInfo{
+			PostgresVector: `(CASE category WHEN 'premium' THEN 'tier premium' ELSE 'tier standard' END)`,
+			SQLiteVector:   "", // PostgresOnly: no portable form
+			TextConfig:     "simple",
+			PostgresOnly:   true,
+		},
+	}
+	out := renderEntRepoAdapter(msg, msg, "gadgetv1", "github.com/example/gadgetd/gadgetv1")
+	if _, err := format.Source([]byte(out)); err != nil {
+		t.Fatalf("generated code is not valid Go: %v\n--- generated ---\n%s", err, out)
+	}
+	// The dialect pre-check, gating BEFORE any predicate SQL is built for the term.
+	mustContain(t, out, "var searchErr error")
+	mustContain(t, out, "if sel.Dialect() != dialect.Postgres {")
+	mustContain(t, out, `searchErr = status.Errorf(codes.Unimplemented, "full-text search for Gadget requires PostgreSQL")`)
+	mustContain(t, out, "sel.AddError(searchErr)")
+	// List_ returns the captured searchErr, not the generic/mangled query error.
+	mustContain(t, out, "if searchErr != nil {")
+	mustContain(t, out, `return nil, "", searchErr`)
+	// The old always-false, silently-zero-rows predicate must be gone.
+	mustNotContain(t, out, "1 = 0")
+	// The Postgres branch (the real FTS predicate) is unchanged.
+	mustContain(t, out, `to_tsvector('simple', (CASE category WHEN 'premium' THEN 'tier premium' ELSE 'tier standard' END)) @@ websearch_to_tsquery('simple', `)
+}
