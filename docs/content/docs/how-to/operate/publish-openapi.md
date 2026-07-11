@@ -78,6 +78,10 @@ disagree, the proto value wins. Per property and operation you get:
   `id` or `name`;
 - `x-aip-method` — the AIP standard-method classification (`Create`/`Get`/`List`/…);
 - `x-aip-pagination` — the `page_size`/`page_token`/`next_page_token` triad on List operations;
+- `x-aip-search` — on a List operation whose resource declares a full-text search surface, a `q`
+  query parameter plus the searchable source names, the materialization `strategy`, and the
+  `textConfig` (see [Add full-text search to a resource](../../model-and-persist/add-full-text-search/)
+  and [Annotations → Full-text search](../../../concepts/annotations/#full-text-search));
 - `x-aip-references` — cross-service reference targets (see [cross-service references](../../model-and-persist/)).
 
 The extensions are consumer-neutral (`x-aip-*`, never `x-terraform-*` or similar): the contract

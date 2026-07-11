@@ -819,6 +819,16 @@ func enrichCompat(doc *openapi3.T, files *protoregistry.Files, opts compatOption
 			if pg := paginationExt(b.method); pg != nil {
 				setExt(&m.op.Extensions, "x-aip-pagination", pg)
 			}
+			// WS-041 full-text search (FR-D1): a searchable List resource gets a `q`
+			// query parameter and an x-aip-search extension, parallel to pagination.
+			sx, serr := searchExt(f.res)
+			if serr != nil {
+				return rep, fmt.Errorf("enrich: operation %q: %w", m.op.OperationID, serr)
+			}
+			if sx != nil {
+				ensureQueryParam(m.op, "q", "WS-041 full-text search: free-text query across the resource's searchable fields.")
+				setExt(&m.op.Extensions, "x-aip-search", sx)
+			}
 		}
 	}
 

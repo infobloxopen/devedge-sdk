@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 )
@@ -98,6 +99,34 @@ type entMessageInfo struct {
 	// id-less Create mints a fresh id and an empty id is never persisted.
 	IdStrategy  fieldv1.IdOptions_Strategy
 	IdGenerator fieldv1.IdOptions_Generator
+	// Search carries the compiled full-text search surface (WS-041) when the
+	// resource declares one; nil for a non-searchable resource. Resolved via
+	// internal/aip.ResolveSearchConfig + cmd/internal/searchgen.Compile in main.go
+	// (the same shared resolver+compiler the GORM backend and the OpenAPI pass use,
+	// FR-A1/FM-5), so the ent `q` predicate cannot drift from the published contract.
+	Search *entSearchInfo
+}
+
+// entSearchInfo is the compiled full-text search surface embedded into a
+// generated ent repository's List_ (WS-041, FR-B4). The generated predicate
+// branches on the RUNTIME dialect (sel.Dialect() / bld.Dialect()): Postgres runs
+// true FTS over PostgresVector; a portable resource degrades to a
+// case-insensitive LIKE contains over SQLiteVector on any other engine; a
+// resource carrying a sql/postgres source (PostgresOnly) has no portable form and
+// FAILS LOUD (codes.Unimplemented) on a non-Postgres backend rather than silently
+// matching zero rows (SD-4/FM-8). It mirrors the GORM backend's searchInfo so both
+// backends stay behaviorally identical.
+type entSearchInfo struct {
+	PostgresVector string // to_tsvector argument (Postgres FTS branch)
+	SQLiteVector   string // text concatenation for the SQLite LIKE fallback ("" when PostgresOnly)
+	PostgresOnly   bool   // true => no SQLite form; non-Postgres backends fail loud
+	TextConfig     string // Postgres text-search config (default "simple")
+	// Indexed selects the INDEXED strategy (SD-7, FR-C3): the Postgres branch
+	// matches the persisted `search_vector` generated column instead of recomputing
+	// to_tsvector per query. The column + GIN migration is emitted by the
+	// co-generating protoc-gen-storage (which owns the table DDL / name helpers via
+	// with_storage), so ent never double-emits it. SQLite is unaffected.
+	Indexed bool
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -1289,6 +1318,11 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n")
 	b.WriteString("\t\"fmt\"\n")
+	if msg.Search != nil {
+		// The generated List strings.TrimSpace()s the q term so a whitespace-only q is
+		// a no-op (FR-B1).
+		b.WriteString("\t\"strings\"\n")
+	}
 	if soft {
 		b.WriteString("\t\"time\"\n")
 	}
@@ -1318,12 +1352,23 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 		// Verify/StoredCredential for verify-only credential fields (WS-033).
 		b.WriteString("\t\"github.com/infobloxopen/devedge-sdk/secret\"\n")
 	}
-	if !serverGenID || ownerTenant {
+	// A PostgresOnly searchable resource also needs codes/status: List_ fails loud
+	// with Unimplemented on a non-Postgres runtime dialect instead of silently
+	// matching zero rows (SD-4/FM-8, mirrors the GORM backend).
+	postgresOnlySearch := msg.Search != nil && msg.Search.PostgresOnly
+	if !serverGenID || ownerTenant || postgresOnlySearch {
 		// BC-12: a USER_SETTABLE id rejects an empty id with InvalidArgument; a
 		// tenant-scoped resource fails closed with PermissionDenied when no tenant is
 		// established. Both use codes/status.
 		b.WriteString("\n\t\"google.golang.org/grpc/codes\"\n")
 		b.WriteString("\t\"google.golang.org/grpc/status\"\n\n")
+	}
+	if msg.Search != nil {
+		// WS-041 full-text `q` predicate: the raw sql.P builder branches on the
+		// runtime dialect and binds the user term as an arg (FR-B4). dialect supplies
+		// the Postgres constant for the branch; sql supplies Selector/P/Builder.
+		b.WriteString("\t\"entgo.io/ent/dialect\"\n")
+		b.WriteString("\t\"entgo.io/ent/dialect/sql\"\n")
 	}
 	fmt.Fprintf(&b, "\tent %q\n", entImport)
 	// The field-predicate package is always needed: every Delete_ references it
@@ -1517,10 +1562,88 @@ func renderEntRepoAdapter(msg entMessageInfo, owner entMessageInfo, pkgName, goI
 	b.WriteString("\t\t\t\tif perr != nil {\n\t\t\t\t\treturn nil, \"\", perr\n\t\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\t\tif pred != nil {\n\t\t\t\t\tq = q.Where(entpredicate.%s(pred))\n\t\t\t\t}\n", model)
 	b.WriteString("\t\t\t}\n")
+	// WS-041 AIP `q` full-text search predicate, ANDed after the AIP-160 filter
+	// (SD-6). The user term is ALWAYS a bound parameter via the ent sql.Builder's
+	// Arg (never interpolated, FM-3). The predicate branches on the RUNTIME dialect
+	// — so the SAME generated code runs against both SQLite (dev/test) and Postgres
+	// (prod): on Postgres a parameterized to_tsvector(...) @@
+	// websearch_to_tsquery(...) (SD-5); on any other engine a case-insensitive LIKE
+	// contains over the portable vector (FR-B4/B5). A PostgresOnly resource (a
+	// sql/postgres source) has no portable form, so it FAILS LOUD with
+	// codes.Unimplemented on a non-Postgres backend instead of silently matching
+	// zero rows (SD-4/FM-8) — the same error the GORM backend returns.
+	if msg.Search != nil {
+		s := msg.Search
+		if s.PostgresOnly {
+			// searchErr carries the Unimplemented error out of the sel closure below
+			// (a func(*sql.Selector) cannot return one directly) so List_ can return it
+			// as a real error, exactly like the GORM adapter's runtime dialect check.
+			b.WriteString("\t\t\tvar searchErr error\n")
+		}
+		// INDEXED matches the persisted generated column (search_vector); JIT
+		// recomputes the vector per query (SD-7, FR-C3). Both bind the term (FM-3).
+		var pgFrag string
+		if s.Indexed {
+			pgFrag = fmt.Sprintf("%s @@ websearch_to_tsquery('%s', ", searchgen.IndexColumn, s.TextConfig)
+		} else {
+			pgFrag = fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ", s.TextConfig, s.PostgresVector, s.TextConfig)
+		}
+		// A whitespace-only q is a no-op, identical to an empty q (FR-B1): trim the
+		// term first and skip the predicate when nothing is left, so `q="   "` returns
+		// all rows instead of running a real, zero-matching query. The trimmed term is
+		// what the predicate binds (still a bound arg, FM-3).
+		b.WriteString("\t\t\tif search := strings.TrimSpace(opts.Search); search != \"\" {\n")
+		fmt.Fprintf(&b, "\t\t\t\tq = q.Where(entpredicate.%s(func(sel *sql.Selector) {\n", model)
+		if s.PostgresOnly {
+			// sel is already dialect-bound at this point (the ent query builder resolves
+			// it from the live driver before the predicate runs), so the runtime check
+			// happens BEFORE any SQL is built for this term — the non-Postgres case never
+			// reaches the "1 = 0" always-false predicate it used to emit. sel.AddError
+			// short-circuits the query (ent checks Selector.Err() before executing SQL),
+			// so a non-Postgres backend never round-trips to the database for this call;
+			// searchErr (not sel.Err(), which stringifies) carries the real status error.
+			b.WriteString("\t\t\t\t\tif sel.Dialect() != dialect.Postgres {\n")
+			fmt.Fprintf(&b, "\t\t\t\t\t\tsearchErr = status.Errorf(codes.Unimplemented, %q)\n",
+				fmt.Sprintf("full-text search for %s requires PostgreSQL", res))
+			b.WriteString("\t\t\t\t\t\tsel.AddError(searchErr)\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t\tsel.Where(sql.P(func(bld *sql.Builder) {\n")
+			fmt.Fprintf(&b, "\t\t\t\t\t\tbld.WriteString(%q)\n", pgFrag)
+			b.WriteString("\t\t\t\t\t\tbld.Arg(search)\n")
+			b.WriteString("\t\t\t\t\t\tbld.WriteString(\")\")\n")
+			b.WriteString("\t\t\t\t\t}))\n")
+		} else {
+			b.WriteString("\t\t\t\t\tsel.Where(sql.P(func(bld *sql.Builder) {\n")
+			b.WriteString("\t\t\t\t\t\tswitch bld.Dialect() {\n")
+			b.WriteString("\t\t\t\t\t\tcase dialect.Postgres:\n")
+			fmt.Fprintf(&b, "\t\t\t\t\t\t\tbld.WriteString(%q)\n", pgFrag)
+			b.WriteString("\t\t\t\t\t\t\tbld.Arg(search)\n")
+			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\")\")\n")
+			b.WriteString("\t\t\t\t\t\tdefault:\n")
+			// The user term is escaped (persistence.EscapeLikePattern) and matched with
+			// an ESCAPE '\' clause so its LIKE metacharacters (% _ \) are LITERAL, not
+			// wildcards (SEC-041-01). It stays a bound arg (FM-3).
+			ltFrag := fmt.Sprintf("lower(%s) LIKE '%%' || lower(", s.SQLiteVector)
+			fmt.Fprintf(&b, "\t\t\t\t\t\t\tbld.WriteString(%q)\n", ltFrag)
+			b.WriteString("\t\t\t\t\t\t\tbld.Arg(persistence.EscapeLikePattern(search))\n")
+			b.WriteString("\t\t\t\t\t\t\tbld.WriteString(\") || '%' ESCAPE '\\\\'\")\n")
+			b.WriteString("\t\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t\t}))\n")
+		}
+		b.WriteString("\t\t\t\t}))\n")
+		b.WriteString("\t\t\t}\n")
+	}
 	b.WriteString("\t\t\tif opts.PageSize <= 0 {\n\t\t\t\topts.PageSize = 50\n\t\t\t}\n")
 	b.WriteString("\t\t\tif opts.PageSize > persistence.MaxPageSize {\n\t\t\t\topts.PageSize = persistence.MaxPageSize\n\t\t\t}\n")
 	b.WriteString("\t\t\toffset := 0\n\t\t\tif opts.PageToken != \"\" {\n\t\t\t\tfmt.Sscanf(opts.PageToken, \"%d\", &offset) //nolint:errcheck\n\t\t\t}\n")
 	b.WriteString("\t\t\titems, err := q.Limit(opts.PageSize).Offset(offset).All(ctx)\n")
+	if msg.Search != nil && msg.Search.PostgresOnly {
+		// Checked before the generic err (which, on a non-Postgres backend, is just
+		// ent's own selector-error wrapper around whatever AddError recorded) so the
+		// caller sees the exact same status.Errorf the GORM backend returns.
+		b.WriteString("\t\t\tif searchErr != nil {\n\t\t\t\treturn nil, \"\", searchErr\n\t\t\t}\n")
+	}
 	b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn nil, \"\", err\n\t\t\t}\n")
 	fmt.Fprintf(&b, "\t\t\tout := make([]*%s, len(items))\n", res)
 	fmt.Fprintf(&b, "\t\t\tfor i, e := range items {\n\t\t\t\tout[i] = fromEnt%s(e)\n\t\t\t}\n", res)

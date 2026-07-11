@@ -21,6 +21,7 @@ import (
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	"github.com/infobloxopen/devedge-sdk/internal/aip"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
@@ -265,6 +266,38 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				References:       references,
 			})
 		}
+
+		// WS-041 full-text search: resolve the declared search surface (FR-A1) and
+		// compile it now so the generated GORM List can embed the `q` predicate for
+		// BOTH runtime dialects. Compiling for Postgres is authoritative: it never
+		// fails on portability and yields the Postgres to_tsvector argument, the
+		// parallel SQLite concatenation (for a portable resource), and the
+		// PostgresOnly flag — everything the runtime dialect branch in render.go
+		// needs from one call. It DOES fail loud (aborting codegen) on a leaky or
+		// non-textual searchable field, a reserved PROJECTED strategy, an unknown
+		// flavor, or an unsupported sql dialect (FR-A2/A3/A5, FM-1/FM-7).
+		if sc, err := aip.ResolveSearchConfig(m.Desc); err != nil {
+			gen.Error(err)
+		} else if sc.IsSearchable() {
+			compiled, cerr := searchgen.Compile(sc, m.Desc, searchgen.DialectPostgres)
+			if cerr != nil {
+				gen.Error(cerr)
+			} else if compiled != nil {
+				msg.Search = &searchInfo{
+					PostgresVector: compiled.PostgresVector,
+					SQLiteVector:   compiled.SQLiteVector,
+					PostgresOnly:   compiled.PostgresOnly,
+					TextConfig:     compiled.TextConfig,
+					Indexed:        compiled.IsIndexed(),
+				}
+				// INDEXED needs a pinned backing-table name (emitted TableName + the
+				// migration's ALTER TABLE / CREATE INDEX target, FR-C2).
+				if compiled.IsIndexed() {
+					msg.Search.Table = searchTableName(name)
+				}
+			}
+		}
+
 		messages = append(messages, msg)
 	}
 
@@ -380,6 +413,105 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 	outPath := f.GeneratedFilenamePrefix + ".storage.go"
 	g := gen.NewGeneratedFile(outPath, f.GoImportPath)
 	g.P(content)
+
+	emitSearchMigrations(gen, f, messages)
+}
+
+// emitSearchMigrations writes the Postgres migration files for every INDEXED
+// searchable resource in the proto file: a persisted `search_vector` generated
+// column and its CONCURRENTLY GIN index (WS-041 SD-7, FR-C2). Files land under the
+// module's `migrations/` dir (the WS-012 module-owned convention) as generated
+// artifacts, so emission is deterministic and idempotent — `make generate` twice
+// yields byte-identical files (FM-4/AC-7).
+//
+// The version is a FIXED number in a reserved band (searchMigrationBaseVersion),
+// allocated by the resource's order among the file's INDEXED resources — NOT the
+// next-free number on disk, which is what makes it diff-clean. The band sits far
+// above a service's hand-authored 0002+ domain migrations so a generated file never
+// collides with (or is confused for) a hand-written one; the migrate engine applies
+// in numeric order and permits gaps.
+func emitSearchMigrations(gen *protogen.Plugin, f *protogen.File, messages []messageInfo) {
+	// Module-relative migrations dir: the generated package sits one level under the
+	// module root (e.g. …/testdata/toy/widgetsv1), so the module's migrations dir is
+	// its parent + /migrations. The path must stay module-qualified for protogen's
+	// module= trimming; it strips the module prefix to place files under buf's out.
+	pkg := string(f.GoImportPath)
+	slash := strings.LastIndex(pkg, "/")
+	if slash < 0 {
+		return
+	}
+	migDir := pkg[:slash] + "/migrations"
+
+	version := searchMigrationBaseVersion
+	for _, msg := range messages {
+		if msg.Search == nil || !msg.Search.Indexed {
+			continue
+		}
+		files := searchgen.BuildIndexedMigration(msg.Search.Table, msg.Search.TextConfig, msg.Search.PostgresVector, version)
+		for _, mf := range files {
+			gf := gen.NewGeneratedFile(migDir+"/"+mf.Name, "")
+			gf.P(mf.Body)
+		}
+		version += 2 // this resource used columnVersion and columnVersion+1
+	}
+}
+
+// searchMigrationBaseVersion is the reserved starting version for generated
+// full-text-search migrations. It sits far above hand-authored domain migrations
+// (the scaffold README starts those at 0002) so a generated search_vector/GIN file
+// never collides with a hand-written migration; the migrate engine applies by
+// numeric order and allows the gap.
+const searchMigrationBaseVersion = 9001
+
+// searchTableName derives the backing table name pinned for an INDEXED resource:
+// the snake_case resource name, simply pluralized. It is emitted as the model's
+// TableName so the GORM table and the generated migration cannot drift.
+func searchTableName(message string) string {
+	return pluralize(toSnakeCase(message))
+}
+
+// toSnakeCase converts a CamelCase proto message name to snake_case.
+func toSnakeCase(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r - 'A' + 'a')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// pluralize applies the minimal English pluralization the fixtures need (regular
+// nouns + the common -y/-s/-x/-ch/-sh cases). Table names for INDEXED resources are
+// chosen to pluralize regularly.
+func pluralize(s string) string {
+	switch {
+	case s == "":
+		return s
+	case strings.HasSuffix(s, "y") && !endsInVowelY(s):
+		return s[:len(s)-1] + "ies"
+	case strings.HasSuffix(s, "s"), strings.HasSuffix(s, "x"),
+		strings.HasSuffix(s, "ch"), strings.HasSuffix(s, "sh"):
+		return s + "es"
+	default:
+		return s + "s"
+	}
+}
+
+func endsInVowelY(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+	switch s[len(s)-2] {
+	case 'a', 'e', 'i', 'o', 'u':
+		return true
+	}
+	return false
 }
 
 // validateSurfaces enforces the F027 Phase 5b multi-surface contract fail-closed.

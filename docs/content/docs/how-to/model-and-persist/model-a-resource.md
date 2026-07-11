@@ -424,5 +424,6 @@ the closest current alternative.
 - [Define a Service](../define-a-service/) — the proto → generate → wire loop around this model.
 - [Storage Shapes](../storage-shapes/) — persist the model with GORM or ent.
 - [Secret Fields](../../secure/secret-fields/) — production secret handling with Vault Transit.
+- [Add full-text search](../add-full-text-search/) — mark a field `searchable` and query it with `q`.
 - [Annotations](../../../concepts/annotations/) — the complete `(infoblox.field.v1.opts)` reference.
 - [Tenant Isolation](../../../concepts/tenant-isolation/) — how `account_id` scoping is enforced.

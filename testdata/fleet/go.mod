@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	entgo.io/ent v0.14.6
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5
 	github.com/infobloxopen/devedge-sdk v0.60.0
 	github.com/lib/pq v1.10.9
 	github.com/moby/moby/api v1.54.2
@@ -17,6 +17,8 @@ require (
 	gorm.io/gorm v1.31.2
 	modernc.org/sqlite v1.52.0
 )
+
+require github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 // indirect
 
 require (
 	ariga.io/atlas v0.36.2-0.20250730182955-2c6300d0a3e1 // indirect

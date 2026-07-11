@@ -22,6 +22,7 @@ import (
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
 	storagev1 "github.com/infobloxopen/apis/proto/infoblox/storage/v1"
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	"github.com/infobloxopen/devedge-sdk/internal/aip"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
@@ -264,6 +265,35 @@ func generateFile(gen *protogen.Plugin, f *protogen.File) {
 				References:       references,
 			})
 		}
+
+		// WS-041 full-text search: resolve the declared search surface (FR-A1) and
+		// compile it now so the generated ent List_ can embed the `q` predicate for
+		// BOTH runtime dialects (the same code runs on SQLite in tests and Postgres in
+		// prod). Compiling for Postgres is authoritative: it never fails on
+		// portability and yields the Postgres to_tsvector argument, the parallel
+		// SQLite concatenation (for a portable resource), and the PostgresOnly flag —
+		// everything the runtime dialect branch in render.go needs from one call. It
+		// DOES fail loud (aborting codegen) on a leaky or non-textual searchable field,
+		// a reserved PROJECTED strategy, an unknown flavor, or an unsupported sql
+		// dialect (FR-A2/A3/A5, FM-1/FM-7) — identical to the GORM backend, via the one
+		// shared resolver+compiler so the two backends cannot diverge (FM-5).
+		if sc, err := aip.ResolveSearchConfig(m.Desc); err != nil {
+			gen.Error(err)
+		} else if sc.IsSearchable() {
+			compiled, cerr := searchgen.Compile(sc, m.Desc, searchgen.DialectPostgres)
+			if cerr != nil {
+				gen.Error(cerr)
+			} else if compiled != nil {
+				msg.Search = &entSearchInfo{
+					PostgresVector: compiled.PostgresVector,
+					SQLiteVector:   compiled.SQLiteVector,
+					PostgresOnly:   compiled.PostgresOnly,
+					TextConfig:     compiled.TextConfig,
+					Indexed:        compiled.IsIndexed(),
+				}
+			}
+		}
+
 		messages = append(messages, msg)
 	}
 

@@ -108,8 +108,13 @@ type User struct {
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// account_id is the tenant partition and IMMUTABLE (a user cannot move tenant).
 	AccountId string `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
-	// email is client-REQUIRED (explicit) and unique.
-	Email         string `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	// email is client-REQUIRED (explicit), unique, and field-flagged searchable
+	// (WS-041): included in the resource's full-text search vector. It is neither
+	// secret nor INPUT_ONLY, so searching it leaks nothing (FR-A3).
+	Email string `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	// display_name is field-flagged searchable (WS-041) too, so `q` matches across
+	// both columns (the vector unions them). Portable field sources only, so the
+	// resource degrades to a case-insensitive LIKE contains on SQLite (FR-B5).
 	DisplayName   string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	Etag          string `protobuf:"bytes,5,opt,name=etag,proto3" json:"etag,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -684,9 +689,13 @@ func (x *GetUserRequest) GetId() string {
 }
 
 type ListUsersRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PageSize      int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	PageSize  int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// WS-041 full-text search (`q` collection operator): free-text query across the
+	// resource's searchable fields (email, display_name); mapped by the generated
+	// svc handler onto persistence.ListOptions.Search (FR-B2).
+	Q             string `protobuf:"bytes,3,opt,name=q,proto3" json:"q,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -731,6 +740,13 @@ func (x *ListUsersRequest) GetPageSize() int32 {
 func (x *ListUsersRequest) GetPageToken() string {
 	if x != nil {
 		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListUsersRequest) GetQ() string {
+	if x != nil {
+		return x.Q
 	}
 	return ""
 }
@@ -1387,13 +1403,13 @@ const file_iam_proto_rawDesc = "" +
 	"\aAccount\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x06\x9a\xb5\x18\x02\x18\x01R\vdisplayName\x12\x17\n" +
-	"\x04etag\x18\x03 \x01(\tB\x03\xe0A\x03R\x04etag\"\x9f\x01\n" +
+	"\x04etag\x18\x03 \x01(\tB\x03\xe0A\x03R\x04etag\"\xa9\x01\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\"\n" +
 	"\n" +
-	"account_id\x18\x02 \x01(\tB\x03\xe0A\x05R\taccountId\x12\x1f\n" +
-	"\x05email\x18\x03 \x01(\tB\t\xe0A\x02\x9a\xb5\x18\x02\x18\x01R\x05email\x12!\n" +
-	"\fdisplay_name\x18\x04 \x01(\tR\vdisplayName\x12\x17\n" +
+	"account_id\x18\x02 \x01(\tB\x03\xe0A\x05R\taccountId\x12!\n" +
+	"\x05email\x18\x03 \x01(\tB\v\xe0A\x02\x9a\xb5\x18\x04\x18\x01`\x01R\x05email\x12)\n" +
+	"\fdisplay_name\x18\x04 \x01(\tB\x06\x9a\xb5\x18\x02`\x01R\vdisplayName\x12\x17\n" +
 	"\x04etag\x18\x05 \x01(\tB\x03\xe0A\x03R\x04etag:\x06ҵ\x18\x02\b\x01\"\xcb\x01\n" +
 	"\x05Group\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
@@ -1439,11 +1455,12 @@ const file_iam_proto_rawDesc = "" +
 	"\x14CreateAccountRequest\x12)\n" +
 	"\aaccount\x18\x01 \x01(\v2\x0f.iam.v1.AccountR\aaccount\" \n" +
 	"\x0eGetUserRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"N\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\\\n" +
 	"\x10ListUsersRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x02 \x01(\tR\tpageToken\"_\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\x12\f\n" +
+	"\x01q\x18\x03 \x01(\tR\x01q\"_\n" +
 	"\x11ListUsersResponse\x12\"\n" +
 	"\x05users\x18\x01 \x03(\v2\f.iam.v1.UserR\x05users\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"5\n" +

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	fieldv1 "github.com/infobloxopen/apis/proto/infoblox/field/v1"
+	"github.com/infobloxopen/devedge-sdk/cmd/internal/searchgen"
 	"github.com/infobloxopen/devedge-sdk/cmd/internal/storagegen"
 	dddv1 "github.com/infobloxopen/devedge-sdk/proto/infoblox/ddd/v1"
 )
@@ -241,6 +242,34 @@ type messageInfo struct {
 	// id-less Create mints a fresh id and an empty id is never persisted.
 	IdStrategy  fieldv1.IdOptions_Strategy
 	IdGenerator fieldv1.IdOptions_Generator
+	// Search carries the compiled full-text search surface (WS-041) when the
+	// resource declares one; nil otherwise. It drives the generated List `q`
+	// predicate. Populated in main.go from searchgen.Compile.
+	Search *searchInfo
+}
+
+// searchInfo is the compiled full-text search surface embedded into a generated
+// GORM List (WS-041, SD-6/FR-B3/B5). The generated `q` predicate branches on the
+// runtime dialect (db.Dialector.Name()): Postgres runs true FTS over
+// PostgresVector; a portable resource degrades to a case-insensitive LIKE
+// contains over SQLiteVector on any other engine; a resource with a sql/postgres
+// source (PostgresOnly) has no portable form and fails loud at runtime on a
+// non-Postgres backend rather than emit wrong SQL.
+type searchInfo struct {
+	PostgresVector string // to_tsvector argument (Postgres FTS branch)
+	SQLiteVector   string // text concatenation for the SQLite LIKE fallback ("" when PostgresOnly)
+	PostgresOnly   bool   // true => no SQLite form; non-Postgres backends fail loud
+	TextConfig     string // resolved Postgres text-search config (default "simple")
+	// Indexed selects the INDEXED strategy (SD-7, FR-C3): the Postgres List branch
+	// matches the persisted `search_vector` generated column
+	// (search_vector @@ websearch_to_tsquery(…)) instead of recomputing to_tsvector
+	// per query, and main.go emits the column+GIN migration. SQLite is unaffected
+	// (no persisted column; the LIKE fallback stands).
+	Indexed bool
+	// Table is the resource's backing table name, pinned by an emitted TableName()
+	// so the emitted migration's ALTER TABLE targets exactly the GORM table. Only
+	// set for an INDEXED resource.
+	Table string
 }
 
 // isSurface reports whether msg is a projection over ANOTHER message's storage
@@ -549,6 +578,17 @@ func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByNam
 	}
 	withTags := hasTagsFields(messages)
 
+	// withSearch gates the strings import: the generated List for a searchable
+	// resource strings.TrimSpace()s the q term so a whitespace-only q is a no-op
+	// (FR-B1). Only imported when at least one message declares search.
+	withSearch := false
+	for _, msg := range messages {
+		if msg.Search != nil {
+			withSearch = true
+			break
+		}
+	}
+
 	// Determine if any message needs the middleware import. It is used ONLY for
 	// tenant scoping (middleware.TenantIDFromContext, always gated by hasTenant);
 	// a secret field alone does not use it (secret handling uses the secret
@@ -569,6 +609,9 @@ func renderStorageFile(storagePkgName string, messages []messageInfo, ownerByNam
 	b.WriteString("\t\"encoding/base64\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	b.WriteString("\t\"strconv\"\n")
+	if withSearch {
+		b.WriteString("\t\"strings\"\n")
+	}
 	b.WriteString("\t\"time\"\n\n")
 	b.WriteString("\t\"gorm.io/gorm\"\n")
 	if withSoftDelete || withExpireTime {
@@ -884,6 +927,15 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 			b.WriteString("\tExpireTime sql.NullTime `gorm:\"column:expire_time;index\"`\n")
 		}
 		b.WriteString("}\n\n")
+
+		// WS-041 INDEXED: pin the GORM table name with an explicit TableName so the
+		// emitted search_vector migration's ALTER TABLE / CREATE INDEX target exactly
+		// this table (no reliance on GORM's default pluralizer, zero drift, FR-C2).
+		if msg.Search != nil && msg.Search.Indexed && msg.Search.Table != "" {
+			fmt.Fprintf(b, "// TableName pins the table backing the INDEXED full-text search_vector\n")
+			fmt.Fprintf(b, "// generated column + GIN index (WS-041, see migrations/).\n")
+			fmt.Fprintf(b, "func (%sModel) TableName() string { return %q }\n\n", model, msg.Search.Table)
+		}
 	}
 
 	pbType := fmt.Sprintf("*%s", msg.MessageName)
@@ -1166,6 +1218,47 @@ func renderMessage(b *strings.Builder, msg messageInfo, owner messageInfo, sibli
 	fmt.Fprintf(b, "\t\tsql, args := cond.SQL()\n")
 	fmt.Fprintf(b, "\t\tq = q.Where(sql, args...)\n")
 	fmt.Fprintf(b, "\t}\n")
+	// WS-041 AIP `q` full-text search predicate, ANDed after the AIP-160 filter
+	// WHERE (SD-6). The user term is ALWAYS a bound parameter (never interpolated,
+	// FM-3). The vector is dialect-specific, chosen from the runtime dialect: on
+	// Postgres a parameterized to_tsvector(...) @@ websearch_to_tsquery(...) (SD-5);
+	// on any other engine (the SQLite dev/test driver) a case-insensitive LIKE
+	// contains over the portable vector (FR-B5). A resource carrying a sql/postgres
+	// source has no portable form (PostgresOnly) and fails loud on a non-Postgres
+	// backend rather than emit wrong SQL (SD-4/FM-8).
+	if msg.Search != nil {
+		s := msg.Search
+		// INDEXED matches the persisted generated column (search_vector); JIT
+		// recomputes the vector per query (SD-7, FR-C3). The user term is a bound
+		// parameter in both (FM-3).
+		var pgPred string
+		if s.Indexed {
+			pgPred = fmt.Sprintf("%s @@ websearch_to_tsquery('%s', ?)", searchgen.IndexColumn, s.TextConfig)
+		} else {
+			pgPred = fmt.Sprintf("to_tsvector('%s', %s) @@ websearch_to_tsquery('%s', ?)", s.TextConfig, s.PostgresVector, s.TextConfig)
+		}
+		// A whitespace-only q is a no-op, identical to an empty q (FR-B1): trim the
+		// term first and skip the predicate when nothing is left, so `q="   "` returns
+		// all rows instead of running a real, zero-matching query. The trimmed term is
+		// what the predicate binds (still a bound parameter, FM-3).
+		b.WriteString("\tif search := strings.TrimSpace(opts.Search); search != \"\" {\n")
+		b.WriteString("\t\tswitch r.db.Dialector.Name() {\n")
+		b.WriteString("\t\tcase \"postgres\":\n")
+		fmt.Fprintf(b, "\t\t\tq = q.Where(%q, search)\n", pgPred)
+		b.WriteString("\t\tdefault:\n")
+		if s.PostgresOnly {
+			fmt.Fprintf(b, "\t\t\treturn nil, \"\", status.Errorf(codes.Unimplemented, %q)\n",
+				fmt.Sprintf("full-text search for %s requires PostgreSQL", msg.MessageName))
+		} else {
+			// The user term is escaped (persistence.EscapeLikePattern) and matched with
+			// an ESCAPE '\' clause so its LIKE metacharacters (% _ \) are LITERAL, not
+			// wildcards (SEC-041-01). It stays a bound parameter (FM-3).
+			ltPred := fmt.Sprintf("lower(%s) LIKE '%%' || lower(?) || '%%' ESCAPE '\\'", s.SQLiteVector)
+			fmt.Fprintf(b, "\t\t\tq = q.Where(%q, persistence.EscapeLikePattern(search))\n", ltPred)
+		}
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+	}
 	fmt.Fprintf(b, "\tif opts.OrderBy != \"\" {\n")
 	fmt.Fprintf(b, "\t\tclauses, err := filter.ParseOrderBy(opts.OrderBy, %sColumns)\n", msg.MessageName)
 	fmt.Fprintf(b, "\t\tif err != nil {\n")

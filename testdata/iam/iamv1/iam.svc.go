@@ -187,6 +187,7 @@ func (h *UserServiceCRUDHandler) ListUsers(ctx context.Context, req *ListUsersRe
 	items, next, err := h.Repo.List(ctx, persistence.ListOptions{
 		PageSize:  int(req.GetPageSize()),
 		PageToken: req.GetPageToken(),
+		Search:    req.GetQ(),
 	})
 	if err != nil {
 		return nil, err

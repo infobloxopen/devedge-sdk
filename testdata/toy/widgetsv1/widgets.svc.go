@@ -104,6 +104,7 @@ func (h *WidgetServiceCRUDHandler) ListWidgets(ctx context.Context, req *ListWid
 		PageSize:    int(req.GetPageSize()),
 		PageToken:   req.GetPageToken(),
 		ShowDeleted: req.GetShowDeleted(),
+		Search:      req.GetQ(),
 	})
 	if err != nil {
 		return nil, err

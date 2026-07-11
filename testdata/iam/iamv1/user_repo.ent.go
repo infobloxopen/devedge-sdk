@@ -4,6 +4,7 @@ package iamv1
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/infobloxopen/devedge-sdk/middleware"
 	"github.com/infobloxopen/devedge-sdk/middleware/etag"
@@ -13,6 +14,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/sql"
 	ent "github.com/infobloxopen/devedge-sdk/testdata/iam/ent"
 	entuser "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/user"
 	entpredicate "github.com/infobloxopen/devedge-sdk/testdata/iam/ent/predicate"
@@ -87,6 +90,22 @@ func NewUserEntRepository(client *ent.Client, opts ...persistence.RepoOption) pe
 				if pred != nil {
 					q = q.Where(entpredicate.User(pred))
 				}
+			}
+			if search := strings.TrimSpace(opts.Search); search != "" {
+				q = q.Where(entpredicate.User(func(sel *sql.Selector) {
+					sel.Where(sql.P(func(bld *sql.Builder) {
+						switch bld.Dialect() {
+						case dialect.Postgres:
+							bld.WriteString("to_tsvector('simple', replace(replace(coalesce(CAST(\"email\" AS text), ''), '@', ' '), '.', ' ') || ' ' || replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ')) @@ websearch_to_tsquery('simple', ")
+							bld.Arg(search)
+							bld.WriteString(")")
+						default:
+							bld.WriteString("lower(coalesce(CAST(\"email\" AS text), '') || ' ' || coalesce(CAST(\"display_name\" AS text), '')) LIKE '%' || lower(")
+							bld.Arg(persistence.EscapeLikePattern(search))
+							bld.WriteString(") || '%' ESCAPE '\\'")
+						}
+					}))
+				}))
 			}
 			if opts.PageSize <= 0 {
 				opts.PageSize = 50

@@ -46,5 +46,21 @@ transaction — the host fails loud on that). Put it in its own migration:
 0003_widgets_name_idx.down.sql  DROP INDEX CONCURRENTLY IF EXISTS idx_widgets_name;
 ```
 
+## Generated full-text search migrations (WS-041)
+
+If a resource declares an **`INDEXED`** full-text `search` surface, `de generate` emits
+its persisted `search_vector` generated column + a `CREATE INDEX CONCURRENTLY … USING GIN`
+pair as SQL migrations. buf writes them under the **git-ignored** `gen/migrations/`, so
+`make sync-migrations` (run automatically by `make build` / `make test` / `make run`)
+copies them **here** — into this committed, embedded dir — so `//go:embed migrations`
+picks them up and the host migrator applies them. Without that, an `INDEXED` resource
+fails at runtime with `column "search_vector" does not exist`.
+
+Generated files carry a `Code generated … DO NOT EDIT` header and use a **reserved
+`9001+` version band** — far above your hand-authored `0002+` files — so the sync never
+collides with, clobbers, or renumbers a migration you wrote. **Commit** the generated
+`9001_*`/`9002_*` files like any other migration; they are immutable history. If you run
+`de generate` directly instead of through `make`, run `make sync-migrations` afterward.
+
 This README is also the placeholder that keeps `//go:embed migrations` valid before your
 first migration file lands.

@@ -21,7 +21,8 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

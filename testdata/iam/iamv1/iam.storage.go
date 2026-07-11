@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -491,6 +492,14 @@ func (r *UserRepository) List(ctx context.Context, opts persistence.ListOptions)
 		}
 		sql, args := cond.SQL()
 		q = q.Where(sql, args...)
+	}
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		switch r.db.Dialector.Name() {
+		case "postgres":
+			q = q.Where("to_tsvector('simple', replace(replace(coalesce(CAST(\"email\" AS text), ''), '@', ' '), '.', ' ') || ' ' || replace(replace(coalesce(CAST(\"display_name\" AS text), ''), '@', ' '), '.', ' ')) @@ websearch_to_tsquery('simple', ?)", search)
+		default:
+			q = q.Where("lower(coalesce(CAST(\"email\" AS text), '') || ' ' || coalesce(CAST(\"display_name\" AS text), '')) LIKE '%' || lower(?) || '%' ESCAPE '\\'", persistence.EscapeLikePattern(search))
+		}
 	}
 	if opts.OrderBy != "" {
 		clauses, err := filter.ParseOrderBy(opts.OrderBy, UserColumns)

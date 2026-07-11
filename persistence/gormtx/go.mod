@@ -16,7 +16,7 @@ go 1.25.5
 require (
 	github.com/infobloxopen/devedge-sdk v0.60.0
 	google.golang.org/grpc v1.81.1
-	gorm.io/gorm v1.31.1
+	gorm.io/gorm v1.31.2
 	modernc.org/sqlite v1.52.0
 )
 
@@ -26,10 +26,11 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4 // indirect
+	github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-sqlite3 v1.14.28 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

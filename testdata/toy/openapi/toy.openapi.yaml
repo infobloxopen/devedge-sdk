@@ -120,7 +120,9 @@ components:
                     x-aip-field-behavior:
                         - OUTPUT_ONLY
                 displayName:
-                    description: display_name is client-REQUIRED (explicit field_behavior).
+                    description: |-
+                        display_name is client-REQUIRED (explicit field_behavior) and field-flagged
+                        searchable (WS-041): included in the resource's full-text search vector.
                     type: string
                     x-aip-field-behavior:
                         - REQUIRED
@@ -264,6 +266,11 @@ paths:
                   name: readMask
                   schema:
                     type: string
+                - description: 'WS-041 full-text search: free-text query across the resource''s searchable fields.'
+                  in: query
+                  name: q
+                  schema:
+                    type: string
             responses:
                 "200":
                     content:
@@ -284,6 +291,13 @@ paths:
                 nextPageTokenField: nextPageToken
                 pageSizeParam: pageSize
                 pageTokenParam: pageToken
+            x-aip-search:
+                queryParam: q
+                sources:
+                    - displayName
+                    - category_label
+                strategy: JIT
+                textConfig: simple
         post:
             operationId: WidgetService_CreateWidget
             parameters:
@@ -481,7 +495,9 @@ paths:
                                     readOnly: true
                                     type: string
                                 displayName:
-                                    description: display_name is client-REQUIRED (explicit field_behavior).
+                                    description: |-
+                                        display_name is client-REQUIRED (explicit field_behavior) and field-flagged
+                                        searchable (WS-041): included in the resource's full-text search vector.
                                     type: string
                                 etag:
                                     type: string

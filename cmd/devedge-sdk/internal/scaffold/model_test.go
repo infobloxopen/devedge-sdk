@@ -88,6 +88,44 @@ func TestSDKVersionResolves(t *testing.T) {
 // pinning that was finding-051/#61) now lives in `de`, so the Makefile must carry
 // NO `go install`/`@latest`/`make tools`/`SDK_VERSION` tool blocks, and must pin
 // the `de` install to an exact version (never @latest).
+// TestMakefileSyncsGeneratedMigrations locks in the WS-041 F2 fix: the scaffold's
+// hand-owned Makefile must sync the generator-emitted FTS migrations (buf writes them
+// to the git-ignored gen/migrations/) into the committed, embedded module/migrations/
+// dir, and must wire that sync ahead of build/test/run so a scaffolded INDEXED resource
+// actually applies its search_vector column. Without it, an INDEXED resource fails at
+// runtime with `column "search_vector" does not exist`.
+func TestMakefileSyncsGeneratedMigrations(t *testing.T) {
+	for _, backend := range []Backend{BackendGORM, BackendEnt} {
+		t.Run(string(backend), func(t *testing.T) {
+			m, err := Options{Service: "orders", Resource: "Order", Backend: backend}.Validate()
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			out, err := renderTemplate("Makefile.tmpl", m)
+			if err != nil {
+				t.Fatalf("render Makefile.tmpl: %v", err)
+			}
+			mk := string(out)
+
+			// The sync target exists and copies from the git-ignored gen/migrations/
+			// into the committed, embedded module/migrations/ dir.
+			for _, want := range []string{"sync-migrations:", "gen/migrations", "module/migrations"} {
+				if !strings.Contains(mk, want) {
+					t.Errorf("Makefile missing %q (WS-041 F2 migration sync):\n%s", want, mk)
+				}
+			}
+			// build/test/run trigger the sync (so the embed picks the migrations up
+			// before compiling/running).
+			if !strings.Contains(mk, "build test: sync-migrations") {
+				t.Errorf("build/test must depend on sync-migrations:\n%s", mk)
+			}
+			if !strings.Contains(mk, "run: sync-migrations") {
+				t.Errorf("run must depend on sync-migrations:\n%s", mk)
+			}
+		})
+	}
+}
+
 func TestMakefileIsThinDeShim(t *testing.T) {
 	for _, backend := range []Backend{BackendGORM, BackendEnt} {
 		t.Run(string(backend), func(t *testing.T) {

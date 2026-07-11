@@ -202,6 +202,90 @@ another resource. The related message must itself be a stored resource — it mu
 field so that `<Related>Model` is generated.
 {{< /callout >}}
 
+## Full-text search
+
+Attach `searchable: true` to a plain field, and/or a message-level `(infoblox.storage.v1.search)`
+option, to declare a resource's full-text search surface — the fields and calculated values that a
+List call's `q` operator matches against. See [Add full-text search to a resource](../../how-to/model-and-persist/add-full-text-search/)
+for the task recipe and [Persistence reference → Full-text search (`q`)](../../reference/persistence/#full-text-search-q)
+for the generated predicate.
+
+```proto
+import "infoblox/field/v1/field.proto";
+import "infoblox/storage/v1/storage.proto";
+
+message Widget {
+  option (infoblox.storage.v1.search) = {
+    strategy: STRATEGY_JIT
+    sources: [
+      { name: "category_label", exprs: { expr: [
+        { flavor: "sql", dialect: "postgres", version: "1",
+          expr: "CASE category WHEN 'premium' THEN 'tier premium deluxe' ELSE 'tier none' END" },
+        { flavor: "cel", version: "1",
+          expr: "msg.category == 'premium' ? 'tier premium' : 'tier none'" }
+      ]}}
+    ]
+  };
+  string display_name = 3 [(infoblox.field.v1.opts) = {searchable: true}];
+  string category      = 4 [(infoblox.field.v1.opts) = {allowed_values: ["standard", "premium"]}];
+}
+```
+
+The `cel` expression alongside the `sql` one keeps `category_label` portable to the SQLite
+dev/test driver — see the warning below.
+
+| Field (`FieldOptions`) | Number | Meaning |
+|---|---|---|
+| `searchable` | 12 | Includes this field's value in the resource's full-text search vector. The field must be `string`, `enum`, a string-typed repeated field, `map<string, string>` tags, or `Timestamp`, and must not be `secret` or `INPUT_ONLY`. |
+
+`(infoblox.storage.v1.search)` is a **message** option that declares the rest of the searchable
+surface: the materialization strategy, the Postgres text-search configuration, and any calculated
+sources beyond field-flagged columns.
+
+`SearchConfig`:
+
+| Field | Number | Meaning |
+|---|---|---|
+| `strategy` | 1 | Materialization strategy (`Strategy`, below). Default `STRATEGY_JIT`. |
+| `text_config` | 2 | Postgres text-search configuration, e.g. `simple` or `english`. Default `"simple"`. |
+| `sources` | 3 | Calculated/transformed sources beyond field-flagged columns (repeated `SearchSource`). |
+
+`SearchConfig.Strategy`:
+
+| Value | Meaning |
+|---|---|
+| `STRATEGY_UNSPECIFIED` | Treated as `STRATEGY_JIT`. |
+| `STRATEGY_JIT` | The search vector is computed at query time. No migration. The default. |
+| `STRATEGY_INDEXED` | The search vector is persisted as a generated column and a GIN index. |
+| `STRATEGY_PROJECTED` | **Reserved.** Declaring it is valid schema, but `make generate` fails loud — this strategy has no local implementation. It marks a resource whose search surface is materialized remotely, for a future cross-service search index. |
+
+`SearchSource`:
+
+| Field | Number | Meaning |
+|---|---|---|
+| `name` | 1 | Logical name for diagnostics and the `x-aip-search` OpenAPI extension. |
+| `field` | 2 | (oneof `from`) References an existing message field by name — a portable source. On PostgreSQL, the field's `@` and `.` characters are normalized to spaces before indexing (`alice@acme.com` tokenizes as `alice acme com`); the SQLite fallback does not apply this normalization. |
+| `exprs` | 3 | (oneof `from`) A `SearchExprSet` of flavored, calculated expressions. |
+| `text_config` | 4 | Overrides the message-level `text_config` for this source only. |
+
+`SearchExprSet` / `SearchExpr`:
+
+| Field | Number | Meaning |
+|---|---|---|
+| `SearchExprSet.expr` | 1 | Repeated `SearchExpr` — the flavored expressions contributing to one calculated source. |
+| `SearchExpr.flavor` | 1 | Expression language: `sql` or `cel`. |
+| `SearchExpr.dialect` | 2 | Target backend for a `sql` expression. Only `postgres` is supported. |
+| `SearchExpr.version` | 3 | Flavor spec version, pinning the expression's meaning. |
+| `SearchExpr.expr` | 4 | The expression text. |
+
+{{< callout type="warning" >}}
+**A `sql` expression is Postgres-only unless paired with a `cel` expression in the same source.**
+`cel` compiles to both a Postgres and a SQLite expression, so it is the portable choice for a
+calculated value. A `sql`-only source generates without error on every backend, but fails at
+**runtime**, not at generation time: querying it over a non-Postgres connection returns
+`Unimplemented` instead of running broken SQL. See [Add full-text search to a resource → SQLite and `sql`-flavor sources](../../how-to/model-and-persist/add-full-text-search/#sqlite-and-sql-flavor-sources).
+{{< /callout >}}
+
 ## Aggregate boundaries
 
 The `infoblox.ddd.v1` annotations declare domain-driven design (DDD) aggregate boundaries.
@@ -246,13 +330,14 @@ extend google.protobuf.FieldOptions {
   References references = 50012; // (infoblox.ddd.v1.references)
 }
 extend google.protobuf.MessageOptions {
-  Aggregate aggregate = 50010; // (infoblox.ddd.v1.aggregate)
-  Member member = 50011;       // (infoblox.ddd.v1.member)
+  Aggregate aggregate = 50010;    // (infoblox.ddd.v1.aggregate)
+  Member member = 50011;          // (infoblox.ddd.v1.member)
+  SearchConfig search = 50051;    // (infoblox.storage.v1.search)
 }
 ```
 
-The numbers `50001`, `50003`, and `50010`–`50012` fall in the protobuf **50000–99999 "internal
-use"** range.
+The numbers `50001`, `50003`, `50010`–`50012`, and `50051` fall in the protobuf **50000–99999
+"internal use"** range.
 
 {{< callout type="warning" >}}
 **Obtain a globally-unique extension number before any cross-org publication.** Register the

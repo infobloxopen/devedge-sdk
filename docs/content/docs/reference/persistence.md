@@ -83,10 +83,11 @@ type ListOptions struct {
     PageSize    int    // generated repos default to 50 when <= 0
     PageToken   string // opaque; generated repos encode the next offset as base64
     ShowDeleted bool   // AIP-148: include soft-deleted resources in List (default false)
+    Search      string // free-text query for the `q` operator (see "Full-text search (q)")
 }
 ```
 
-`ListOptions` carries the resource-oriented list parameters for a `List` call. Generated repositories default `PageSize` to 50, encode the next offset as a base64 page token, and — for soft-delete resources — exclude deleted rows unless `ShowDeleted` is set.
+`ListOptions` carries the resource-oriented list parameters for a `List` call. Generated repositories default `PageSize` to 50, encode the next offset as a base64 page token, and — for soft-delete resources — exclude deleted rows unless `ShowDeleted` is set. `Search` is a no-op (the zero value) unless the resource declares a searchable surface; `MemoryRepository` ignores it.
 
 ## Filtering and ordering
 
@@ -125,6 +126,84 @@ On the **ent backend**, `protoc-gen-ent` emits the equivalent `var <Msg>EntColum
 ```go
 entrepo.FilterPredicate(opts.Filter, <Msg>EntColumns, <Msg>EntJSONColumns)
 ```
+
+## Full-text search (`q`)
+
+`ListOptions.Search` carries the AIP `q` collection operator: a free-text query matched against a
+resource's declared searchable surface (a `searchable` field option and/or a message-level
+`(infoblox.storage.v1.search)` option — see [Annotations → Full-text search](../../concepts/annotations/#full-text-search)).
+`protoc-gen-svc` detects a `string q` field on a List request by name, the same convention as
+`filter`/`order_by` — each is wired independently, only when the request declares a field of that
+name — and maps it onto `Search` in the generated `stdList` handler. An empty or whitespace-only
+`q` is a no-op: the generated predicate trims the term first and skips the search predicate
+entirely when nothing is left, so `q="   "` returns every row, the same as an empty `q`. See
+[Add full-text search to a resource](../../how-to/model-and-persist/add-full-text-search/) for the
+end-to-end recipe.
+
+Both storage generators AND a full-text predicate onto the query after the AIP-160 filter `WHERE`,
+selecting the predicate from the runtime dialect:
+
+| Backend | PostgreSQL | Other (SQLite) |
+|---|---|---|
+| GORM | `to_tsvector('<text_config>', <vector>) @@ websearch_to_tsquery('<text_config>', ?)` (JIT), or `search_vector @@ websearch_to_tsquery('<text_config>', ?)` (INDEXED) | `lower(<vector>) LIKE '%' \|\| lower(?) \|\| '%' ESCAPE '\'` |
+| ent | An equivalent `sql.P(...)` predicate ANDed with the parsed filter predicate | Same `lower(...) LIKE ...` fallback |
+
+The query term is always a bound parameter on every backend and dialect — never string-interpolated.
+
+`<vector>` is every declared source concatenated with a literal space (`source1 || ' ' ||
+source2 || ...`) into **one** text expression, not a set of per-column predicates. On SQLite this
+means the whole concatenation is matched as a single `LIKE` contains: a match is not required to
+fall within one source, and can span the seam between two concatenated sources. A `field` source's
+column is normalized before concatenation: on PostgreSQL, its `@` and `.` characters become spaces
+(`alice@acme.com` → `alice acme com`) so the tokenizer indexes their parts; the SQLite
+concatenation keeps the field's plain text, unnormalized.
+
+{{< callout type="warning" >}}
+**The SQLite predicate is a dev-only approximation, not an equivalent of PostgreSQL full-text
+search.** It has no stopword removal or stemming, matches occur mid-word (a substring match, not a
+token match), and — because `<vector>` is one concatenation — a query can match across the seam
+between two sources. Results, and the order they come back in, can differ from the same query run
+against PostgreSQL. Validate search behavior against PostgreSQL before deploying.
+{{< /callout >}}
+
+A resource whose sources are all portable (plain `field` sources, or a `cel` source, which compiles
+to both a Postgres and a SQLite expression) gets a working SQLite fallback. A resource with a
+`sql/postgres` source and no `cel` alternate is Postgres-only: it generates without error on every
+backend — this is a **runtime**, not a build-time, constraint. The generated predicate branches on
+the connection's runtime dialect, and the non-Postgres branch fails at query time: both backends
+return `codes.Unimplemented` ("full-text search for `<Resource>` requires PostgreSQL") — the GORM
+backend from the generated `List`, and the ent backend from a runtime dialect check ahead of the
+query — rather than silently matching zero rows.
+
+### Full-text search migrations (`INDEXED`)
+
+A resource declaring `strategy: STRATEGY_INDEXED` gets, in addition to the predicate above, a
+generated migration pair:
+
+```
+9001_<table>_search_vector.up.sql    ALTER TABLE <table> ADD COLUMN search_vector tsvector
+                                      GENERATED ALWAYS AS (to_tsvector('<text_config>', <vector>)) STORED;
+9001_<table>_search_vector.down.sql  ALTER TABLE <table> DROP COLUMN IF EXISTS search_vector;
+9002_<table>_search_gin.up.sql       CREATE INDEX CONCURRENTLY <table>_search_gin ON <table> USING GIN (search_vector);
+9002_<table>_search_gin.down.sql     DROP INDEX CONCURRENTLY IF EXISTS <table>_search_gin;
+```
+
+The version numbers start at a fixed, reserved band (`9001`) rather than the next-free number on
+disk, well above a module's own hand-authored `0002+` migrations, so a generated file never
+collides with — or renumbers alongside — a hand-written one. Emission is idempotent: running
+`make generate` twice yields byte-identical files. The `CREATE INDEX CONCURRENTLY` statement is
+always the sole statement in its file, because Postgres rejects it inside a transaction block (see
+[Migrations](#migrations) below). The generated column and its index are Postgres-only; SQLite
+ignores these files and keeps the `LIKE` fallback above.
+
+`de generate` writes these files under the buf output directory, `gen/migrations/`, which is
+git-ignored and is **not** the directory a scaffolded service embeds. The scaffold's
+`make sync-migrations` target — a prerequisite of `make build`, `make test`, and `make run` —
+copies them into the committed, embedded `module/migrations/` directory, where
+`//go:embed migrations` and the host migrator pick them up. Running `de generate` directly, outside
+`make`, requires a manual `make sync-migrations` (or `make build`) afterward; without it, an
+`INDEXED` resource fails at runtime with `column "search_vector" does not exist`. Once synced, the
+files are committed like any other migration — see [Migrations](#migrations) below.
 
 ## Generated repository helpers
 

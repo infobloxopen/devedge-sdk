@@ -69,6 +69,9 @@ message FieldOptions {
   // makes leaked tokens easy to spot (secret-scanning); it is not the lookup key.
   string credential_prefix = 11;
 
+  // searchable includes this column in the resource's full-text search vector.
+  bool searchable = 12;
+
   // Relationships. Declare on the proto field that holds the related resource.
   // The codegen plugins generate the appropriate ORM association or graph edge.
   HasOne     has_one      = 20;

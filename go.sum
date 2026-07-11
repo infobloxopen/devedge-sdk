@@ -19,8 +19,10 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 h1:5VipnvEpbqr2gA2VbM+nYVbkIF2
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0/go.mod h1:Hyl3n6Twe1hvtd9XUXDec4pTvgMSEixRuQKPTMH2bNs=
 github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4 h1:E3wWxLO+vdytan5V0PGKEpuTtUesLVuSANC2mgDHFT0=
 github.com/infobloxopen/apis/proto/infoblox/authz v1.0.0-alpha.4/go.mod h1:vc0qwvhuqC3iwRa2HRuwCPJO5nD+HMKddkamN4d4ZLY=
-github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4 h1:JawGbETAx3NlTqxNHs2Uo/KsQSa/Eme6LkFEGBdr644=
-github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.4/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
+github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5 h1:2S/EioF594/P6do4tqtrDBh0ih9d+OJXgmzkDoHLnas=
+github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
+github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 h1:MJiJhyGo2M4nm1BhDcu8hMPHB2OGm+lG/VgvoutuBHU=
+github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2/go.mod h1:jPO84oxH4QgGedTEeYrgnLzCg96rlsDZoAp60JCsgkU=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
