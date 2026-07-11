@@ -17,10 +17,10 @@ assumes you already have a [modeled resource](../model-a-resource/) with an `id`
 ## Prerequisites
 
 - A resource message with an `id` field (see [Model a Resource](../model-a-resource/)).
-- The v0.60.0 devedge-sdk toolchain or later. `searchable` and `(infoblox.storage.v1.search)` are
+- The v0.61.0 devedge-sdk toolchain or later. `searchable` and `(infoblox.storage.v1.search)` are
   additive schema options: an older `de`/toolchain parses and generates the resource without
   error, but silently ignores them — no `q` predicate and no migration is emitted. Confirm your
-  toolchain is on v0.60.0 or later before following this guide.
+  toolchain is on v0.61.0 or later before following this guide.
 - PostgreSQL to exercise true full-text matching. A resource whose sources are all portable also
   runs on the SQLite dev/test driver — see [SQLite and `sql`-flavor sources](#sqlite-and-sql-flavor-sources)
   below.

@@ -10,7 +10,7 @@ under [History](#history).
 
 ## History
 
-### v0.60.0 — Full-text search (WS-041)
+### v0.61.0 — Full-text search (WS-041)
 
 A `q` collection operator for List, declared on the schema and generated across both storage
 backends: mark a field `searchable`, optionally add a message-level calculated source, and query
@@ -56,7 +56,7 @@ it over the REST gateway with no hand-written search code.
   resource's List operation, parallel to `x-aip-pagination`.
 - **Toolchain prerequisite.** `searchable` and `(infoblox.storage.v1.search)` are additive schema
   options: an older `de`/toolchain generates a resource carrying them without error, but silently
-  ignores both, emitting no `q` predicate and no migration. Full-text search requires the v0.60.0
+  ignores both, emitting no `q` predicate and no migration. Full-text search requires the v0.61.0
   toolchain or later.
 - **Docs.** [Add full-text search to a resource](https://github.com/infobloxopen/devedge-sdk/blob/main/docs/content/docs/how-to/model-and-persist/add-full-text-search.md),
   the `Annotations` concept page, and the `persistence` reference now cover the annotations, the

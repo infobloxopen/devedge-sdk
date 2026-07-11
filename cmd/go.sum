@@ -31,8 +31,8 @@ github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5 h1:2S/EioF594/P
 github.com/infobloxopen/apis/proto/infoblox/field v1.0.0-alpha.5/go.mod h1:Cfo9T286fNQrHkVaOgpm23jxFcE08522nZjMnfJHQLY=
 github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2 h1:MJiJhyGo2M4nm1BhDcu8hMPHB2OGm+lG/VgvoutuBHU=
 github.com/infobloxopen/apis/proto/infoblox/storage v1.0.0-alpha.2/go.mod h1:jPO84oxH4QgGedTEeYrgnLzCg96rlsDZoAp60JCsgkU=
-github.com/infobloxopen/devedge-sdk v0.59.0 h1:93cJeuyC6jhDIe4RK3wee4ILS/+mAA8xugLEeixPBbs=
-github.com/infobloxopen/devedge-sdk v0.59.0/go.mod h1:GAf07BNFS4xpZcAC4X53dc4fxO7D/27ensDku123kc8=
+github.com/infobloxopen/devedge-sdk v0.60.0 h1:py5oaC7FwZp5kRVvYFcCrFAooDwM2n19z5j6q555xrU=
+github.com/infobloxopen/devedge-sdk v0.60.0/go.mod h1:GAf07BNFS4xpZcAC4X53dc4fxO7D/27ensDku123kc8=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
@@ -64,6 +64,7 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=
 golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 h1:R84qjqJb5nVJMxqWYb3np9L5ZsaDtB+a39EqjV0JSUM=
+golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0/go.mod h1:S9Xr4PYopiDyqSyp5NjCrhFrqg6A5zA2E/iPHPhqnS8=
 golang.org/x/net v0.55.0 h1:bcvxaJn3e1U6InsFWt1JUq1aSjnRxLzT2rtD2KfkDF8=
 golang.org/x/net v0.55.0/go.mod h1:L5U2KuzuOe1lY7Z+aWVIKK6qEeJXnXV9yzGA+WCHJww=
 golang.org/x/sys v0.45.0 h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=
