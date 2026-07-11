@@ -96,21 +96,38 @@ func (ce ChangeEvent) ToEvent() (Event, error) {
 	}, nil
 }
 
-// ChangeEventFromEvent decodes the [ChangeEvent] carried by evt, restoring the
-// authoritative tenant and the per-tenant ordering/fencing metadata from the
-// outbox row (carried on the Event) rather than trusting the encoded payload.
-// Consumers (audit/search/export) call it inside their handler.
+// ChangeEventFromEvent decodes the [ChangeEvent] carried by evt, always taking
+// the authoritative tenant and the per-tenant ordering/fencing metadata from the
+// outbox row (carried on the Event envelope) rather than trusting the encoded
+// payload. The payload's "tenant" NEVER becomes [ChangeEvent.Tenant]: it is
+// overwritten by the envelope's AccountID unconditionally, so a forged payload
+// tenant cannot outlive an empty envelope tenant (SEC-042-03). Consumers
+// (audit/search/export) call it inside their handler.
 func ChangeEventFromEvent(evt Event) (ChangeEvent, error) {
 	var ce ChangeEvent
 	if err := json.Unmarshal(evt.Payload, &ce); err != nil {
 		return ChangeEvent{}, fmt.Errorf("events: decode change event %q: %w", evt.ID, err)
 	}
-	// The Event's AccountID/Seq/Epoch are the authoritative values from the
-	// outbox row (the relay copies them off the row); prefer them over the
-	// encoded payload, which carried 0 for Seq/Epoch at emit time.
-	if evt.AccountID != "" {
-		ce.Tenant = evt.AccountID
-	}
+	// TENANT IS ALWAYS ENVELOPE-AUTHORITATIVE, NEVER PAYLOAD-DERIVED (SEC-042-03).
+	// The Event envelope's AccountID is the authoritative tenant: the emitter
+	// stamps it from the request tenant on context (ToEvent sets AccountID =
+	// ChangeEvent.Tenant), and the relay copies it off the outbox row inside the
+	// producing transaction. The "tenant" decoded from the opaque payload is
+	// UNTRUSTED — a producer could publish a raw Event with an empty AccountID and
+	// a forged payload {"tenant":"victim"}. Assign UNCONDITIONALLY (not "when
+	// non-empty") so an empty envelope AccountID CLEARS any payload-supplied
+	// tenant rather than letting it survive; the change then decodes to an empty
+	// tenant and the consumer's fail-closed handling applies (events/consumer.go
+	// injects no tenant, so a tenant-scoped repository rejects the write).
+	//
+	// This is compatible with the one legitimate empty-tenant path: a resource
+	// that opts into ChangeFeedOptions.AllowMissingTenant (system bootstrap /
+	// global resources) emits with Tenant == "" AND AccountID == "", so clearing
+	// to "" matches. Failing loud on an empty AccountID would break that path,
+	// which is why the tenant is cleared rather than rejected here.
+	ce.Tenant = evt.AccountID
+	// Seq/Epoch likewise come from the outbox row (the encoded payload carried 0
+	// for them at emit time — they are allocated in the producing transaction).
 	ce.Seq = evt.EventSeq
 	ce.Epoch = evt.EventEpoch
 	return ce, nil

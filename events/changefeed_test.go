@@ -159,6 +159,57 @@ func TestChangeEmitting_RollsBackWriteWhenEmitFails(t *testing.T) {
 	}
 }
 
+// SEC-042-03 regression: the change event's tenant is ALWAYS the envelope's
+// AccountID and NEVER the encoded payload's "tenant". A producer emitting a raw
+// Event with an EMPTY AccountID and a forged payload {"tenant":"victim"} must not
+// yield ce.Tenant == "victim" — the empty envelope tenant clears it so downstream
+// fail-closed handling applies. Fails on the old code, which kept the payload
+// tenant whenever AccountID was empty.
+func TestChangeEventFromEvent_PayloadTenantNeverOverridesEmptyEnvelope(t *testing.T) {
+	payload, err := json.Marshal(events.ChangeEvent{Tenant: "victim", ResourceType: "test.user"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	evt := events.Event{
+		ID:        "e1",
+		Type:      events.ChangeEventType,
+		AccountID: "", // empty authoritative envelope tenant
+		Payload:   payload,
+	}
+	ce, err := events.ChangeEventFromEvent(evt)
+	if err != nil {
+		t.Fatalf("ChangeEventFromEvent: %v", err)
+	}
+	if ce.Tenant == "victim" {
+		t.Fatalf("payload tenant must never become ce.Tenant: got %q", ce.Tenant)
+	}
+	if ce.Tenant != "" {
+		t.Fatalf("empty envelope AccountID must clear the tenant, got %q", ce.Tenant)
+	}
+}
+
+// The envelope's AccountID wins even when a (forged or stale) payload tenant
+// disagrees: the tenant is always envelope-authoritative, not payload-derived.
+func TestChangeEventFromEvent_EnvelopeTenantOverridesPayload(t *testing.T) {
+	payload, err := json.Marshal(events.ChangeEvent{Tenant: "victim", ResourceType: "test.user"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	evt := events.Event{
+		ID:        "e2",
+		Type:      events.ChangeEventType,
+		AccountID: "acme", // authoritative envelope tenant
+		Payload:   payload,
+	}
+	ce, err := events.ChangeEventFromEvent(evt)
+	if err != nil {
+		t.Fatalf("ChangeEventFromEvent: %v", err)
+	}
+	if ce.Tenant != "acme" {
+		t.Fatalf("tenant must come from the envelope AccountID, got %q", ce.Tenant)
+	}
+}
+
 func TestChangeEmitting_UndeleteEmitsUndelete(t *testing.T) {
 	feed, store, tx := changeFeedFixture(t, events.ChangeFeedOptions[*usr]{})
 	ctx := middleware.WithTenantID(context.Background(), "acme")
