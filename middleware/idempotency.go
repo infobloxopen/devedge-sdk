@@ -83,13 +83,37 @@ type DurableIdempotencyStore interface {
 
 // DurableDedup groups the wiring for the durable idempotency path. Set it on
 // server.Config to select [DurableDeduplicateUnary] over the best-effort memory
-// path. Store and Tx are required; TTL defaults to [DefaultIdempotencyTTL] and
-// Fingerprint defaults to true.
+// path. Store and Tx are required.
+//
+// PRECONDITIONS (exactly-once holds only when all are met):
+//   - The handler's domain write MUST participate in the transaction this
+//     interceptor opens — i.e. it writes through an SDK repository / TxRunner over
+//     the SAME backend as Store and Tx (the generated GORM/ent repositories do this
+//     by resolving their connection from persistence.TxFromContext). A handler that
+//     writes via a different *gorm.DB, a raw *sql.DB, or a Tx pointed at a different
+//     database commits its effect independently — then a rolled-back claim
+//     double-applies, or a committed claim replays a phantom success. This is NOT
+//     enforced at runtime; it is the caller's contract.
+//   - Use it for LOCAL, fast, DB-effect handlers. Because the handler runs inside
+//     the transaction, a handler that makes a slow remote call holds a DB connection
+//     and the claim row lock for its whole duration, and the remote effect is NOT
+//     covered by the rollback. Remote-effect handlers want the reserve→remote→
+//     complete (committed in_progress) saga pattern instead.
+//   - The store's conflict handling assumes READ COMMITTED isolation (the default).
 type DurableDedup struct {
-	Store       DurableIdempotencyStore
-	Tx          persistence.TxRunner
-	TTL         time.Duration
-	Fingerprint bool
+	Store DurableIdempotencyStore
+	Tx    persistence.TxRunner
+	// TTL is the record retention; defaults to [DefaultIdempotencyTTL] (~24h).
+	TTL time.Duration
+	// DisableFingerprint turns OFF the param-fingerprint guard, which is ON by
+	// default: with it on, reusing a request_id with a DIFFERENT request body is
+	// rejected [ErrIdempotencyFingerprintMismatch] (Stripe-style). Turn it off only
+	// when a stable per-request fingerprint is not desired.
+	DisableFingerprint bool
+	// MaxResponseBytes, when > 0, rejects a response whose marshaled size exceeds it
+	// with [ErrIdempotencyResponseTooLarge] (fail loud) — a per-key storage bound.
+	// Zero means unlimited (the default).
+	MaxResponseBytes int
 }
 
 // Idempotency sentinel errors, mapped to the gRPC/HTTP codes AIP-155 / Stripe /
@@ -105,19 +129,46 @@ var (
 	// serialize the handler's response for replay — a loud Internal error rather
 	// than silently degrading to non-durable behavior.
 	ErrIdempotencyNonProtoResponse = status.Error(codes.Internal, "durable idempotency requires a protobuf response")
+	// ErrIdempotencyRequestIDTooLong is returned when the client's request_id
+	// exceeds MaxRequestIDLen — rejected up front as InvalidArgument rather than
+	// letting an over-length value hit the store and surface a raw driver error.
+	ErrIdempotencyRequestIDTooLong = status.Errorf(codes.InvalidArgument, "request_id exceeds %d characters", MaxRequestIDLen)
+	// ErrIdempotencyResponseTooLarge is returned when a response exceeds
+	// DurableDedup.MaxResponseBytes — a loud Internal error so the operator either
+	// raises the cap or excludes the method.
+	ErrIdempotencyResponseTooLarge = status.Error(codes.Internal, "idempotency response exceeds configured MaxResponseBytes")
 )
+
+// MaxRequestIDLen bounds a client-supplied request_id, matching the
+// idempotency_keys.request_id column width. An over-length id is rejected before
+// it reaches the store.
+const MaxRequestIDLen = 255
 
 // DurableDeduplicateUnary returns a gRPC unary interceptor providing durable,
 // exactly-once idempotency keyed by (verified tenant, method, request_id).
 //
 // Fast path (no transaction): a completed record replays the stored response and
-// SKIPS the handler entirely; an in-progress record returns
-// [ErrIdempotencyInProgress]. Slow path: open Atomically, claim the key, run the
+// SKIPS the handler entirely. Slow path: open Atomically, claim the key, run the
 // handler (its repository write nest-joins this transaction), then complete the
 // record in the same commit — so the claim, the effect, and the stored response
 // are one atomic unit. A handler error rolls the claim back with the effect
 // (errors are never cached, as in F023). Requests without a request_id or with
 // validate_only=true pass through untouched.
+//
+// CONCURRENCY: a genuine concurrent duplicate does NOT get an immediate 409 — its
+// claim INSERT blocks on the winner's uncommitted row and then, once the winner
+// commits, replays the winner's response (coalesced, exactly-once). The
+// [ErrIdempotencyInProgress] (409) result is reserved for observing an already
+// COMMITTED in_progress record — the reserve→remote→complete (saga) pattern —
+// which the single-transaction handler path never leaves behind.
+//
+// The key is scoped to the VERIFIED tenant only, not the caller's subject: any
+// caller in the tenant that presents a completed request_id replays its response,
+// so request_ids MUST be high-entropy (AIP-155 UUIDv4) — a guessable id lets a
+// tenant peer replay a response and bypass per-resource checks the handler runs
+// internally (method-level authz still applies). With no verified principal the
+// tenant is empty and all such callers share one scope; use this behind an
+// Authenticator.
 func DurableDeduplicateUnary(cfg DurableDedup) grpc.UnaryServerInterceptor {
 	ttl := cfg.TTL
 	if ttl <= 0 {
@@ -135,11 +186,14 @@ func DurableDeduplicateUnary(cfg DurableDedup) grpc.UnaryServerInterceptor {
 		if ValidateOnlyFromContext(ctx) {
 			return handler(ctx, req)
 		}
+		if len(requestID) > MaxRequestIDLen {
+			return nil, ErrIdempotencyRequestIDTooLong
+		}
 		tenant, _ := VerifiedTenantID(ctx)
 		key := IdempotencyKey{Tenant: tenant, Method: info.FullMethod, RequestID: requestID}
 
 		fp := ""
-		if cfg.Fingerprint {
+		if !cfg.DisableFingerprint {
 			if pm, ok := req.(proto.Message); ok {
 				fp = fingerprintRequest(pm)
 			}
@@ -194,6 +248,9 @@ func DurableDeduplicateUnary(cfg DurableDedup) grpc.UnaryServerInterceptor {
 			b, merr := proto.MarshalOptions{Deterministic: true}.Marshal(pm)
 			if merr != nil {
 				return ErrIdempotencyNonProtoResponse
+			}
+			if cfg.MaxResponseBytes > 0 && len(b) > cfg.MaxResponseBytes {
+				return ErrIdempotencyResponseTooLarge
 			}
 			if cerr := cfg.Store.Complete(ctx, key, string(pm.ProtoReflect().Descriptor().FullName()), b); cerr != nil {
 				return cerr

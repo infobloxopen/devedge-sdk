@@ -115,6 +115,12 @@ func (s *GormDurableDedupStore) Lookup(ctx context.Context, key persistence.Idem
 // returns claimed=true. A conflict with a LIVE row returns that row and
 // claimed=false. A conflict with an EXPIRED row reclaims it (guarded UPDATE) as a
 // fresh in_progress claim.
+//
+// Assumes READ COMMITTED isolation (Postgres/MySQL default): after ON CONFLICT DO
+// NOTHING reports no insert, the follow-up read must see the row a concurrent
+// transaction just committed. Under REPEATABLE READ / SERIALIZABLE the tx snapshot
+// can hide that row (or raise a serialization error) — run the idempotency
+// transaction at READ COMMITTED.
 func (s *GormDurableDedupStore) Claim(ctx context.Context, key persistence.IdempotencyKey, fingerprint string, ttl time.Duration) (persistence.IdempotencyRecord, bool, error) {
 	db := s.conn(ctx)
 	now := s.now()
@@ -127,9 +133,14 @@ func (s *GormDurableDedupStore) Claim(ctx context.Context, key persistence.Idemp
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(ttl),
 	}
-	// ON CONFLICT DO NOTHING keeps the transaction alive on a duplicate (a raw
-	// unique violation would poison a Postgres tx, blocking the follow-up SELECT).
-	res := db.Table(s.table).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	// ON CONFLICT (primary key) DO NOTHING keeps the transaction alive on a
+	// duplicate (a raw unique violation would poison a Postgres tx, blocking the
+	// follow-up SELECT). The conflict target is stated explicitly so a future unique
+	// index on the table is not silently swallowed by a bare "on any constraint".
+	res := db.Table(s.table).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "account_id"}, {Name: "method"}, {Name: "request_id"}},
+		DoNothing: true,
+	}).Create(&row)
 	if res.Error != nil {
 		return persistence.IdempotencyRecord{}, false, fmt.Errorf("gormtx: idempotency claim: %w", res.Error)
 	}

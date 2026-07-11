@@ -60,11 +60,13 @@ the chain position, and the in-memory store as the zero-config default.
 - **AC-02** The claim row commits **atomically** with the domain effect: if the handler errors, the
   claim rolls back and a retry re-executes; if it succeeds, the completed record and the effect are
   both present or both absent.
-- **AC-03** A concurrent duplicate that finds an in-progress claim returns `codes.AlreadyExists`
-  (HTTP 409) — not a second execution.
+- **AC-03** A duplicate that observes an *already-committed* `in_progress` record (the saga
+  reserve→remote→complete shape) returns `codes.AlreadyExists` (HTTP 409) — not a second execution.
+  A *concurrent* duplicate on the single-transaction handler path does **not** 409: its claim blocks
+  on the winner's uncommitted row and then replays the winner's committed response (see AC-04).
 - **AC-04** Two concurrent fresh requests with the same key execute the handler **exactly once**;
-  the loser either replays the winner's response or re-claims after the winner rolls back (never a
-  double effect).
+  the loser blocks on the claim and then replays the winner's response (or re-claims after the winner
+  rolls back) — never a double effect. Verified under `-race` with N concurrent callers.
 - **AC-05** A `request_id` reused across **different tenants** never replays another tenant's
   response (both memory and durable paths). Reused across **different methods** does not collide.
 - **AC-06** An empty `request_id` or `validate_only=true` passes through untouched (no claim, no
@@ -90,6 +92,23 @@ the chain position, and the in-memory store as the zero-config default.
   efficiency, never incorrectness.
 - **FM-06 Two requests race to claim an expired row** → the reclaim `UPDATE ... WHERE expires_at<=now`
   admits exactly one; the loser re-reads and replays/conflicts.
+
+## Operational requirements (from the hardening review)
+
+- **Effect must join the interceptor's transaction.** The handler's domain write must go through an
+  SDK repository / `TxRunner` over the **same** backend as `Store`/`Tx` (the generated repositories
+  do). Not runtime-enforced; a handler writing via a different DB breaks exactly-once.
+- **Local DB-effect handlers only.** The handler runs inside the transaction; remote-effect handlers
+  want the saga path (a slow remote call otherwise holds a DB connection + claim lock).
+- **READ COMMITTED.** The conflict/reclaim reads assume READ COMMITTED (the default); a stricter
+  global isolation must run the idempotency transaction at READ COMMITTED.
+- **GC is host-scheduled.** Expired records read as absent but are not auto-deleted; the host runs a
+  periodic `Store.GC` sweep (like the outbox relay).
+- **Migrate `idempotency_keys`.** Distinct from the event-dedup `idempotency_markers` table; in the
+  baseline, and AutoMigrate users add `gormtx.RequestIdempotencyMigrationModels()`.
+- **High-entropy `request_id` + Authenticator.** The key is tenant-scoped, not subject-scoped;
+  guessable ids let a tenant peer replay. `request_id` is capped at 255 chars (rejected
+  `InvalidArgument` over that).
 
 ## Non-goals
 

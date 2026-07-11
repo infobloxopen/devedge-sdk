@@ -34,10 +34,12 @@ tenant/method-scoped).
   non-transactional fast replay path, `GC` sweeps expired rows. Backed by the new framework table
   `idempotency_keys` (PK `(account_id, method, request_id)`, `expires_at`, optional `fingerprint`),
   added to the migration baseline. `account_id` is a first-class column so WS-029 RLS covers it.
-- **Optional param fingerprint** (Stripe-style): with `DurableDedup.Fingerprint`, a key reused with a
-  different request body is rejected `InvalidArgument`.
-- **Retention.** Records expire after a configurable TTL (default 24h); `Store.GC` removes expired
-  rows and reads treat them as absent.
+- **Param fingerprint ON by default** (Stripe-style): a key reused with a different request body is
+  rejected `InvalidArgument`; `DurableDedup.DisableFingerprint` turns it off. `MaxResponseBytes`
+  caps a stored response; `request_id` is capped at 255 chars (rejected `InvalidArgument`).
+- **Retention.** Records expire after a configurable TTL (default 24h) and read as absent; the host
+  schedules a periodic `Store.GC` sweep (not auto-scheduled). Requires the handler's effect to join
+  the interceptor's transaction (same backend) under READ COMMITTED — see the resilience how-to.
 
 ### v0.61.1 — Tenant-seam hardening (WS-042)
 

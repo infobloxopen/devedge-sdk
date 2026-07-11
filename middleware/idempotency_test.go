@@ -2,6 +2,8 @@ package middleware_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -226,9 +228,11 @@ func TestDurableDedup_NonProtoResponseFailsLoud(t *testing.T) {
 	}
 }
 
+// TestDurableDedup_FingerprintMismatchRejected also proves fingerprinting is ON
+// by default (the config sets no fingerprint field).
 func TestDurableDedup_FingerprintMismatchRejected(t *testing.T) {
 	store := newFakeStore()
-	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}, Fingerprint: true})
+	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}})
 	info := &grpc.UnaryServerInfo{FullMethod: testMethod}
 
 	alpha := newReq("r1", "alpha")
@@ -260,5 +264,108 @@ func TestDurableDedup_FingerprintMismatchRejected(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("handler must have executed exactly once, got %d", calls)
+	}
+}
+
+func TestDurableDedup_RequestIDTooLong(t *testing.T) {
+	store := newFakeStore()
+	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}})
+	info := &grpc.UnaryServerInfo{FullMethod: testMethod}
+
+	long := strings.Repeat("x", mw.MaxRequestIDLen+1)
+	_, err := intc(context.Background(), newReq(long, "body"), info, func(context.Context, any) (any, error) {
+		t.Fatal("handler must not run for an over-length request_id")
+		return nil, nil
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("over-length request_id must be InvalidArgument, got %v", err)
+	}
+	if len(store.claimed) != 0 {
+		t.Fatalf("over-length request_id must be rejected before the store, claimed=%v", store.claimed)
+	}
+}
+
+func TestDurableDedup_MaxResponseBytesEnforced(t *testing.T) {
+	store := newFakeStore()
+	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}, MaxResponseBytes: 16})
+	info := &grpc.UnaryServerInfo{FullMethod: testMethod}
+
+	big := func(context.Context, any) (any, error) { return wrapperspb.String(strings.Repeat("y", 1024)), nil }
+	_, err := intc(context.Background(), newReq("r1", "body"), info, big)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("a response over MaxResponseBytes must fail loud (Internal), got %v", err)
+	}
+}
+
+// TestDurableDedup_LookupErrorFallsThroughToTx covers FM-02: a Lookup error must
+// not fail the request — it falls through to the transactional path.
+func TestDurableDedup_LookupErrorFallsThroughToTx(t *testing.T) {
+	store := newFakeStore()
+	store.lookupErr = errors.New("db unavailable")
+	calls := 0
+	handler := func(context.Context, any) (any, error) { calls++; return wrapperspb.String("v"), nil }
+	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}})
+	info := &grpc.UnaryServerInfo{FullMethod: testMethod}
+
+	if _, err := intc(context.Background(), newReq("r1", "body"), info, handler); err != nil {
+		t.Fatalf("a Lookup error must fall through, not fail: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("fall-through must run the handler once, got %d", calls)
+	}
+}
+
+// TestDurableDedup_InTxFingerprintAndReplay exercises the IN-TRANSACTION branches
+// (idempotency.go: Claim finds an existing completed record): with the fast-path
+// Lookup forced to error, a different body is rejected there and the same body
+// replays there.
+func TestDurableDedup_InTxFingerprintAndReplay(t *testing.T) {
+	store := newFakeStore()
+	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}})
+	info := &grpc.UnaryServerInfo{FullMethod: testMethod}
+	alpha := newReq("r1", "alpha")
+	beta := newReq("r1", "beta")
+
+	// Execute alpha normally (stores its fingerprint + response).
+	if _, err := intc(context.Background(), alpha, info, func(context.Context, any) (any, error) {
+		return wrapperspb.String("gen-1"), nil
+	}); err != nil {
+		t.Fatalf("alpha: %v", err)
+	}
+
+	// Force the fast path to error so the in-tx Claim branch handles the duplicate.
+	store.lookupErr = errors.New("forced lookup error")
+
+	// Different body → in-tx fingerprint mismatch.
+	if _, err := intc(context.Background(), beta, info, func(context.Context, any) (any, error) {
+		t.Fatal("handler must not run on an in-tx fingerprint mismatch")
+		return nil, nil
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("in-tx fingerprint mismatch must be InvalidArgument, got %v", err)
+	}
+
+	// Same body → in-tx replay of the stored response, handler not run.
+	r, err := intc(context.Background(), alpha, info, func(context.Context, any) (any, error) {
+		t.Fatal("handler must not run on an in-tx replay")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("in-tx replay: %v", err)
+	}
+	if r.(*wrapperspb.StringValue).GetValue() != "gen-1" {
+		t.Fatalf("in-tx replay must return the original response, got %v", r)
+	}
+}
+
+func TestDurableDedup_NilResponseFailsLoud(t *testing.T) {
+	store := newFakeStore()
+	intc := mw.DurableDeduplicateUnary(mw.DurableDedup{Store: store, Tx: fakeTxRunner{}})
+	info := &grpc.UnaryServerInfo{FullMethod: testMethod}
+
+	_, err := intc(context.Background(), newReq("r1", "body"), info, func(context.Context, any) (any, error) {
+		return nil, nil // a handler bug: no response, no error
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("a nil (non-proto) response must fail loud (Internal), got %v", err)
 	}
 }

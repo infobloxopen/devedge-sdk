@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -218,9 +221,9 @@ func TestDurableDedupStore_TTLExpiryReclaimAndGC(t *testing.T) {
 	tx := gormtx.NewGormTxRunner(db)
 	key := persistence.IdempotencyKey{Tenant: "t1", Method: "m", RequestID: "ttl"}
 
-	// Claim+complete with a 1h TTL.
+	// Claim+complete with a 1h TTL, an "old" fingerprint, and a stored response.
 	if err := tx.Atomically(context.Background(), func(ctx context.Context) error {
-		if _, _, e := store.Claim(ctx, key, "", time.Hour); e != nil {
+		if _, _, e := store.Claim(ctx, key, "fp-old", time.Hour); e != nil {
 			return e
 		}
 		return store.Complete(ctx, key, "toy.v1.Widget", []byte("v"))
@@ -239,15 +242,24 @@ func TestDurableDedupStore_TTLExpiryReclaimAndGC(t *testing.T) {
 		t.Fatal("an expired record must Lookup as absent")
 	}
 
-	// An expired conflicting row is RECLAIMED as a fresh claim (not a 409).
+	// An expired conflicting row is RECLAIMED as a fresh claim (not a 409), and the
+	// reclaim RESETS the record: status back to in_progress, response/type cleared,
+	// fingerprint replaced.
 	if err := tx.Atomically(context.Background(), func(ctx context.Context) error {
-		_, claimed, e := store.Claim(ctx, key, "", time.Hour)
+		_, claimed, e := store.Claim(ctx, key, "fp-new", time.Hour)
 		if e != nil || !claimed {
 			return fmt.Errorf("expired row must be reclaimable: claimed=%v err=%v", claimed, e)
 		}
 		return nil
 	}); err != nil {
 		t.Fatalf("reclaim: %v", err)
+	}
+	rec, ok, err := store.Lookup(context.Background(), key)
+	if err != nil || !ok {
+		t.Fatalf("reclaimed row must be live: ok=%v err=%v", ok, err)
+	}
+	if rec.Status != persistence.StatusInProgress || len(rec.Response) != 0 || rec.ResponseType != "" || rec.Fingerprint != "fp-new" {
+		t.Fatalf("reclaim must reset the record (in_progress, no response, new fingerprint), got %+v", rec)
 	}
 
 	// GC removes rows already expired at the given instant. Seed a second, already
@@ -313,5 +325,89 @@ func TestDurableDedup_Interceptor_ExactlyOnce_RealDB(t *testing.T) {
 	db.Model(&dedupEffect{}).Count(&n)
 	if n != 1 {
 		t.Fatalf("exactly-once: want one effect row, got %d", n)
+	}
+}
+
+// TestDurableDedup_Interceptor_ConcurrentExactlyOnce fires N concurrent duplicates
+// of the same request through the interceptor. The DB's primary-key uniqueness
+// serializes the claim: exactly ONE goroutine executes the handler and writes the
+// effect; the losers block on the claim, then replay the winner's response (or
+// observe a committed in_progress → AlreadyExists). Never a second execution.
+// SQLite is single-writer, so a busy timeout lets the losers wait for the winner
+// rather than error — the same block-then-replay shape a real Postgres store gives
+// via row-level locking under READ COMMITTED.
+func TestDurableDedup_Interceptor_ConcurrentExactlyOnce(t *testing.T) {
+	// Unique shared-cache name per run: all pooled connections share the in-memory
+	// DB within this test (real concurrency), but a -count=N re-run does not collide.
+	dsn := fmt.Sprintf("file:dedup_conc_%d?mode=memory&cache=shared&_pragma=busy_timeout(10000)", time.Now().UnixNano())
+	db, err := gorm.Open(openTestSQLite(dsn), &gorm.Config{Logger: logger.Discard})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&gormtx.IdempotencyKeyRow{}, &dedupEffect{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+	store := gormtx.NewGormDurableDedupStore(db)
+	tx := gormtx.NewGormTxRunner(db)
+	intc := middleware.DurableDeduplicateUnary(middleware.DurableDedup{Store: store, Tx: tx})
+	info := &grpc.UnaryServerInfo{FullMethod: "/toy.v1.WidgetService/CreateWidget"}
+
+	var executions int64
+	handler := func(ctx context.Context, req any) (any, error) {
+		n := atomic.AddInt64(&executions, 1)
+		id := fmt.Sprintf("gen-%d", n)
+		if e := txConn(ctx, db).Create(&dedupEffect{ID: id}).Error; e != nil {
+			return nil, e
+		}
+		return wrapperspb.String(id), nil
+	}
+	ctx := middleware.WithPrincipal(context.Background(), authz.Principal{Tenant: "t1"})
+	req := &idemReq{StringValue: wrapperspb.String("body"), requestID: "r-conc"}
+
+	const N = 6
+	var wg sync.WaitGroup
+	results := make([]string, N)
+	errs := make([]error, N)
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			defer wg.Done()
+			r, e := intc(ctx, req, info, handler)
+			if e != nil {
+				errs[i] = e
+				return
+			}
+			results[i] = r.(*wrapperspb.StringValue).GetValue()
+		}(i)
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&executions); got != 1 {
+		t.Fatalf("exactly-once under concurrency: handler must run exactly once, ran %d", got)
+	}
+	var effects int64
+	db.Model(&dedupEffect{}).Count(&effects)
+	if effects != 1 {
+		t.Fatalf("exactly-once under concurrency: want one effect row, got %d", effects)
+	}
+	// Every successful caller must have gotten the ONE winner's response; any error
+	// must be the in-flight conflict (never a second execution / different result).
+	winner := ""
+	for i := 0; i < N; i++ {
+		if errs[i] != nil {
+			if status.Code(errs[i]) != codes.AlreadyExists {
+				t.Fatalf("caller %d unexpected error: %v", i, errs[i])
+			}
+			continue
+		}
+		if winner == "" {
+			winner = results[i]
+		}
+		if results[i] != winner {
+			t.Fatalf("callers must all replay the same winning response, got %q and %q", winner, results[i])
+		}
+	}
+	if winner != "gen-1" {
+		t.Fatalf("the winning response must be the single execution's gen-1, got %q", winner)
 	}
 }
