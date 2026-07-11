@@ -181,6 +181,80 @@ func (a *gobreakerAdapter) Execute(ctx context.Context, fn func() (any, error)) 
 }
 ```
 
+## Request idempotency
+
+A mutation that carries an AIP-155 `request_id` is deduplicated so a retry does not double-apply.
+The SDK offers two levels, both scoped to the **verified tenant** and the **method** — a `request_id`
+one tenant chooses can never replay another tenant's response, and the same id on two methods does
+not collide.
+
+### Best-effort (default)
+
+With no extra configuration, `DeduplicateUnary` caches the response in an in-process
+`MemoryDeduplicationStore` (10-minute TTL) keyed by `(tenant, method, request_id)`. It is a
+convenience, not a guarantee: the cache is per-pod, the response is stored *after* the handler
+returns (so a crash between the commit and the cache re-executes on retry), and concurrent
+duplicates are not coalesced.
+
+### Durable, exactly-once (opt-in)
+
+For exactly-once retries — "I got a timeout, I retry, I want the *original* result" — set
+`server.Config.DurableDedup`. The idempotency record is **claimed and completed inside the handler's
+own transaction**, so a committed effect always has a retrievable response:
+
+```go
+db := // your *gorm.DB (the SAME one the generated repositories use)
+store := gormtx.NewGormDurableDedupStore(db)
+srv, _ := server.New(server.Config{
+    GRPCAddr: ":9090",
+    DurableDedup: &middleware.DurableDedup{
+        Store: store,
+        Tx:    gormtx.NewGormTxRunner(db),
+        // TTL defaults to 24h. Fingerprinting is ON by default; set
+        // DisableFingerprint to turn it off. MaxResponseBytes (0 = unlimited)
+        // caps a stored response.
+    },
+})
+```
+
+Behavior:
+
+- **Completed replay.** A retry with the same key returns the stored response **verbatim** — the same
+  server-generated id and etag — and does **not** run the handler again, even after a restart or on
+  another pod (the record is in the `idempotency_keys` table).
+- **Concurrent duplicate.** A duplicate that arrives while the original is still in flight does not
+  get an immediate error: its claim blocks on the winner's row, then replays the winner's response
+  once it commits (coalesced, exactly-once). An `AlreadyExists` (HTTP 409) is returned only when a
+  request observes an *already-committed* `in_progress` record — the reserve→remote→complete (saga)
+  shape, which the single-transaction handler path never leaves behind.
+- **Errors are never cached.** A handler error rolls the claim back with the effect, so the retry
+  re-executes.
+- **Fingerprint (default on).** Reusing a key with a *different* request body is rejected
+  `InvalidArgument`. Set `DisableFingerprint` to turn this off.
+- **Retention + GC.** Records expire after the TTL (default 24h) and expired records read as absent —
+  but they are **not** deleted automatically. Schedule a periodic sweep yourself, e.g. a ticker
+  calling `store.GC(ctx, time.Now())` (the store is behind the seam; the host owns the schedule, as
+  it does the outbox relay).
+
+Requirements and cautions:
+
+- **The handler's effect MUST join this transaction.** Write through an SDK repository / `TxRunner`
+  over the **same** `*gorm.DB` (the generated GORM/ent repositories do — they resolve their
+  connection from the transaction on the context). A handler that writes via a different DB or a raw
+  `*sql.DB` commits independently, breaking exactly-once. This is not enforced at runtime.
+- **Local, fast, DB-effect handlers only.** The handler runs inside the transaction, so a slow remote
+  call holds a DB connection and the claim lock for its whole duration and is not covered by the
+  rollback. Use the saga pattern for remote effects.
+- **Migrate the table.** `idempotency_keys` is separate from the event-dedup `idempotency_markers`
+  table. It is in the framework migration baseline; AutoMigrate users must include
+  `gormtx.RequestIdempotencyMigrationModels()` in their framework model set.
+- **Use high-entropy request_ids** (AIP-155 UUIDv4). The key is scoped to the verified tenant, not
+  the subject, so a guessable id lets a tenant peer replay a response. Use durable dedup behind an
+  `Authenticator`; with no verified principal the tenant is empty and such callers share one scope.
+- The store assumes **READ COMMITTED** isolation (the default). The `idempotency_keys` table carries
+  `account_id`, so WS-029 row-level security covers it with the same tenant GUC. `validate_only=true`
+  and an empty `request_id` bypass idempotency entirely.
+
 ## Chain placement
 
 The resilience interceptors occupy fixed positions in the default unary chain:

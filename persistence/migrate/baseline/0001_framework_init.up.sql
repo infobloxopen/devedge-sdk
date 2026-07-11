@@ -1,3 +1,18 @@
+-- create "idempotency_keys" table
+CREATE TABLE "idempotency_keys" (
+  "account_id" character varying(255) NOT NULL,
+  "method" character varying(255) NOT NULL,
+  "request_id" character varying(255) NOT NULL,
+  "status" character varying(16) NOT NULL,
+  "response_type" character varying(255) NULL,
+  "response" bytea NULL,
+  "fingerprint" character varying(64) NULL,
+  "created_at" timestamptz NOT NULL,
+  "expires_at" timestamptz NOT NULL,
+  PRIMARY KEY ("account_id", "method", "request_id")
+);
+-- create index "idx_idempotency_keys_expires_at" to table: "idempotency_keys"
+CREATE INDEX "idx_idempotency_keys_expires_at" ON "idempotency_keys" ("expires_at");
 -- create "idempotency_markers" table
 CREATE TABLE "idempotency_markers" (
   "key" character varying(255) NOT NULL,

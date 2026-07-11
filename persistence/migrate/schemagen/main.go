@@ -26,6 +26,7 @@ func main() {
 		gormtx.MigrationModelsFor(true /*outbox*/, true /*idempotency*/),
 		gormtx.CellMigrationModels()...,
 	)
+	models = append(models, gormtx.RequestIdempotencyMigrationModels()...)
 	stmts, err := gormschema.New(dialect).Load(models...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "schemagen: load %s framework schema: %v\n", dialect, err)

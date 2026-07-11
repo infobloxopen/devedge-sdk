@@ -126,6 +126,15 @@ type Config struct {
 	HTTPHandlers []HTTPHandler
 	// DeduplicationStore is the idempotency store for DeduplicateUnary. Defaults to MemoryDeduplicationStore (10-minute TTL) when nil.
 	DeduplicationStore middleware.DeduplicationStore
+	// DurableDedup, when set, selects the durable, exactly-once idempotency path
+	// (middleware.DurableDeduplicateUnary) over the best-effort in-memory
+	// DeduplicationStore: the idempotency record is claimed and completed inside
+	// the handler's transaction, so a committed effect always has a retrievable
+	// response and a retry after a crash/restart or on another pod replays the
+	// ORIGINAL response verbatim. Requires both Store and Tx. When nil the
+	// server keeps the in-memory path (the zero-config default). See WS-043 /
+	// spec 048.
+	DurableDedup *middleware.DurableDedup
 	// LROStore is the operation store for long-running operations (AIP-151).
 	// Defaults to lro.NewMemoryStore(1h) when nil.
 	LROStore lro.Store
@@ -268,6 +277,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.DeduplicationStore == nil {
 		cfg.DeduplicationStore = middleware.NewMemoryDeduplicationStore(10 * time.Minute)
 	}
+	if cfg.DurableDedup != nil {
+		if cfg.DurableDedup.Store == nil || cfg.DurableDedup.Tx == nil {
+			return nil, fmt.Errorf("server: DurableDedup requires both Store and Tx")
+		}
+	}
 	if cfg.LROStore == nil {
 		cfg.LROStore = lro.NewMemoryStore(time.Hour)
 	}
@@ -367,8 +381,15 @@ func New(cfg Config) (*Server, error) {
 		etag.PreconditionUnary(),
 		middleware.ReadMaskUnary(),
 		middleware.ValidateOnlyUnary(),
-		middleware.DeduplicateUnary(cfg.DeduplicationStore),
 	)
+	// Idempotency: the durable, exactly-once path when configured (claim/complete
+	// inside the handler's transaction), else the best-effort in-memory path. Both
+	// occupy the same chain position, right before the handler.
+	if cfg.DurableDedup != nil {
+		chain = append(chain, middleware.DurableDeduplicateUnary(*cfg.DurableDedup))
+	} else {
+		chain = append(chain, middleware.DeduplicateUnary(cfg.DeduplicationStore))
+	}
 	chain = append(chain, cfg.Interceptors...)
 	// Breaker: just outside the handler (framework-chain innermost position,
 	// after any caller-supplied interceptors).

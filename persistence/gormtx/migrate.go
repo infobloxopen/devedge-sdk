@@ -51,6 +51,17 @@ func MigrationModelsFor(useOutbox, useIdempotency bool) []any {
 	return models
 }
 
+// RequestIdempotencyMigrationModels returns the FRAMEWORK model for the durable,
+// exactly-once request-idempotency store (WS-043 / F048): the idempotency_keys
+// table. It is a SEPARATE slice from MigrationModelsFor (like CellMigrationModels)
+// so a service that uses only the event-dedup marker table keeps its exact
+// framework-table set; a service that enables durable request idempotency appends
+// this. The baseline (schemagen) composes it so the canonical DDL always includes
+// the table.
+func RequestIdempotencyMigrationModels() []any {
+	return []any{&IdempotencyKeyRow{}}
+}
+
 // CellMigrationModels returns the FRAMEWORK models for cell-based development: the
 // storage fence (tenant_fence), the per-tenant event-seq allocator (tenant_event_seq),
 // and the publisher-policy table (tenant_event_policy). A service that adopts
@@ -264,6 +275,8 @@ func frameworkBaseTable(m any) (string, bool) {
 		return deadLetterBaseTable, true
 	case *IdemMarker:
 		return idempotencyBaseTable, true
+	case *IdempotencyKeyRow:
+		return idempotencyKeysBaseTable, true
 	case *TenantFenceRow:
 		return fenceBaseTable, true
 	case *TenantEventSeqRow:

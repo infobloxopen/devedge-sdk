@@ -10,6 +10,37 @@ under [History](#history).
 
 ## History
 
+### v0.62.0 — Durable, exactly-once request idempotency (WS-043)
+
+Upgrades the best-effort AIP-155 request deduplication (spec 023) to a durable, tenant-scoped,
+exactly-once path, and closes a cross-tenant collision in the existing in-memory path. Additive —
+no API is removed; zero-config services keep the in-memory behavior (now additionally
+tenant/method-scoped).
+
+- **Cross-tenant/cross-method dedup key (security fix).** `middleware.DeduplicateUnary` now keys the
+  cache by `(verified tenant, method, request_id)` instead of the bare `request_id`. Previously a
+  `request_id` reused across tenants on the same pod could replay another tenant's cached response
+  (a cross-tenant confidentiality leak), and the same id on two methods aliased. The tenant is the
+  verified principal's (`VerifiedTenantID`), never the client-settable `account-id` header.
+- **Durable exactly-once path (opt-in).** New `middleware.DurableDeduplicateUnary` +
+  `middleware.DurableIdempotencyStore` + `middleware.DurableDedup` config, selected via
+  `server.Config.DurableDedup`. The idempotency record is claimed and completed **inside the
+  handler's transaction** (the handler's repository write nest-joins it), so a committed effect
+  always has a retrievable response: a retry after a crash/restart or on another pod replays the
+  ORIGINAL response verbatim (server-generated id + etag); an in-flight duplicate returns
+  `AlreadyExists` (409); handler errors roll the claim back (never cached).
+- **`persistence/gormtx.GormDurableDedupStore` (new).** The DB-backed store: `Claim`/`Complete` bind
+  to the ctx transaction (`ON CONFLICT DO NOTHING` claim, expired-row reclaim), `Lookup` is the
+  non-transactional fast replay path, `GC` sweeps expired rows. Backed by the new framework table
+  `idempotency_keys` (PK `(account_id, method, request_id)`, `expires_at`, optional `fingerprint`),
+  added to the migration baseline. `account_id` is a first-class column so WS-029 RLS covers it.
+- **Param fingerprint ON by default** (Stripe-style): a key reused with a different request body is
+  rejected `InvalidArgument`; `DurableDedup.DisableFingerprint` turns it off. `MaxResponseBytes`
+  caps a stored response; `request_id` is capped at 255 chars (rejected `InvalidArgument`).
+- **Retention.** Records expire after a configurable TTL (default 24h) and read as absent; the host
+  schedules a periodic `Store.GC` sweep (not auto-scheduled). Requires the handler's effect to join
+  the interceptor's transaction (same backend) under READ COMMITTED — see the resilience how-to.
+
 ### v0.61.1 — Tenant-seam hardening (WS-042)
 
 Two multi-tenancy seams surfaced by the WS-042 security pentest, hardened for every consumer.
