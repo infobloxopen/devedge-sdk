@@ -17,7 +17,7 @@ require (
 	github.com/infobloxopen/devedge-sdk v0.64.0
 	github.com/infobloxopen/devedge-sdk/federationgql v0.45.0
 	github.com/infobloxopen/devedge-sdk/testdata/federation v0.0.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11 // indirect
 	modernc.org/sqlite v1.53.0
 )
