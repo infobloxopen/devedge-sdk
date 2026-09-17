@@ -6,7 +6,7 @@
 // other nested modules.
 module github.com/infobloxopen/devedge-sdk/federationgql
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/graphql-go/graphql v0.8.1
